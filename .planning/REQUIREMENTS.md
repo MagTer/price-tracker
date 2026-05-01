@@ -114,17 +114,61 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 
 ## Traceability
 
-Empty initially. Populated when roadmap is created.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmapper) | | |
+| DOMAIN-01 | Phase 1 | Pending |
+| DOMAIN-02 | Phase 1 | Pending |
+| DOMAIN-03 | Phase 1 | Pending |
+| DB-01 | Phase 1 | Pending |
+| DB-02 | Phase 1 | Pending |
+| DB-03 | Phase 1 | Pending |
+| DB-04 | Phase 1 | Pending |
+| DB-05 | Phase 1 | Pending |
+| TEST-01 | Phase 1 | Pending |
+| TEST-02 | Phase 1 | Pending |
+| TEST-03 | Phase 1 | Pending |
+| DEPLOY-01 | Phase 1 | Pending |
+| DEPLOY-02 | Phase 1 | Pending |
+| INFRA-01 | Phase 2 | Pending |
+| INFRA-02 | Phase 2 | Pending |
+| INFRA-03 | Phase 2 | Pending |
+| INFRA-04 | Phase 2 | Pending |
+| INFRA-05 | Phase 2 | Pending |
+| INFRA-06 | Phase 2 | Pending |
+| API-01 | Phase 2 | Pending |
+| DEPLOY-04 | Phase 2 | Pending |
+| API-02 | Phase 3 | Pending |
+| API-03 | Phase 3 | Pending |
+| API-04 | Phase 3 | Pending |
+| AUTH-01 | Phase 3 | Pending |
+| AUTH-02 | Phase 3 | Pending |
+| AUTH-03 | Phase 3 | Pending |
+| DEPLOY-03 | Phase 3 | Pending |
+| MCP-01 | Phase 4 | Pending |
+| MCP-02 | Phase 4 | Pending |
+| MCP-03 | Phase 4 | Pending |
+| MCP-04 | Phase 4 | Pending |
+| MCP-05 | Phase 4 | Pending |
+| MCP-06 | Phase 4 | Pending |
+| MCP-07 | Phase 4 | Pending |
+| AUTH-04 | Phase 4 | Pending |
+| CLEAN-01 | Phase 5 | Pending |
+| CLEAN-02 | Phase 5 | Pending |
+| CLEAN-03 | Phase 5 | Pending |
+| CLEAN-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 36 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 36 ⚠️
+- v1 requirements: 40 total
+- Mapped to phases: 40 (100%)
+- Unmapped: 0
+
+**Per-phase counts:**
+- Phase 1 (Skeleton + Domain Copy): 13 requirements
+- Phase 2 (Service Infrastructure): 8 requirements
+- Phase 3 (Admin UI + Entra Auth): 7 requirements
+- Phase 4 (MCP Server + Agent Wiring): 8 requirements
+- Phase 5 (Source-repo Cleanup): 4 requirements
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 after initial definition from EXTRACTION.md*
+*Last updated: 2026-05-01 — traceability populated from ROADMAP.md (5-phase plan)*
