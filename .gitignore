@@ -29,3 +29,18 @@ vendor/
 coverage/
 .cache/
 tmp/
+
+# ── Price Tracker (Phase 1) ──
+# Python
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Poetry
+poetry.lock.bak
+
+# Local env
+*.db
