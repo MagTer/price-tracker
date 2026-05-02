@@ -30,11 +30,25 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `poetry install` resolves all declared dependencies on Python 3.12
   4. `docker build` produces a runnable image from the `python:3.12-slim` Dockerfile
 **Plans**: 5 plans across 4 waves
+
+**Wave 1**
   - [ ] 01-01-skeleton-PLAN.md — pyproject.toml + package layout + phantom-dep targets (Base, _utc_now, protocols, tenant constant, providers stub)
+
+**Wave 2** *(blocked on Wave 1 completion)*
   - [ ] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
+
+**Wave 3** *(blocked on Wave 2 completion; plans within wave run in parallel)*
   - [ ] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
   - [ ] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
+
+**Wave 4** *(blocked on Wave 3 completion)*
   - [ ] 01-05-docker-PLAN.md — Dockerfile + postgres-only docker-compose + .env.template + end-to-end Phase 1 gate verification
+
+**Cross-cutting constraints** (truths shared across multiple plans):
+  - `DEFAULT_TENANT_ID = uuid.UUID("f21b6620-c793-46e3-a354-dfcd9956b4a2")` (D-01) — referenced by tenant.py, migration seed step, and tests
+  - `Base = DeclarativeBase()` + `_utc_now()` live in `src/infra/db.py` (D-15) — imported by models.py, migration env, and tests
+  - No `tenants` table created or seeded (D-03, D-10) — enforced in migration and verified by gate-2 query
+  - Verbatim port mapping table (D-16) — produced by Plan 02, audited by checker
 
 ### Phase 2: Service Infrastructure
 **Goal**: Replace the source repo's interfaces (`IFetcher`, `IEmailService`, `LiteLLM proxy`, in-memory session) with concrete infra clients, wire them into a FastAPI app whose lifespan starts the scheduler, and prove the whole loop works against a real Willys URL.
