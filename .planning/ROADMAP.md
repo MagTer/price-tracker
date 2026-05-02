@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 5 plans across 4 waves
 
 **Wave 1**
-  - [ ] 01-01-skeleton-PLAN.md — pyproject.toml + package layout + phantom-dep targets (Base, _utc_now, protocols, tenant constant, providers stub)
+  - [x] 01-01-skeleton-PLAN.md — pyproject.toml + package layout + phantom-dep targets (Base, _utc_now, protocols, tenant constant, providers stub)
 
 **Wave 2** *(blocked on Wave 1 completion)*
   - [ ] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
@@ -106,7 +106,7 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton + Domain Copy | 0/5 | Not started | - |
+| 1. Skeleton + Domain Copy | 1/5 | In progress | - |
 | 2. Service Infrastructure | 0/TBD | Not started | - |
 | 3. Admin UI + Entra Auth | 0/TBD | Not started | - |
 | 4. MCP Server + Agent Wiring | 0/TBD | Not started | - |
