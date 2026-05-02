@@ -56,7 +56,8 @@ None yet.
 
 - Phases must run sequentially despite `parallelization=true` in config — each gate is a precondition for the next phase's work. Plans within a phase may parallelize.
 - Email backend (SMTP via aiosmtplib vs AWS SES) — decide during Phase 2
-- MCP mount path (`/mcp` on same app vs separate Traefik subdomain) — decide during Phase 4
+- MCP mount path now constrained by IAP shift — likely separate `mcp.<domain>` subdomain (proxy auth-bypass is per-host); confirm during Phase 4
+- **Roadmap reassess required after Phase 1** — Phase 3 (Entra OIDC code flow) and Phase 4 (MCP routing) both need rewriting to absorb the portal-owned IAP architecture decided in Phase 1 discuss. AUTH-01..03 in REQUIREMENTS.md will be rewritten; new edge-proxy/portal milestone (or separate project) will be added.
 
 ## Deferred Items
 
@@ -72,6 +73,6 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 
 ## Session Continuity
 
-Last session: 2026-05-01
-Stopped at: Roadmap and state initialized; ready to run `/gsd-plan-phase 1`
-Resume file: None
+Last session: 2026-05-02
+Stopped at: Phase 1 context gathered (CONTEXT.md + DISCUSSION-LOG.md). Ready to run `/gsd-plan-phase 1`. Roadmap reassess scheduled after Phase 1 completes — auth topology shifted to portal-owned IAP (drops fastapi-azure-auth/pyjwt; rewrites Phase 3 + Phase 4).
+Resume file: .planning/phases/01-skeleton-domain-copy/01-CONTEXT.md
