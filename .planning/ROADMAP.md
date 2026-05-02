@@ -29,7 +29,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `alembic upgrade head` succeeds against a fresh Postgres and produces tables `stores`, `products`, `product_stores`, `price_points`, `watches` with `tenant_id` UUID columns and the 5 seeded stores
   3. `poetry install` resolves all declared dependencies on Python 3.12
   4. `docker build` produces a runnable image from the `python:3.12-slim` Dockerfile
-**Plans**: TBD
+**Plans**: 5 plans across 4 waves
+  - [ ] 01-01-skeleton-PLAN.md — pyproject.toml + package layout + phantom-dep targets (Base, _utc_now, protocols, tenant constant, providers stub)
+  - [ ] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
+  - [ ] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
+  - [ ] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
+  - [ ] 01-05-docker-PLAN.md — Dockerfile + postgres-only docker-compose + .env.template + end-to-end Phase 1 gate verification
 
 ### Phase 2: Service Infrastructure
 **Goal**: Replace the source repo's interfaces (`IFetcher`, `IEmailService`, `LiteLLM proxy`, in-memory session) with concrete infra clients, wire them into a FastAPI app whose lifespan starts the scheduler, and prove the whole loop works against a real Willys URL.
@@ -87,7 +92,7 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton + Domain Copy | 0/TBD | Not started | - |
+| 1. Skeleton + Domain Copy | 0/5 | Not started | - |
 | 2. Service Infrastructure | 0/TBD | Not started | - |
 | 3. Admin UI + Entra Auth | 0/TBD | Not started | - |
 | 4. MCP Server + Agent Wiring | 0/TBD | Not started | - |
