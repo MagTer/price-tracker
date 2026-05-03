@@ -39,7 +39,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 3** *(blocked on Wave 2 completion; plans within wave run in parallel)*
   - [x] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
-  - [ ] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
+  - [x] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
 
 **Wave 4** *(blocked on Wave 3 completion)*
   - [ ] 01-05-docker-PLAN.md — Dockerfile + postgres-only docker-compose + .env.template + end-to-end Phase 1 gate verification

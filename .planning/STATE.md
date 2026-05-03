@@ -11,28 +11,28 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 5 (Skeleton + Domain Copy)
-Plan: 3 of 5 in current phase
-Status: In progress (Wave 3 in flight: 01-03 done; 01-04 still pending)
-Last activity: 2026-05-03 — Plan 01-03 complete (squashed initial migration + 5 seeded stores; alembic upgrade head green against fresh Postgres 16)
+Plan: 4 of 5 in current phase
+Status: In progress (Wave 3 complete; Wave 4 ready)
+Last activity: 2026-05-03 — Plan 01-04 complete (5 test files ported, 67/67 tests green; gate 1 of Phase 1 verified)
 
-Progress: [██████░░░░] 60%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: ~11 min
-- Total execution time: ~34 min
+- Total execution time: ~44 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Skeleton + Domain Copy | 3/5 | ~34 min | ~11 min |
+| 1. Skeleton + Domain Copy | 4/5 | ~44 min | ~11 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-03 (~12 min, 2 tasks, 5 files), 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
-- Trend: steady (~11-12 min/plan, 2 tasks each)
+- Last 5 plans: 01-04 (~10 min, 1 task, 6 files), 01-03 (~12 min, 2 tasks, 5 files), 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
+- Trend: steady (~10-12 min/plan)
 
 *Updated after each plan completion*
 
@@ -50,6 +50,7 @@ Recent decisions affecting current work:
 - Plan 01-01: Adapted pyproject.toml to Poetry 2.x PEP 621 `[project]` table (deprecation-warning fix); kept `[tool.poetry] packages = [...]` for src-layout — same dep set, same Phase 1 minimums (Rule 3 deviation)
 - Plan 01-03: Removed redundant `uq_store_slug` named UniqueConstraint from squashed migration — the unique index `ix_stores_slug` produced by `mapped_column(unique=True, index=True)` already enforces slug uniqueness; the named constraint was reported as drift by `alembic check` (Rule 1 deviation, kept migration faithful to ORM metadata)
 - Plan 01-03: Used Alembic async template (env.py uses `async_engine_from_config` against the `postgresql+asyncpg://` URL) — keeps alembic CLI URL identical to runtime URL, avoids dual sync/async driver config
+- Plan 01-04: No `tests/conftest.py` created — source repo had none in `tests/`, each test file constructs its own MagicMock/AsyncMock fixtures inline. Adding a conftest would have been an unsolicited refactor (verbatim port doctrine).
 
 ### Pending Todos
 
@@ -77,5 +78,5 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 ## Session Continuity
 
 Last session: 2026-05-03
-Stopped at: Plan 01-03 complete (squashed initial migration + 5 seeded stores; gate 2 of Phase 1 verified against fresh Postgres 16). Wave 3 still has 01-04-tests-PLAN.md outstanding — port the 5 source test files with import rewrites + green pytest. Then Wave 4 (01-05-docker) closes Phase 1. Roadmap reassess still scheduled after Phase 1 completes (auth topology shift; REQUIREMENTS.md DB-03 wording lag).
-Resume file: .planning/phases/01-skeleton-domain-copy/01-04-tests-PLAN.md
+Stopped at: Plan 01-04 complete (5 test files ported verbatim, 67/67 tests green). Wave 3 done. Phase 1 gates 1, 2, 3 verified; only gate 4 (`docker build`) remains, delivered by Wave 4 (01-05-docker). Roadmap reassess still scheduled after Phase 1 completes (auth topology shift; REQUIREMENTS.md DB-03 wording lag).
+Resume file: .planning/phases/01-skeleton-domain-copy/01-05-docker-PLAN.md
