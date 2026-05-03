@@ -11,27 +11,27 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 5 (Skeleton + Domain Copy)
-Plan: 1 of 5 in current phase
-Status: In progress (Wave 1 complete; Wave 2 ready)
-Last activity: 2026-05-02 — Plan 01-01 complete (skeleton + phantom-dep targets)
+Plan: 2 of 5 in current phase
+Status: In progress (Wave 2 complete; Wave 3 ready)
+Last activity: 2026-05-03 — Plan 01-02 complete (11 domain modules ported verbatim)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: ~10 min
-- Total execution time: ~10 min
+- Total plans completed: 2
+- Average duration: ~11 min
+- Total execution time: ~22 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Skeleton + Domain Copy | 1/5 | ~10 min | ~10 min |
+| 1. Skeleton + Domain Copy | 2/5 | ~22 min | ~11 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (~10 min, 2 tasks, 9 files)
+- Last 5 plans: 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
 - Trend: —
 
 *Updated after each plan completion*
@@ -74,6 +74,6 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 
 ## Session Continuity
 
-Last session: 2026-05-02
-Stopped at: Plan 01-01 complete. Wave 1 done. Wave 2 (01-02-domain-port) is next — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop. Roadmap reassess still scheduled after Phase 1 completes (auth topology shift; REQUIREMENTS.md DB-03 wording lag).
-Resume file: .planning/phases/01-skeleton-domain-copy/01-02-domain-port-PLAN.md
+Last session: 2026-05-03
+Stopped at: Plan 01-02 complete. Wave 2 done. Wave 3 (01-03-migration + 01-04-tests, sequential) is next — squashed Alembic 0001_initial.py from final models.py shape, then port 5 test files. Roadmap reassess still scheduled after Phase 1 completes (auth topology shift; REQUIREMENTS.md DB-03 wording lag).
+Resume file: .planning/phases/01-skeleton-domain-copy/01-03-migration-PLAN.md

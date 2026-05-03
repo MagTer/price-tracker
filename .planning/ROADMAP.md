@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [x] 01-01-skeleton-PLAN.md — pyproject.toml + package layout + phantom-dep targets (Base, _utc_now, protocols, tenant constant, providers stub)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-  - [ ] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
+  - [x] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
 
 **Wave 3** *(blocked on Wave 2 completion; plans within wave run in parallel)*
   - [ ] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
