@@ -38,7 +38,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [x] 01-02-domain-port-PLAN.md — verbatim port of 11 domain modules with import rewrites + context_id->tenant_id + table prefix drop
 
 **Wave 3** *(blocked on Wave 2 completion; plans within wave run in parallel)*
-  - [ ] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
+  - [x] 01-03-migration-PLAN.md — alembic init + squashed 0001_initial.py (5 tables + 5 seeded stores, derived from final models.py state)
   - [ ] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
 
 **Wave 4** *(blocked on Wave 3 completion)*
@@ -106,7 +106,7 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton + Domain Copy | 1/5 | In progress | - |
+| 1. Skeleton + Domain Copy | 3/5 | In progress | - |
 | 2. Service Infrastructure | 0/TBD | Not started | - |
 | 3. Admin UI + Entra Auth | 0/TBD | Not started | - |
 | 4. MCP Server + Agent Wiring | 0/TBD | Not started | - |
