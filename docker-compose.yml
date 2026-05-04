@@ -1,0 +1,25 @@
+# Phase 1: Postgres-only stack for local development.
+# D-12: No app service yet (Phase 2 adds it).
+# D-13: No Traefik labels in this repo. Routing/TLS owned by future edge-proxy stack.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: price_tracker_postgres
+    environment:
+      POSTGRES_USER: price_tracker
+      POSTGRES_PASSWORD: price_tracker
+      POSTGRES_DB: price_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - price_tracker_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U price_tracker -d price_tracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  price_tracker_pg_data:
+    name: price_tracker_pg_data
