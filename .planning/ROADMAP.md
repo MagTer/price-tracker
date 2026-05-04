@@ -2,7 +2,9 @@
 
 ## Overview
 
-Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-platform` monolith into this standalone repo. Goal is **byte-equivalent feature parity** behind a new MCP boundary, then unwiring the source repo. Five phases mirror EXTRACTION.md §8: skeleton + domain copy → service infra → admin UI + Entra auth → MCP server → source-repo cleanup. Each phase has a verifiable gate; phases run sequentially because each gate is a precondition for the next phase's work (domain code before infra, infra before app shell, app shell before MCP plug-in, MCP live before source deletion is safe).
+Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-platform` monolith into this standalone repo. Goal is **byte-equivalent feature parity** behind a new MCP boundary, then unwiring the source repo. Five phases mirror EXTRACTION.md §8: skeleton + domain copy → service infra → admin UI + IAP header trust → MCP server → source-repo cleanup. Each phase has a verifiable gate; phases run sequentially because each gate is a precondition for the next phase's work (domain code before infra, infra before app shell, app shell before MCP plug-in, MCP live before source deletion is safe).
+
+**Auth topology (locked 2026-05-02 in 01-CONTEXT.md, reassessed 2026-05-04):** This repo does NOT terminate Entra OIDC. An upstream Identity-Aware Proxy (Traefik + oauth2-proxy, lives in a separate edge-stack repo per D-18) terminates OIDC once at the edge and forwards `X-Auth-Request-Email` to the admin host. The MCP host is excluded from the IAP middleware so it can authenticate purely with `MCP_BEARER_TOKEN`. Phase 3 reads the header; Phase 4 wires the bearer-only subdomain.
 
 ## Phases
 
@@ -14,8 +16,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
 - [ ] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
-- [ ] **Phase 3: Admin UI + Entra Auth** - Ported admin endpoints + HTML behind Entra OIDC single-`oid` gate, routed by Traefik to `prices.<domain>`
-- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools, bearer auth, registered in the agent platform, `priser` skill answers Swedish queries via MCP
+- [ ] **Phase 3: Admin UI + IAP Header Trust** - Ported admin endpoints + HTML behind upstream IAP. App reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, denies otherwise. No OIDC client in this repo; routed to `prices.<domain>` by the external edge proxy
+- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools on dedicated `mcp.<domain>` subdomain, bearer auth (IAP-bypassed for this host), registered in the agent platform, `priser` skill answers Swedish queries via MCP
 - [ ] **Phase 5: Source-repo Cleanup** - Delete price-tracker code from `ai-agent-platform`, drop `price_tracker_*` tables, verify platform deploys with `priser` still working
 
 ## Phase Details
@@ -61,27 +63,27 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. `.env.template` lists every env var required by the running app (OpenRouter, SMTP, DB)
 **Plans**: TBD
 
-### Phase 3: Admin UI + Entra Auth
-**Goal**: Restore the operator workflow — create products, link to stores, view price history — behind Entra OIDC with a single allowed `oid`, served on `prices.<domain>` via the existing Traefik proxy.
+### Phase 3: Admin UI + IAP Header Trust
+**Goal**: Restore the operator workflow — create products, link to stores, view price history — behind the upstream Identity-Aware Proxy (terminating Entra OIDC outside this repo). The app reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, and denies otherwise. Served on `prices.<domain>` by the external edge proxy.
 **Depends on**: Phase 2
 **Requirements**: API-02, API-03, API-04, AUTH-01, AUTH-02, AUTH-03, DEPLOY-03
 **Success Criteria** (what must be TRUE):
-  1. Logging in via Entra with the allowed `oid` lands on the admin UI; any other `oid` is rejected
-  2. Through the admin UI, a user creates a product, links it to Willys, triggers a check, and sees a price history row appear
-  3. Session cookie issued by the auth flow has `SameSite=Strict`, `HttpOnly`, and `Secure` attributes
-  4. `docker compose up` brings up postgres + app and Traefik routes `prices.<domain>` to the app on the agent-platform network
-  5. Admin endpoints have CSRF middleware references removed and use the seeded `tenant_id` instead of `/me/context` / `context_id` lookups
+  1. A request carrying `X-Auth-Request-Email: <ALLOWED_ENTRA_EMAIL>` lands on the admin UI; any other value (or missing header) returns HTTP 403 from a single FastAPI dependency that wraps the admin router
+  2. Through the admin UI, the operator creates a product, links it to Willys, triggers a check, and sees a price history row appear
+  3. App carries no `fastapi-azure-auth`, `authlib`, `pyjwt`, or session-cookie code; CSRF middleware is removed (the IAP + IAP-only-routable network is the trust boundary). Verifiable via `grep -rE "fastapi-azure-auth|authlib|pyjwt|csrf" pyproject.toml src/` returning zero matches
+  4. `docker compose up` brings up postgres + app on the external `edge` docker network without publishing app ports to the host; the upstream proxy (separate repo) routes `prices.<domain>` → this app
+  5. Admin endpoints use the seeded `DEFAULT_TENANT_ID` instead of `/me/context` / `context_id` lookups
 **Plans**: TBD
 **UI hint**: yes
 
 ### Phase 4: MCP Server + Agent Wiring
-**Goal**: Expose the four price-tracker tools over MCP behind a static bearer token, register the server in the agent platform, and confirm the `priser` skill answers a real Swedish price query end-to-end.
+**Goal**: Expose the four price-tracker tools over MCP on a dedicated `mcp.<domain>` subdomain that the upstream IAP excludes from oauth2-proxy middleware (per-host bypass, not per-path — D-18). The MCP host authenticates purely with `MCP_BEARER_TOKEN`. Register the server in the agent platform and confirm `priser` answers a real Swedish price query end-to-end.
 **Depends on**: Phase 3
 **Requirements**: MCP-01, MCP-02, MCP-03, MCP-04, MCP-05, MCP-06, MCP-07, AUTH-04
 **Success Criteria** (what must be TRUE):
   1. The FastMCP server, mounted on the FastAPI app, exposes `check_price`, `find_deals`, `compare_stores`, and `list_products` and rejects calls without a valid `MCP_BEARER_TOKEN`
-  2. The agent platform's `/platformadmin/mcp/` registry has this server configured and discovers all 4 tools by name
-  3. `skills/general/price_tracker.md` frontmatter `tools:` lists the MCP-discovered tool names verified via the platform's test-connection flow
+  2. The MCP endpoint is reachable on `mcp.<domain>` (subdomain, not `/mcp` path) — verifiable from the agent-platform host with a bearer-only request that returns 200 and never sees an IAP redirect
+  3. The agent platform's `/platformadmin/mcp/` registry has this server configured and discovers all 4 tools by name; `skills/general/price_tracker.md` frontmatter `tools:` lists the MCP-discovered tool names verified via the platform's test-connection flow
   4. An agent in the platform answers "Vad kostar Apotea omega-3?" by calling MCP tools against this server (no chat-tool fallback path)
 **Plans**: TBD
 

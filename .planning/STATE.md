@@ -2,20 +2,20 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-01)
+See: .planning/PROJECT.md (updated 2026-05-04)
 
 **Project code:** PT
 **Core value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
-**Current focus:** Phase 1 — Skeleton + Domain Copy
+**Current focus:** Phase 2 — Service Infrastructure (Phase 1 complete; D-19 roadmap reassess complete)
 
 ## Current Position
 
-Phase: 1 of 5 (Skeleton + Domain Copy)
-Plan: 5 of 5 in current phase
-Status: Phase 1 complete (all 4 ROADMAP success criteria verified end-to-end on 2026-05-04)
-Last activity: 2026-05-04 — Plan 01-05 complete: Docker scaffolding (167 MB image) + final phase verification; all 4 Phase 1 ROADMAP gates green simultaneously (pytest 67/67, alembic upgrade head against compose Postgres, poetry install on Python 3.12.3, docker build)
+Phase: 2 of 5 (Service Infrastructure) — ready to start
+Plan: 0 of TBD in current phase
+Status: Phase 1 complete + verified; D-19 roadmap reassess complete; ready to plan Phase 2
+Last activity: 2026-05-04 — D-19 roadmap reassess: rewrote AUTH-01..04 for IAP header trust (was Entra OIDC code flow), pinned MCP-05 to `mcp.<domain>` subdomain, dropped in-repo Traefik labels (DEPLOY-03), aligned DB-03/TEST-02/DEPLOY-01 wording with locked decisions, added EDGE-01 to v2 backlog as separate-milestone marker
 
-Progress: [██████████] 100%
+Progress: [██░░░░░░░░] 20% (Phase 1 of 5 complete)
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Recent decisions affecting current work:
 - Plan 01-04: No `tests/conftest.py` created — source repo had none in `tests/`, each test file constructs its own MagicMock/AsyncMock fixtures inline. Adding a conftest would have been an unsolicited refactor (verbatim port doctrine).
 - Plan 01-05: Bumped Dockerfile `POETRY_VERSION` from plan-spec 1.8.3 to 2.3.2 to match the project's PEP 621 `[project]` table (Plan 01-01 deviation continuation) — Poetry 1.8.3 rejected the manifest with "fields ['authors', 'description', 'name', 'version'] are required in package mode" (Rule 1 deviation, fix folded into Task 1 commit)
 - Plan 01-05: Added `!.env.template` exception to `.gitignore` so the env-var-contract template can be committed (was matched by `.env.*` rule). Naming convention preserved per plan spec (Rule 3 deviation)
+- 2026-05-04 D-19 reassess: Locked MCP subdomain (`mcp.<domain>`) over `/mcp` path because IAP auth-bypass is per-host. Locked IAP header trust (`X-Auth-Request-Email`) as the Phase 3 auth model — drops `fastapi-azure-auth`, `pyjwt`, `cryptography` from this repo permanently. Locked edge-proxy stack as separate future milestone (does NOT belong inside extraction milestone).
 
 ### Pending Todos
 
@@ -62,8 +63,8 @@ None yet.
 
 - Phases must run sequentially despite `parallelization=true` in config — each gate is a precondition for the next phase's work. Plans within a phase may parallelize.
 - Email backend (SMTP via aiosmtplib vs AWS SES) — decide during Phase 2
-- MCP mount path now constrained by IAP shift — likely separate `mcp.<domain>` subdomain (proxy auth-bypass is per-host); confirm during Phase 4
-- **Roadmap reassess required after Phase 1** — Phase 3 (Entra OIDC code flow) and Phase 4 (MCP routing) both need rewriting to absorb the portal-owned IAP architecture decided in Phase 1 discuss. AUTH-01..03 in REQUIREMENTS.md will be rewritten; new edge-proxy/portal milestone (or separate project) will be added.
+- MCP subdomain (`mcp.<domain>`) is now LOCKED for Phase 4 (was: TBD); IAP per-host bypass is the rationale (D-18)
+- **Edge-proxy / portal stack** is deferred to a separate future GSD milestone or repo (D-18, EDGE-01). Phases 3 + 4 ASSUME the IAP exists; if it does not exist when Phase 3 lands, Phase 3 still ships behind a "trust the header" dependency and the operator runs the app in a private network until the edge stack is built.
 
 ## Deferred Items
 
@@ -76,9 +77,10 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 | Notifications | NOTF-01 (Telegram/push) | v2 backlog | Init |
 | Analytics | ANAL-01 (price trends/volatility) | v2 backlog | Init |
 | i18n | I18N-01 (externalize sv-SE strings) | v2 backlog | Init |
+| Edge proxy / portal | EDGE-01 (Traefik + oauth2-proxy + Homepage on Flatcar — separate future milestone or repo) | Out of milestone | 2026-05-04 (D-19 reassess) |
 
 ## Session Continuity
 
 Last session: 2026-05-04
-Stopped at: Phase 1 complete. All 4 ROADMAP gates green (pytest 67/67, alembic upgrade head against compose Postgres → 5 tables + 5 seeded stores, poetry install on Python 3.12.3, docker build → price-tracker:phase1 167 MB). Ready for Phase 2 (Service Infrastructure). Roadmap reassess (D-19) is the immediate next planning activity — Phase 3 (auth → IAP header trust) and Phase 4 (MCP routing) need rewriting before Phase 3 planning starts; flag at Phase 2 planning kickoff.
-Resume file: (Phase 2 plan file — to be created during Phase 2 planning)
+Stopped at: Phase 1 verified + D-19 roadmap reassess complete. REQUIREMENTS.md AUTH-01..04, MCP-05, DEPLOY-01/03/04, DB-03, TEST-02 rewritten to match locked decisions (D-03/D-04/D-10/D-17/D-18). ROADMAP.md Phase 3 + Phase 4 sections rewritten. PROJECT.md Constraints + Key Decisions updated; EDGE-01 added to v2 backlog. Ready to enter Phase 2 (Service Infrastructure) discuss → plan → execute.
+Resume command: `/gsd-discuss-phase 2` (or continue `/gsd-autonomous` from current main thread)

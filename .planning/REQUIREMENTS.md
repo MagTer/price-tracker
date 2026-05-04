@@ -17,14 +17,14 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 
 - [ ] **DB-01**: Three source migrations squashed into a single `alembic/versions/0001_initial.py` against the empty target Alembic graph
 - [ ] **DB-02**: Schema uses non-null `tenant_id` UUID column on tenant-scoped tables (replaces source's `context_id` FK to the `contexts` table)
-- [ ] **DB-03**: Initial migration seeds a default tenant row and the 5 stores (ICA, Willys, Apotea, Med24, Doz) with `slug`, `store_type`, `base_url`, `parser_config`
+- [ ] **DB-03**: Initial migration seeds the 5 stores (ICA, Willys, Apotea, Med24, Doz) with `slug`, `store_type`, `base_url`, `parser_config`. **No `tenants` table is created or seeded** — `tenant_id` is a free-floating UUID column (`DEFAULT_TENANT_ID` constant in `src/domain/tenant.py` is the contract; D-03 / D-10 in `01-CONTEXT.md`)
 - [ ] **DB-04**: Tables renamed without the `price_tracker_` prefix: `stores`, `products`, `product_stores`, `price_points`, `watches`
 - [ ] **DB-05**: `alembic upgrade head` succeeds against a fresh Postgres database
 
 ### Tests
 
 - [ ] **TEST-01**: Five source test files (`test_parser.py`, `test_service.py`, `test_scheduler.py`, `test_notifier.py`, `test_extractors.py`, ~1,800 LOC total) ported to `tests/`
-- [ ] **TEST-02**: Fixtures rebased: `MockLLMClient`, `InMemoryAsyncSession`, `IFetcher`/`IEmailService` mocks replaced with new equivalents in `conftest.py`
+- [ ] **TEST-02**: Each test file constructs its own `unittest.mock` (`MagicMock` / `AsyncMock`) doubles for sessions, fetcher, email, and LLM clients inline — **no `tests/conftest.py`** (source had none; D-04 in `01-CONTEXT.md` drops `aiosqlite` and any in-memory async session shim)
 - [ ] **TEST-03**: Full `pytest` suite green
 
 ### Infrastructure
@@ -45,10 +45,10 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 
 ### Authentication
 
-- [ ] **AUTH-01**: Entra OIDC code flow (via `fastapi-azure-auth` or `authlib`) protects the admin UI
-- [ ] **AUTH-02**: Only the `oid` claim matching `ALLOWED_ENTRA_OID` env var is admitted; all others rejected
-- [ ] **AUTH-03**: Session cookie is `SameSite=Strict`, `HttpOnly`, `Secure`
-- [ ] **AUTH-04**: Static `MCP_BEARER_TOKEN` validates calls to the MCP endpoint
+- [ ] **AUTH-01**: Admin UI trusts the `X-Auth-Request-Email` header forwarded by the upstream Identity-Aware Proxy (IAP). Entra OIDC is terminated at the proxy — price-tracker does NOT carry `fastapi-azure-auth`, `authlib`, `pyjwt`, or any OIDC client (D-17 in `01-CONTEXT.md`)
+- [ ] **AUTH-02**: Only the email matching `ALLOWED_ENTRA_EMAIL` env var is admitted; all other emails (and missing-header requests) get HTTP 403. Implemented as a small FastAPI dependency, not as middleware reading session cookies
+- [ ] **AUTH-03**: Sessions are owned by the upstream IAP (oauth2-proxy). price-tracker does not issue, parse, or set session cookies — it is a stateless backend behind the proxy. CSRF middleware is removed because the proxy + IAP-only-routable network is the trust boundary
+- [ ] **AUTH-04**: Static `MCP_BEARER_TOKEN` validates calls to the MCP endpoint. Per D-18, the MCP subdomain is excluded from the IAP middleware so MCP traffic can authenticate purely with this bearer
 
 ### MCP
 
@@ -56,16 +56,16 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 - [ ] **MCP-02**: FastMCP server exposes `find_deals(store_type?: "grocery" | "pharmacy")` returning a list of current offers
 - [ ] **MCP-03**: FastMCP server exposes `compare_stores(product_name: str)` returning a side-by-side price comparison
 - [ ] **MCP-04**: FastMCP server exposes `list_products()` returning the inventory of tracked products
-- [ ] **MCP-05**: MCP endpoint mounted on the FastAPI app (path or subdomain decided during the MCP phase)
+- [ ] **MCP-05**: MCP endpoint mounted on the FastAPI app and exposed via a dedicated subdomain (e.g. `mcp.<domain>`). Subdomain is the locked choice (not a `/mcp` path on the admin host) because the IAP auth-bypass is per-host, not per-path — keeps the edge-proxy config clean (D-18 in `01-CONTEXT.md`)
 - [ ] **MCP-06**: Agent platform's `/platformadmin/mcp/` server registry points at this server; `skills/general/price_tracker.md` `tools:` frontmatter updated to MCP-discovered tool names
 - [ ] **MCP-07**: Agent in the platform answers a Swedish price query (e.g. "Vad kostar Apotea omega-3?") end-to-end via MCP
 
 ### Deployment
 
-- [ ] **DEPLOY-01**: `pyproject.toml` (poetry, Python 3.12) declares all required dependencies (fastapi, uvicorn, sqlalchemy[asyncio], alembic, asyncpg, httpx, pydantic, aiosmtplib, cryptography, pyjwt, fastmcp, fastapi-azure-auth, pytest, pytest-asyncio, aiosqlite)
+- [ ] **DEPLOY-01**: `pyproject.toml` (poetry, Python 3.12) declares all required dependencies. Phase 1 minimum: sqlalchemy[asyncio], alembic, asyncpg, pydantic, pytest, pytest-asyncio. Phase 2 adds: fastapi, uvicorn, httpx, aiosmtplib, fastmcp. **Excluded** (per D-04 / D-17 in `01-CONTEXT.md`): `aiosqlite` (mocks-only tests), `fastapi-azure-auth`, `pyjwt`, `cryptography` (IAP terminates OIDC at the proxy)
 - [ ] **DEPLOY-02**: `Dockerfile` based on `python:3.12-slim` builds and runs the app
-- [ ] **DEPLOY-03**: `docker-compose.yml` defines postgres + app with Traefik labels routing `prices.<domain>` to the app
-- [ ] **DEPLOY-04**: `.env.template` documents all required env vars (OpenRouter, Entra, MCP token, SMTP)
+- [ ] **DEPLOY-03**: `docker-compose.yml` defines postgres + app. The app service joins an external `edge` docker network so the upstream proxy (separate repo per D-18) can reach it. **No Traefik labels in this repo** (D-13 in `01-CONTEXT.md`) — routing/TLS/auth live in the edge-proxy stack. App container does NOT publish ports to the host
+- [ ] **DEPLOY-04**: `.env.template` documents all required env vars (DATABASE_URL, OpenRouter API key + model cascade, `ALLOWED_ENTRA_EMAIL`, `MCP_BEARER_TOKEN`, SMTP credentials). No OIDC client secrets — IAP owns those
 
 ### Source-repo Cleanup
 
@@ -99,6 +99,10 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 ### Internationalization
 
 - **I18N-01**: Externalize hardcoded `sv-SE` strings (store hints, prompts, email copy)
+
+### Edge Proxy / Portal Stack (separate milestone or repo)
+
+- **EDGE-01**: Traefik + oauth2-proxy + Homepage dashboard on Flatcar Container Linux inside a Proxmox VM (single mini-PC). Owns: TLS termination (Let's Encrypt DNS-01 wildcard), Entra OIDC, routing to backend apps, landing-page tiles. Backend apps (price-tracker, future ai-agent-platform consolidation, etc.) join a shared `edge` docker network and trust `X-Auth-Request-Email` headers (D-18 in `01-CONTEXT.md`). Subdomain strategy: `prices.<domain>`, `mcp.<domain>`, `agent.<domain>`. **Does NOT belong inside the price-tracker extraction milestone** — should be its own GSD milestone or repo.
 
 ## Out of Scope
 
@@ -171,4 +175,4 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 — traceability populated from ROADMAP.md (5-phase plan)*
+*Last updated: 2026-05-04 — D-19 roadmap reassess after Phase 1 close: AUTH-01..04 rewritten for IAP header trust (was Entra OIDC code flow); DEPLOY-01/03/04 updated to drop in-repo Traefik/OIDC libs; MCP-05 pinned to subdomain; DB-03 / TEST-02 wording aligned with locked decisions; EDGE-01 added to v2 backlog as separate milestone*
