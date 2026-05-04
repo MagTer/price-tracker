@@ -30,7 +30,8 @@ FROM python:3.12-slim AS final
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src"
 
 # Runtime libs only (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \

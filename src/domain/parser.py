@@ -10,13 +10,11 @@ import httpx
 from domain.extractors.base import PriceExtractor
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.result import PriceExtractionResult
+from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
 
 __all__ = ["PriceExtractionResult", "PriceParser"]
 
 logger = logging.getLogger(__name__)
-
-# LiteLLM proxy base URL
-LITELLM_API_BASE = os.getenv("LITELLM_API_BASE", "http://litellm:4000")
 
 
 class PriceParser:
@@ -178,16 +176,16 @@ Return a JSON object with exactly these fields:
 Only output the JSON object, no explanation or markdown."""
 
     async def _extract_with_model(self, prompt: str, model: str) -> PriceExtractionResult:
-        """Extract using specified model via LiteLLM proxy."""
+        """Extract using specified model via OpenRouter."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                f"{LITELLM_API_BASE}/v1/chat/completions",
+                f"{OPENROUTER_BASE_URL}/v1/chat/completions",
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
                 },
-                headers={"Content-Type": "application/json"},
+                headers=OPENROUTER_HEADERS,
             )
             response.raise_for_status()
             data = response.json()

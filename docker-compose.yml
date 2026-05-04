@@ -1,6 +1,6 @@
-# Phase 1: Postgres-only stack for local development.
-# D-12: No app service yet (Phase 2 adds it).
+# Phase 2: Postgres + app stack for local development and deployment.
 # D-13: No Traefik labels in this repo. Routing/TLS owned by future edge-proxy stack.
+# The app service joins an external `edge` docker network so the upstream proxy can reach it.
 
 services:
   postgres:
@@ -20,6 +20,26 @@ services:
       timeout: 3s
       retries: 10
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: price_tracker_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://price_tracker:price_tracker@postgres:5432/price_tracker
+    networks:
+      - default
+      - edge
+    restart: unless-stopped
+    # No ports published — the upstream proxy reaches the app via the `edge` network.
+
 volumes:
   price_tracker_pg_data:
     name: price_tracker_pg_data
+
+networks:
+  edge:
+    external: true

@@ -11,10 +11,19 @@ dependencies = [
     "asyncpg (>=0.29,<0.30)",
     "httpx (>=0.27,<0.28)",
     "pydantic (>=2.7,<3.0)",
+    "fastapi (>=0.111,<0.112)",
+    "uvicorn[standard] (>=0.30,<0.31)",
+    "aiosmtplib (>=3.0,<4.0)",
+    "fastmcp (>=1.0,<2.0)",
 ]
 
 [tool.poetry]
-packages = [{ include = "domain", from = "src" }, { include = "infra", from = "src" }]
+packages = [
+    { include = "domain", from = "src" },
+    { include = "infra", from = "src" },
+    { include = "api", from = "src" },
+    { include = "mcp", from = "src" },
+]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
