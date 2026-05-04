@@ -11,27 +11,27 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 5 (Skeleton + Domain Copy)
-Plan: 4 of 5 in current phase
-Status: In progress (Wave 3 complete; Wave 4 ready)
-Last activity: 2026-05-03 — Plan 01-04 complete (5 test files ported, 67/67 tests green; gate 1 of Phase 1 verified)
+Plan: 5 of 5 in current phase
+Status: Phase 1 complete (all 4 ROADMAP success criteria verified end-to-end on 2026-05-04)
+Last activity: 2026-05-04 — Plan 01-05 complete: Docker scaffolding (167 MB image) + final phase verification; all 4 Phase 1 ROADMAP gates green simultaneously (pytest 67/67, alembic upgrade head against compose Postgres, poetry install on Python 3.12.3, docker build)
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: ~11 min
-- Total execution time: ~44 min
+- Total execution time: ~54 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Skeleton + Domain Copy | 4/5 | ~44 min | ~11 min |
+| 1. Skeleton + Domain Copy | 5/5 | ~54 min | ~11 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-04 (~10 min, 1 task, 6 files), 01-03 (~12 min, 2 tasks, 5 files), 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
+- Last 5 plans: 01-05 (~10 min, 2 tasks, 5 files), 01-04 (~10 min, 1 task, 6 files), 01-03 (~12 min, 2 tasks, 5 files), 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
 - Trend: steady (~10-12 min/plan)
 
 *Updated after each plan completion*
@@ -51,6 +51,8 @@ Recent decisions affecting current work:
 - Plan 01-03: Removed redundant `uq_store_slug` named UniqueConstraint from squashed migration — the unique index `ix_stores_slug` produced by `mapped_column(unique=True, index=True)` already enforces slug uniqueness; the named constraint was reported as drift by `alembic check` (Rule 1 deviation, kept migration faithful to ORM metadata)
 - Plan 01-03: Used Alembic async template (env.py uses `async_engine_from_config` against the `postgresql+asyncpg://` URL) — keeps alembic CLI URL identical to runtime URL, avoids dual sync/async driver config
 - Plan 01-04: No `tests/conftest.py` created — source repo had none in `tests/`, each test file constructs its own MagicMock/AsyncMock fixtures inline. Adding a conftest would have been an unsolicited refactor (verbatim port doctrine).
+- Plan 01-05: Bumped Dockerfile `POETRY_VERSION` from plan-spec 1.8.3 to 2.3.2 to match the project's PEP 621 `[project]` table (Plan 01-01 deviation continuation) — Poetry 1.8.3 rejected the manifest with "fields ['authors', 'description', 'name', 'version'] are required in package mode" (Rule 1 deviation, fix folded into Task 1 commit)
+- Plan 01-05: Added `!.env.template` exception to `.gitignore` so the env-var-contract template can be committed (was matched by `.env.*` rule). Naming convention preserved per plan spec (Rule 3 deviation)
 
 ### Pending Todos
 
@@ -77,6 +79,6 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 
 ## Session Continuity
 
-Last session: 2026-05-03
-Stopped at: Plan 01-04 complete (5 test files ported verbatim, 67/67 tests green). Wave 3 done. Phase 1 gates 1, 2, 3 verified; only gate 4 (`docker build`) remains, delivered by Wave 4 (01-05-docker). Roadmap reassess still scheduled after Phase 1 completes (auth topology shift; REQUIREMENTS.md DB-03 wording lag).
-Resume file: .planning/phases/01-skeleton-domain-copy/01-05-docker-PLAN.md
+Last session: 2026-05-04
+Stopped at: Phase 1 complete. All 4 ROADMAP gates green (pytest 67/67, alembic upgrade head against compose Postgres → 5 tables + 5 seeded stores, poetry install on Python 3.12.3, docker build → price-tracker:phase1 167 MB). Ready for Phase 2 (Service Infrastructure). Roadmap reassess (D-19) is the immediate next planning activity — Phase 3 (auth → IAP header trust) and Phase 4 (MCP routing) need rewriting before Phase 3 planning starts; flag at Phase 2 planning kickoff.
+Resume file: (Phase 2 plan file — to be created during Phase 2 planning)

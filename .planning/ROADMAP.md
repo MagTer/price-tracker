@@ -12,7 +12,7 @@ Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-p
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
+- [x] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
 - [ ] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
 - [ ] **Phase 3: Admin UI + Entra Auth** - Ported admin endpoints + HTML behind Entra OIDC single-`oid` gate, routed by Traefik to `prices.<domain>`
 - [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools, bearer auth, registered in the agent platform, `priser` skill answers Swedish queries via MCP
@@ -42,7 +42,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [x] 01-04-tests-PLAN.md — port 5 test files with import rewrites + green pytest suite (no aiosqlite, mocks-only)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-  - [ ] 01-05-docker-PLAN.md — Dockerfile + postgres-only docker-compose + .env.template + end-to-end Phase 1 gate verification
+  - [x] 01-05-docker-PLAN.md — Dockerfile + postgres-only docker-compose + .env.template + end-to-end Phase 1 gate verification
 
 **Cross-cutting constraints** (truths shared across multiple plans):
   - `DEFAULT_TENANT_ID = uuid.UUID("f21b6620-c793-46e3-a354-dfcd9956b4a2")` (D-01) — referenced by tenant.py, migration seed step, and tests
@@ -106,7 +106,7 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton + Domain Copy | 3/5 | In progress | - |
+| 1. Skeleton + Domain Copy | 5/5 | Complete | 2026-05-04 |
 | 2. Service Infrastructure | 0/TBD | Not started | - |
 | 3. Admin UI + Entra Auth | 0/TBD | Not started | - |
 | 4. MCP Server + Agent Wiring | 0/TBD | Not started | - |
