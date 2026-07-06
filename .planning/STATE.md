@@ -13,7 +13,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 Phase: 5 of 5 (Source-repo Cleanup) — ready to start
 Plan: 0 of TBD in current phase
 Status: Phases 1-4 complete. Critical bugs fixed (Dockerfile CMD, admin.py type/import bugs). Admin dashboard template rebuilt. MCP server implemented with 4 tools + bearer auth. New API and MCP tests added. Ready for Phase 5 or end-to-end verification.
-Last activity: 2026-07-06 — Completed quick task 260706-rso: fixed 4 pre-Phase-5 blockers (mcp/mcp_server package collision, doubled /v1 in OpenRouter URL, stale LiteLLM model aliases, fastmcp 1.0→2.x bump). Full test suite green (87 passed, 0 failures).
+Last activity: 2026-07-06 — Completed quick task 260706-t3p: fixed CLAUDE.md's stale mcp/ reference and propagated the MCP sub-app's lifespan into create_app() (fastmcp's streamable-HTTP session manager now actually starts/stops with the app). Full test suite green (87 passed, 0 failures).
 
 Progress: [████████░░] 80% (Phases 1-4 of 5 complete)
 
@@ -74,6 +74,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260706-rso | Fix 4 pre-Phase-5 blockers: mcp/mcp_server package collision, doubled /v1 in OpenRouter URL, stale LiteLLM model aliases, fastmcp 1.0→2.x bump | 2026-07-06 | dd547bd | [260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-](./quick/260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-/) |
+| 260706-t3p | Fix CLAUDE.md stale mcp/ reference + propagate MCP sub-app lifespan into create_app() so the streamable-HTTP session manager actually starts | 2026-07-06 | 7a3127b | [260706-t3p-fix-2-issues-flagged-after-quick-task-26](./quick/260706-t3p-fix-2-issues-flagged-after-quick-task-26/) |
 
 ## Deferred Items
 
