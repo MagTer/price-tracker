@@ -8,6 +8,7 @@ from api.admin import router as admin_router
 from domain.scheduler import PriceCheckScheduler
 from infra.db import async_session_factory
 from infra.providers import get_email_service, get_fetcher
+from mcp_server.server import get_mcp_app
 
 
 @asynccontextmanager
@@ -43,6 +44,9 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(admin_router)
+
+    # MCP server mounted at /mcp (served on dedicated mcp.<domain> subdomain)
+    app.mount("/mcp", get_mcp_app())
 
     return app
 

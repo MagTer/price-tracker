@@ -22,7 +22,7 @@ packages = [
     { include = "domain", from = "src" },
     { include = "infra", from = "src" },
     { include = "api", from = "src" },
-    { include = "mcp", from = "src" },
+    { include = "mcp_server", from = "src" },
 ]
 
 [tool.poetry.group.dev.dependencies]
