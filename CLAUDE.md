@@ -1,7 +1,7 @@
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**Price Tracker** — standalone Swedish grocery and pharmacy price tracker, extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server; runs alongside the agent platform behind the same Traefik proxy. Single-user (Magnus only) with Entra ID auth.
+**Price Tracker** — standalone Swedish grocery and pharmacy price tracker, extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server; runs alongside the agent platform behind the same Traefik proxy. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
 **Core Value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
 
@@ -22,7 +22,7 @@ Stack is **locked** by EXTRACTION.md §2 — deviations require touching ported 
 - **Email:** aiosmtplib (SMTP) — AWS SES is the alternative if needed
 - **LLM:** OpenRouter direct at `https://openrouter.ai/api/v1` (OpenAI-compatible) — no LiteLLM proxy
 - **MCP:** `fastmcp` (mounts on FastAPI)
-- **Auth (UI):** `fastapi-azure-auth` or `authlib` for Entra OIDC
+- **Auth (UI):** IAP header trust — reads `X-Auth-Request-Email` forwarded by the upstream Traefik + auth-middleware ingress (managed via Dokploy); no in-app OIDC client
 - **Auth (MCP):** static bearer token (`MCP_BEARER_TOKEN`)
 - **Frontend:** server-rendered HTML + vanilla JS + Chart.js (ported from source — no SPA framework)
 - **Tests:** pytest, pytest-asyncio
@@ -54,7 +54,7 @@ src/
 │   └── stores/    (__init__.py)
 ├── api/
 │   ├── app.py     # FastAPI factory + lifespan starts scheduler
-│   ├── auth.py    # Entra OIDC + single-oid gate
+│   ├── auth.py    # IAP header trust (X-Auth-Request-Email) + single-email gate
 │   ├── admin.py   # ported from admin_price_tracker.py (1,689 LOC, 14+ endpoints)
 │   ├── schemas.py
 │   └── templates/admin.html
@@ -74,7 +74,7 @@ alembic/versions/0001_initial.py  # squashed from 3 source migrations
 
 **MCP surface:** `check_price`, `find_deals`, `compare_stores`, `list_products` — see EXTRACTION.md §5.
 
-**Auth:** Admin UI uses Entra OIDC with single-`oid` gate; `/mcp` endpoint uses static bearer token. See EXTRACTION.md §6.
+**Auth:** Admin UI trusts the `X-Auth-Request-Email` header forwarded by the upstream Traefik + auth-middleware ingress and validates it against `ALLOWED_ENTRA_EMAIL`; Entra ID enforcement itself happens at that ingress layer (managed via Dokploy — not yet built, pending Entra client registration), not in this app. `/mcp` endpoint uses static bearer token. See EXTRACTION.md §6 for background, though its original in-app-OIDC description was superseded by this IAP header-trust model (D-18/D-19 in .planning/STATE.md).
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->
