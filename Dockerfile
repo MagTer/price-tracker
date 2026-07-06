@@ -52,4 +52,4 @@ EXPOSE 8000
 
 # Phase-1 CMD (D-11): uvicorn pointing at src.api.app:app — module not yet implemented (Phase 2)
 # Build succeeds; running this image fails at import. Phase 2 implements api/app.py.
-CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]

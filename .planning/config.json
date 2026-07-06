@@ -50,7 +50,6 @@
   "agent_skills": {},
   "claude_md_path": "./CLAUDE.md",
   "resolve_model_ids": "omit",
-  "branching_strategy": "milestone",
   "quick_branch_template": null,
   "mode": "yolo",
   "granularity": "standard"

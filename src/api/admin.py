@@ -674,7 +674,7 @@ async def unlink_product_from_store(
 )
 async def get_price_history(
     product_id: str | None = None,
-    days: str | None = None,
+    days: int = 30,
     session: AsyncSession = Depends(get_db),
 ):
     """Get price history for a product across all stores.
@@ -1469,6 +1469,7 @@ async def import_data(
                     package_qty = Decimal(str(prod_data["package_quantity"]))
 
                 product = Product(
+                    tenant_id=tenant_id,
                     name=name,
                     brand=brand,
                     category=prod_data.get("category"),
@@ -1632,6 +1633,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Price Tracker - Admin</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         {base_css}
         {extra_css}
