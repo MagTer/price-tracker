@@ -23,13 +23,13 @@ class PriceParser:
     # Cascading model strategy (fast first, then quality fallback)
     MODEL_CASCADE = os.getenv(
         "PRICE_PARSER_MODEL_CASCADE",
-        "price_tracker,price_tracker_fallback",
+        "meta-llama/llama-4-scout,anthropic/claude-haiku-4.5",
     ).split(",")
 
     # Model-specific confidence thresholds
     CONFIDENCE_THRESHOLDS = {
-        "price_tracker": 0.70,
-        "price_tracker_fallback": 0.0,  # Accept any confidence (last resort)
+        "meta-llama/llama-4-scout": 0.70,
+        "anthropic/claude-haiku-4.5": 0.0,  # Accept any confidence (last resort)
     }
 
     CONFIDENCE_THRESHOLD = 0.7

@@ -208,9 +208,9 @@ class TestPriceParser:
 
             result = await parser.extract_price("page content", "ica-maxi", "Mjölk")
 
-            # Should call with price_tracker model first
+            # Should call with the primary model first
             mock_extract.assert_called_once()
-            assert "price_tracker" in str(mock_extract.call_args)
+            assert "llama-4-scout" in str(mock_extract.call_args)
             assert result == mock_result
 
     @pytest.mark.asyncio
