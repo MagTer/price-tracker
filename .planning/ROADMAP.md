@@ -15,9 +15,9 @@ Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-p
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
-- [ ] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
-- [ ] **Phase 3: Admin UI + IAP Header Trust** - Ported admin endpoints + HTML behind upstream IAP. App reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, denies otherwise. No OIDC client in this repo; routed to `prices.<domain>` by the external edge proxy
-- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools on dedicated `mcp.<domain>` subdomain, bearer auth (IAP-bypassed for this host), registered in the agent platform, `priser` skill answers Swedish queries via MCP
+- [x] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
+- [x] **Phase 3: Admin UI + IAP Header Trust** - Ported admin endpoints + HTML behind upstream IAP. App reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, denies otherwise. No OIDC client in this repo; routed to `prices.<domain>` by the external edge proxy
+- [x] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools on dedicated `mcp.<domain>` subdomain, bearer auth (IAP-bypassed for this host). Agent platform registration pending end-to-end verification.
 - [ ] **Phase 5: Source-repo Cleanup** - Delete price-tracker code from `ai-agent-platform`, drop `price_tracker_*` tables, verify platform deploys with `priser` still working
 
 ## Phase Details
@@ -109,7 +109,7 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Skeleton + Domain Copy | 5/5 | Complete | 2026-05-04 |
-| 2. Service Infrastructure | 0/TBD | Not started | - |
-| 3. Admin UI + Entra Auth | 0/TBD | Not started | - |
-| 4. MCP Server + Agent Wiring | 0/TBD | Not started | - |
+| 2. Service Infrastructure | 1/1 | Complete | 2026-05-22 |
+| 3. Admin UI + Entra Auth | 1/1 | Complete | 2026-05-22 |
+| 4. MCP Server + Agent Wiring | 1/1 | Complete | 2026-05-22 |
 | 5. Source-repo Cleanup | 0/TBD | Not started | - |
