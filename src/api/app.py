@@ -10,22 +10,25 @@ from infra.db import async_session_factory
 from infra.providers import get_email_service, get_fetcher
 from mcp_server.server import get_mcp_app
 
+mcp_app, mcp_http_app = get_mcp_app()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    fetcher = get_fetcher()
-    email_service = get_email_service()
-    # Only pass email_service if it is actually configured
-    scheduler = PriceCheckScheduler(
-        session_factory=async_session_factory,
-        fetcher=fetcher,
-        email_service=email_service if email_service.is_configured() else None,
-    )
-    await scheduler.start()
-    app.state.scheduler = scheduler
-    yield
-    await scheduler.stop()
-    await fetcher.close()
+    async with mcp_http_app.lifespan(mcp_http_app):
+        fetcher = get_fetcher()
+        email_service = get_email_service()
+        # Only pass email_service if it is actually configured
+        scheduler = PriceCheckScheduler(
+            session_factory=async_session_factory,
+            fetcher=fetcher,
+            email_service=email_service if email_service.is_configured() else None,
+        )
+        await scheduler.start()
+        app.state.scheduler = scheduler
+        yield
+        await scheduler.stop()
+        await fetcher.close()
 
 
 def create_app() -> FastAPI:
@@ -46,7 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
 
     # MCP server mounted at /mcp (served on dedicated mcp.<domain> subdomain)
-    app.mount("/mcp", get_mcp_app())
+    app.mount("/mcp", mcp_app)
 
     return app
 
