@@ -179,7 +179,7 @@ Only output the JSON object, no explanation or markdown."""
         """Extract using specified model via OpenRouter."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                f"{OPENROUTER_BASE_URL}/v1/chat/completions",
+                f"{OPENROUTER_BASE_URL}/chat/completions",
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
