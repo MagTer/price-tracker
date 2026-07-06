@@ -184,14 +184,10 @@ async def list_products() -> str:
 
 def get_mcp_app():
     """Return the MCP ASGI app wrapped with bearer-token auth."""
-    # fastmcp >= 1.0 exposes an SSE ASGI app via sse_app()
-    try:
-        sse_app = mcp.sse_app()
-    except AttributeError:
-        # Fallback for alternative fastmcp API shapes
-        sse_app = getattr(mcp, "app", mcp)
+    # fastmcp >= 2.0 exposes the modern streamable-HTTP ASGI app via http_app()
+    http_app = mcp.http_app()
 
     if MCP_BEARER_TOKEN:
-        return BearerTokenMiddleware(sse_app, MCP_BEARER_TOKEN)
+        return BearerTokenMiddleware(http_app, MCP_BEARER_TOKEN)
     logger.warning("MCP_BEARER_TOKEN not set — MCP endpoint is UNPROTECTED")
-    return sse_app
+    return http_app

@@ -97,7 +97,7 @@ class TestMcpTools:
         )
         mock_get_svc.return_value = mock_service
 
-        result = await check_price("omega-3")
+        result = await check_price.fn("omega-3")
         assert "Apotea Omega-3" in result
         assert "149.00 kr" in result
 
@@ -107,7 +107,7 @@ class TestMcpTools:
         mock_service.get_products = AsyncMock(return_value=[])
         mock_get_svc.return_value = mock_service
 
-        result = await check_price("nonexistent")
+        result = await check_price.fn("nonexistent")
         assert "Inga produkter" in result
 
     @patch("mcp_server.server._get_service")
@@ -126,7 +126,7 @@ class TestMcpTools:
         )
         mock_get_svc.return_value = mock_service
 
-        result = await find_deals("grocery")
+        result = await find_deals.fn("grocery")
         assert "Mjolk" in result
         assert "10.00 kr" in result
 
@@ -156,7 +156,7 @@ class TestMcpTools:
         )
         mock_get_svc.return_value = mock_service
 
-        result = await compare_stores("ost")
+        result = await compare_stores.fn("ost")
         assert "ICA" in result
         assert "Willys" in result
         assert "45.00 kr" in result
@@ -181,6 +181,6 @@ class TestMcpTools:
         )
         mock_get_svc.return_value = mock_service
 
-        result = await list_products()
+        result = await list_products.fn()
         assert "Toalettpapper" in result
         assert "ICA" in result
