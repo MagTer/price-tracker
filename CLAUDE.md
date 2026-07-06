@@ -58,7 +58,7 @@ src/
 │   ├── admin.py   # ported from admin_price_tracker.py (1,689 LOC, 14+ endpoints)
 │   ├── schemas.py
 │   └── templates/admin.html
-├── mcp/
+├── mcp_server/
 │   └── server.py  # FastMCP, bearer auth, 4 tools
 └── infra/
     ├── fetcher.py  # httpx (replaces IFetcher)
