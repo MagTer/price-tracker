@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 
 ## Current Position
 
-Phase: 2 of 5 (Service Infrastructure) — ready to start
+Phase: 5 of 5 (Source-repo Cleanup) — ready to start
 Plan: 0 of TBD in current phase
-Status: Phase 1 complete + verified; D-19 roadmap reassess complete; ready to plan Phase 2
-Last activity: 2026-05-04 — D-19 roadmap reassess: rewrote AUTH-01..04 for IAP header trust (was Entra OIDC code flow), pinned MCP-05 to `mcp.<domain>` subdomain, dropped in-repo Traefik labels (DEPLOY-03), aligned DB-03/TEST-02/DEPLOY-01 wording with locked decisions, added EDGE-01 to v2 backlog as separate-milestone marker
+Status: Phases 1-4 complete. Critical bugs fixed (Dockerfile CMD, admin.py type/import bugs). Admin dashboard template rebuilt. MCP server implemented with 4 tools + bearer auth. New API and MCP tests added. Ready for Phase 5 or end-to-end verification.
+Last activity: 2026-07-06 — Completed quick task 260706-rso: fixed 4 pre-Phase-5 blockers (mcp/mcp_server package collision, doubled /v1 in OpenRouter URL, stale LiteLLM model aliases, fastmcp 1.0→2.x bump). Full test suite green (87 passed, 0 failures).
 
-Progress: [██░░░░░░░░] 20% (Phase 1 of 5 complete)
+Progress: [████████░░] 80% (Phases 1-4 of 5 complete)
 
 ## Performance Metrics
 
@@ -29,10 +29,13 @@ Progress: [██░░░░░░░░] 20% (Phase 1 of 5 complete)
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Skeleton + Domain Copy | 5/5 | ~54 min | ~11 min |
+| 2. Service Infrastructure | 1/1 | — | — |
+| 3. Admin UI + IAP Header Trust | 1/1 | — | — |
+| 4. MCP Server + Agent Wiring | 1/1 | — | — |
 
 **Recent Trend:**
-- Last 5 plans: 01-05 (~10 min, 2 tasks, 5 files), 01-04 (~10 min, 1 task, 6 files), 01-03 (~12 min, 2 tasks, 5 files), 01-02 (~12 min, 2 tasks, 11 files), 01-01 (~10 min, 2 tasks, 9 files)
-- Trend: steady (~10-12 min/plan)
+- Phases 2-4 completed in a single autonomous session
+- New test coverage: 2 test files (~120 LOC) covering admin API and MCP tools
 
 *Updated after each plan completion*
 
@@ -65,6 +68,12 @@ None yet.
 - Email backend (SMTP via aiosmtplib vs AWS SES) — decide during Phase 2
 - MCP subdomain (`mcp.<domain>`) is now LOCKED for Phase 4 (was: TBD); IAP per-host bypass is the rationale (D-18)
 - **Edge-proxy / portal stack** is deferred to a separate future GSD milestone or repo (D-18, EDGE-01). Phases 3 + 4 ASSUME the IAP exists; if it does not exist when Phase 3 lands, Phase 3 still ships behind a "trust the header" dependency and the operator runs the app in a private network until the edge stack is built.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260706-rso | Fix 4 pre-Phase-5 blockers: mcp/mcp_server package collision, doubled /v1 in OpenRouter URL, stale LiteLLM model aliases, fastmcp 1.0→2.x bump | 2026-07-06 | dd547bd | [260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-](./quick/260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-/) |
 
 ## Deferred Items
 
