@@ -94,7 +94,7 @@ The `priser` skill in the agent platform routes through MCP today — this repo'
 | Email backend pluggable (SMTP via aiosmtplib OR AWS SES) | Decide concrete backend during Phase 2 implementation | — Pending |
 | Mount path for MCP (`/mcp` on same app vs separate Traefik subdomain) | Decide during Phase 4 | Locked 2026-05-04 — dedicated `mcp.<domain>` subdomain (per-host IAP bypass cleaner than per-path) |
 | Auth topology: in-app OIDC vs upstream IAP header trust | OIDC client + session cookies in this repo couples it tightly to Entra; IAP terminates OIDC once at the edge and forwards email header — multiple backend apps share one OIDC client | Locked 2026-05-02 (D-17) — IAP header trust; drops `fastapi-azure-auth` + `pyjwt` from this repo |
-| Edge proxy / portal stack repo | Belongs out of the price-tracker extraction milestone; separate codebase, separate hosting target (Flatcar VM), separate concerns (TLS, OIDC, routing, dashboard) | Locked 2026-05-02 (D-18) — separate future GSD milestone or repo: Traefik + oauth2-proxy + Homepage on Flatcar |
+| Edge proxy / portal stack repo | Belongs out of the price-tracker extraction milestone; separate codebase, separate concerns (TLS, OIDC, routing, dashboard); ingress is operated within Dokploy's managed scope, not a standalone hosting target | Locked 2026-05-02 (D-18) — Traefik + oauth2-proxy + Homepage; reassessed 2026-07-06 (D-20) — managed within Dokploy's scope, not a hand-built stack on a standalone VM |
 
 ## Evolution
 
@@ -115,3 +115,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 *Last updated: 2026-05-04 — D-19 roadmap reassess after Phase 1 close: auth topology shifted to upstream IAP header trust (D-17); MCP subdomain locked over `/mcp` path (D-18); edge-proxy stack moved to separate future milestone*
+*Last updated: 2026-07-06 — D-20 reassess: edge-proxy ingress hosting target corrected from a standalone hand-built VM to Dokploy-managed ingress (Traefik + auth-middleware architecture and D-18 lock unchanged; still out of the price-tracker extraction milestone's build scope)*
