@@ -4,7 +4,7 @@
 
 Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-platform` monolith into this standalone repo. Goal is **byte-equivalent feature parity** behind a new MCP boundary, then unwiring the source repo. Five phases mirror EXTRACTION.md §8: skeleton + domain copy → service infra → admin UI + IAP header trust → MCP server → source-repo cleanup. Each phase has a verifiable gate; phases run sequentially because each gate is a precondition for the next phase's work (domain code before infra, infra before app shell, app shell before MCP plug-in, MCP live before source deletion is safe).
 
-**Auth topology (locked 2026-05-02 in 01-CONTEXT.md, reassessed 2026-05-04):** This repo does NOT terminate Entra OIDC. An upstream Identity-Aware Proxy (Traefik + oauth2-proxy, lives in a separate edge-stack repo per D-18) terminates OIDC once at the edge and forwards `X-Auth-Request-Email` to the admin host. The MCP host is excluded from the IAP middleware so it can authenticate purely with `MCP_BEARER_TOKEN`. Phase 3 reads the header; Phase 4 wires the bearer-only subdomain.
+**Auth topology (locked 2026-05-02 in 01-CONTEXT.md, reassessed 2026-05-04; ingress hosting reassessed 2026-07-06 per D-20):** This repo does NOT terminate Entra OIDC. An upstream Identity-Aware Proxy (Traefik + oauth2-proxy, operated within Dokploy's managed scope per D-20) terminates OIDC once at the edge and forwards `X-Auth-Request-Email` to the admin host. The MCP host is excluded from the IAP middleware so it can authenticate purely with `MCP_BEARER_TOKEN`. Phase 3 reads the header; Phase 4 wires the bearer-only subdomain.
 
 ## Phases
 
