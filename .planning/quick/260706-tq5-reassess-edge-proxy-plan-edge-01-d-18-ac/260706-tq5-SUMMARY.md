@@ -69,7 +69,7 @@ Two immutable historical artifacts from the original Phase 1 discussion were **i
 - `.planning/phases/01-skeleton-domain-copy/01-CONTEXT.md` (line 130) — locked Phase 1 discussion decision record
 - `.planning/phases/01-skeleton-domain-copy/01-DISCUSSION-LOG.md` (lines 86, 112) — verbatim discussion transcript
 
-A third, previously-unanticipated match also exists: this task's own `260706-tq5-PLAN.md`, which necessarily quotes the old and new wording verbatim as part of describing the edits to make. This is this task's own planning artifact (not a living project-state file) and is retained for the same reason as the two Phase 1 files — it is a historical record of the instructions this task was given, not current project state.
+Two further, previously-unanticipated matches also exist: this task's own `260706-tq5-PLAN.md` and this `260706-tq5-SUMMARY.md`, both of which necessarily quote the old and new wording verbatim while describing the edits made and the deviations found. These are this task's own planning artifacts (not living project-state files) and are retained for the same reason as the two Phase 1 files — a historical record of the instructions this task was given and the work it did, not current project state.
 
 ## Deviations from Plan
 
@@ -94,10 +94,10 @@ A third, previously-unanticipated match also exists: this task's own `260706-tq5
 **3. [Rule 3 - Blocking] Task 5's repo-wide verify command didn't anticipate matching its own PLAN.md**
 - **Found during:** Task 5 (repo-wide verification)
 - **Issue:** Task 5's automated verify excludes only `.planning/phases/01-skeleton-domain-copy/` from the repo-wide "Flatcar\|Proxmox" grep, expecting zero matches elsewhere. But this task's own `260706-tq5-PLAN.md` quotes the literal old and new wording verbatim (as instructions for what to edit), so it necessarily contains "Flatcar"/"Proxmox" itself and is not excluded by that grep pattern.
-- **Fix:** Treated this task's own PLAN.md as a third expected historical-artifact exception, alongside the two Phase 1 files, for the same reason (it's a record of the instructions given, not living project state) — documented explicitly in this Summary rather than silently ignored.
+- **Fix:** Treated this task's own PLAN.md (and, by the same logic, this SUMMARY.md itself — its Deviations section necessarily quotes the same terms while documenting this exact finding) as expected historical-artifact exceptions, alongside the two Phase 1 files, for the same reason (they are a record of the instructions given and work done, not living project state) — documented explicitly here rather than silently ignored.
 - **Files modified:** None (verification-only task; documentation of the judgment call lives in this Summary).
-- **Verification:** `grep -rl 'Flatcar\|Proxmox' .planning/` lists exactly 3 files: the 2 expected Phase 1 historical artifacts plus this task's own PLAN.md — all 3 expected and accounted for.
-- **Committed in:** N/A (no file changes for Task 5)
+- **Verification:** `grep -rl 'Flatcar\|Proxmox' .planning/` lists exactly 4 files: the 2 expected Phase 1 historical artifacts, this task's own PLAN.md, and this task's own SUMMARY.md — all 4 expected and accounted for. Zero matches remain in the 4 living planning-state files (PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md), including STATE.md's own new Quick Tasks Completed row for this task (reworded during self-check to avoid reintroducing the literal terms it set out to eliminate).
+- **Committed in:** N/A (no file changes for Task 5); the STATE.md row wording fix landed in `005719d`
 
 ---
 
