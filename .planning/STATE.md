@@ -71,7 +71,6 @@ None yet.
 - MCP subdomain (`mcp.<domain>`) is now LOCKED for Phase 4 (was: TBD); IAP per-host bypass is the rationale (D-18)
 - **Edge-proxy / portal stack** is operated within Dokploy's managed scope, out of this repo's build scope (D-18, EDGE-01; hosting reassessed 2026-07-06 per D-20). Phases 3 + 4 ASSUME the IAP exists; if it does not exist when Phase 3 lands, Phase 3 still ships behind a "trust the header" dependency and the operator runs the app in a private network until the Dokploy-managed ingress is built (pending Entra client registration).
 - **Phase 4 gap (2026-07-06 retroactive verification):** The MCP server itself works and is tested (4 tools, bearer auth), but the `mcp.<domain>` ingress (Dokploy-managed, not yet built) and agent-platform `/platformadmin/mcp/` registration (separate `ai-agent-platform` repo, never attempted) are NOT done. Phase 5 explicitly depends on "MCP must be live and `priser` verified end-to-end" — this precondition is unmet. Do not start Phase 5 until this gap is closed or the dependency is explicitly re-scoped. See `.planning/phases/04-mcp-server-agent-wiring/04-VERIFICATION.md` for the full gap summary.
-- **Pending, unexecuted quick task:** `.planning/quick/260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac/` has a written PLAN.md (reassessing the edge-proxy plan to reflect Dokploy as the ingress-management platform) that was never executed — the plan reserves decision ID **D-20** for when it runs. Do not reuse D-20 for anything else.
 
 ### Quick Tasks Completed
 
@@ -81,6 +80,7 @@ None yet.
 | 260706-t3p | Fix CLAUDE.md stale mcp/ reference + propagate MCP sub-app lifespan into create_app() so the streamable-HTTP session manager actually starts | 2026-07-06 | 7a3127b | [260706-t3p-fix-2-issues-flagged-after-quick-task-26](./quick/260706-t3p-fix-2-issues-flagged-after-quick-task-26/) |
 | 260706-tha | Fix 4 stale Entra OIDC references in CLAUDE.md to match the locked IAP header-trust auth model (X-Auth-Request-Email via Dokploy-managed Traefik+auth-middleware ingress, not yet built) | 2026-07-06 | d094d70 | [260706-tha-fix-4-stale-entra-oidc-references-in-cla](./quick/260706-tha-fix-4-stale-entra-oidc-references-in-cla/) |
 | 260706-w69 | Backfill retroactive GSD phase artifacts for Phases 2-4 (implemented outside the formal pipeline); discovered and corrected Phase 4's optimistic "Complete" marking to gaps_found (agent-platform registration + mcp.<domain> ingress not done) | 2026-07-06 | d1ae100 | [260706-w69-backfill-retroactive-gsd-phase-artifacts](./quick/260706-w69-backfill-retroactive-gsd-phase-artifacts/) |
+| 260706-tq5 | Reassess edge-proxy/ingress hosting (EDGE-01, D-18) across PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md: corrected from a standalone Flatcar/Proxmox VM to Dokploy-managed ingress (architecture and IAP header-trust auth unchanged); recorded D-20 | 2026-07-06 | (pending) | [260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac](./quick/260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac/) |
 
 ## Deferred Items
 
