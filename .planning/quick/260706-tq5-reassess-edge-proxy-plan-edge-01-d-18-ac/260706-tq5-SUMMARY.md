@@ -40,7 +40,6 @@ coverage:
 
 duration: ~20min
 completed: 2026-07-06
-status: complete
 ---
 
 # Quick Task 260706-tq5: Reassess edge-proxy plan (EDGE-01, D-18/D-19) Summary
