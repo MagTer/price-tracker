@@ -102,7 +102,7 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 
 ### Edge Proxy / Portal Stack (separate milestone or repo)
 
-- **EDGE-01**: Traefik + oauth2-proxy + Homepage dashboard on Flatcar Container Linux inside a Proxmox VM (single mini-PC). Owns: TLS termination (Let's Encrypt DNS-01 wildcard), Entra OIDC, routing to backend apps, landing-page tiles. Backend apps (price-tracker, future ai-agent-platform consolidation, etc.) join a shared `edge` docker network and trust `X-Auth-Request-Email` headers (D-18 in `01-CONTEXT.md`). Subdomain strategy: `prices.<domain>`, `mcp.<domain>`, `agent.<domain>`. **Does NOT belong inside the price-tracker extraction milestone** — should be its own GSD milestone or repo.
+- **EDGE-01**: Traefik + oauth2-proxy + Homepage dashboard ingress, operated within Dokploy's managed scope (not a standalone hand-built stack). Owns: TLS termination (Let's Encrypt DNS-01 wildcard), Entra OIDC, routing to backend apps, landing-page tiles. Backend apps (price-tracker, future ai-agent-platform consolidation, etc.) join a shared `edge` docker network and trust `X-Auth-Request-Email` headers (D-18 in `01-CONTEXT.md`; hosting reassessed 2026-07-06 per D-20). Subdomain strategy: `prices.<domain>`, `mcp.<domain>`, `agent.<domain>`. **Does NOT belong inside the price-tracker extraction milestone** — ingress is managed via Dokploy, not built as part of this repo.
 
 ## Out of Scope
 
@@ -176,4 +176,5 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 ---
 *Requirements defined: 2026-05-01*
 *Last updated: 2026-05-04 — D-19 roadmap reassess after Phase 1 close: AUTH-01..04 rewritten for IAP header trust (was Entra OIDC code flow); DEPLOY-01/03/04 updated to drop in-repo Traefik/OIDC libs; MCP-05 pinned to subdomain; DB-03 / TEST-02 wording aligned with locked decisions; EDGE-01 added to v2 backlog as separate milestone*
+*Last updated: 2026-07-06 — D-20 reassess: EDGE-01 hosting corrected from a standalone hand-built VM to Dokploy-managed ingress (Traefik + oauth2-proxy architecture unchanged); still out of the price-tracker extraction milestone*
 *2026-07-06 D-21: Retroactive backfill of Phases 2-4 GSD tracking artifacts surfaced that MCP-05 ("mounted on FastAPI AND exposed via dedicated mcp.<domain> subdomain") and INFRA-06 ("manual Willys price check succeeds end-to-end") were marked Complete without independent live verification. Both changed to Partial — the code-level half of each is done and tested, but the subdomain-ingress half (MCP-05) and live-network half (INFRA-06) are not proven. MCP-06/MCP-07 were already correctly Pending.*
