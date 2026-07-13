@@ -185,8 +185,10 @@ async def list_products() -> str:
 def get_mcp_app():
     """Return a `(wrapped_app, http_app)` tuple.
 
-    `wrapped_app` is the MCP ASGI app wrapped with bearer-token auth (or the
-    raw app if no bearer token is configured) — mount this on the FastAPI app.
+    `wrapped_app` is the MCP ASGI app wrapped with bearer-token auth — mount
+    this on the FastAPI app. The wrap is unconditional: with no token
+    configured the middleware fails closed (503 on every request) instead of
+    exposing the endpoint.
 
     `http_app` is always the raw, unwrapped streamable-HTTP ASGI app. It is
     returned separately because Starlette's `app.mount()` does not propagate
@@ -197,7 +199,8 @@ def get_mcp_app():
     # fastmcp >= 2.0 exposes the modern streamable-HTTP ASGI app via http_app()
     http_app = mcp.http_app()
 
-    if MCP_BEARER_TOKEN:
-        return BearerTokenMiddleware(http_app, MCP_BEARER_TOKEN), http_app
-    logger.warning("MCP_BEARER_TOKEN not set — MCP endpoint is UNPROTECTED")
-    return http_app, http_app
+    if not MCP_BEARER_TOKEN:
+        logger.error(
+            "MCP_BEARER_TOKEN not set — MCP endpoint will answer 503 until configured"
+        )
+    return BearerTokenMiddleware(http_app, MCP_BEARER_TOKEN), http_app

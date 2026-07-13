@@ -184,3 +184,39 @@ class TestMcpTools:
         result = await list_products.fn()
         assert "Toalettpapper" in result
         assert "ICA" in result
+
+
+class TestFailClosed:
+    async def test_empty_token_returns_503(self):
+        """No configured token -> 503 for every request (fail closed)."""
+        calls = []
+
+        async def app(scope, receive, send):
+            calls.append("app")
+
+        middleware = BearerTokenMiddleware(app, "")
+        responses = []
+
+        async def mock_send(msg):
+            responses.append(msg)
+
+        scope = {
+            "type": "http",
+            "headers": [(b"authorization", b"Bearer anything")],
+        }
+        await middleware(scope, None, mock_send)
+
+        assert responses[0]["status"] == 503
+        assert "app" not in calls
+
+    async def test_get_mcp_app_always_wraps(self):
+        """get_mcp_app never returns an unwrapped app, even without a token."""
+        from unittest.mock import patch as _patch
+
+        import mcp_server.server as server_mod
+
+        with _patch.object(server_mod, "MCP_BEARER_TOKEN", ""):
+            wrapped, http_app = server_mod.get_mcp_app()
+
+        assert isinstance(wrapped, BearerTokenMiddleware)
+        assert wrapped.token == ""
