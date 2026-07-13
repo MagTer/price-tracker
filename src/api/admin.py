@@ -96,7 +96,7 @@ async def list_stores(session: AsyncSession = Depends(get_db)) -> list[StoreResp
         List of store information including slug, type, and status.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         stmt = select(Store).where(Store.is_active.is_(True)).order_by(Store.name)
@@ -132,14 +132,13 @@ async def list_products(
         search: Search term for product name or brand.
         store_id: Filter by specific store UUID.
         tenant_id: Filter by user context UUID (shows only products with watches in that context).
-        admin: Authenticated admin user.
         session: Database session.
 
     Returns:
         List of products with linked stores.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
         Users can only query their own tenant_id.
     """
     try:
@@ -296,7 +295,6 @@ async def create_product(
 
     Args:
         data: Product creation data.
-        admin: Authenticated admin user.
         session: Database session.
         service: Price tracker service.
 
@@ -304,7 +302,7 @@ async def create_product(
         Dictionary with product_id and success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         from decimal import Decimal
@@ -351,7 +349,7 @@ async def get_product(
         Product data with linked stores.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         product_uuid = uuid.UUID(product_id)
@@ -448,7 +446,7 @@ async def update_product(
         Success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         product_uuid = uuid.UUID(product_id)
@@ -510,7 +508,7 @@ async def link_product_to_store(
         Dictionary with product_store_id and success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     # Validate frequency range (3 days to 10 days)
     if not (72 <= data.check_frequency_hours <= 240):
@@ -567,7 +565,7 @@ async def update_check_frequency(
         Success message with updated next_check_at timestamp.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         product_uuid = uuid.UUID(product_id)
@@ -673,7 +671,7 @@ async def unlink_product_from_store(
         Success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         product_uuid = uuid.UUID(product_id)
@@ -726,7 +724,7 @@ async def get_price_history(
         List of price points sorted by checked_at descending.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         product_uuid = uuid.UUID(product_id)
@@ -799,7 +797,7 @@ async def trigger_price_check(
         Dictionary with extracted price data.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         ps_uuid = uuid.UUID(product_store_id)
@@ -909,7 +907,7 @@ async def get_current_deals(
         List of current deals sorted by checked_at descending.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         from datetime import timedelta
@@ -984,14 +982,13 @@ async def list_watches(
 
     Args:
         tenant_id: Filter by context UUID. If not provided, defaults to user's context.
-        admin: Authenticated admin user.
         session: Database session.
 
     Returns:
         List of price watch configurations.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
         Users can only query their own tenant_id.
     """
     try:
@@ -1073,7 +1070,7 @@ async def create_watch(
         Dictionary with watch_id and success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
         tenant_id must match the seeded tenant; email must be well-formed.
     """
     require_default_tenant(tenant_id)
@@ -1113,7 +1110,7 @@ async def update_watch(
         Success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         watch_uuid = uuid.UUID(watch_id)
@@ -1170,7 +1167,7 @@ async def delete_watch(
         Success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         watch_uuid = uuid.UUID(watch_id)
@@ -1218,7 +1215,7 @@ async def delete_product(
         Success message.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
         await service.delete_product(product_id)
@@ -1244,14 +1241,13 @@ async def export_data(
     Args:
         include_history: Whether to include price history (default: False).
         history_days: Days of history to include if include_history=True (max 365).
-        admin: Authenticated admin user.
         session: Database session.
 
     Returns:
         JSON file download with Content-Disposition header.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
         Only exports data for the user's own context.
     """
     try:
@@ -1421,14 +1417,13 @@ async def import_data(
     Args:
         file: JSON file upload.
         mode: Import mode - "merge" (update existing, add new) or "replace" (delete all first).
-        admin: Authenticated admin user.
         session: Database session.
 
     Returns:
         Summary with counts of created, updated, skipped items and any warnings.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
         Only imports data to the user's own context.
     """
     if mode not in ("merge", "replace"):
@@ -1645,7 +1640,7 @@ async def scheduler_status(
         Scheduler running state, last summary date, and check stats.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     scheduler = request.app.state.scheduler
     if scheduler is None:
@@ -1659,7 +1654,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
         HTML dashboard for managing products, deals, and price watches.
 
     Security:
-        Requires admin role via Entra ID authentication.
+        Requires IAP header auth (X-Auth-Request-Email).
     """
     template_path = Path(__file__).parent / "templates" / "admin.html"
     parts = template_path.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")

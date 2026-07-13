@@ -56,7 +56,7 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 - [ ] **MCP-02**: FastMCP server exposes `find_deals(store_type?: "grocery" | "pharmacy")` returning a list of current offers
 - [ ] **MCP-03**: FastMCP server exposes `compare_stores(product_name: str)` returning a side-by-side price comparison
 - [ ] **MCP-04**: FastMCP server exposes `list_products()` returning the inventory of tracked products
-- [ ] **MCP-05**: MCP endpoint mounted on the FastAPI app and exposed via a dedicated subdomain (e.g. `mcp.<domain>`). Subdomain is the locked choice (not a `/mcp` path on the admin host) because the IAP auth-bypass is per-host, not per-path — keeps the edge-proxy config clean (D-18 in `01-CONTEXT.md`)
+- [ ] **MCP-05**: MCP endpoint mounted on the FastAPI app at `/mcp/` and exposed at `price.<domain>/mcp/` via a path-scoped, un-gated Traefik router with explicit priority over the Entra-gated host router (D-29 in STATE.md supersedes D-18's `mcp.<domain>` subdomain plan — with Traefik forwardAuth the auth-bypass is per-router, so a path route on the same host suffices and saves a DNS record + cert). The `/mcp` route is prepared in the home-server repo
 - [ ] **MCP-06**: Agent platform's `/platformadmin/mcp/` server registry points at this server; `skills/general/price_tracker.md` `tools:` frontmatter updated to MCP-discovered tool names
 - [ ] **MCP-07**: Agent in the platform answers a Swedish price query (e.g. "Vad kostar Apotea omega-3?") end-to-end via MCP
 
@@ -102,7 +102,7 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 
 ### Edge Proxy / Portal Stack (separate milestone or repo)
 
-- **EDGE-01**: Traefik + oauth2-proxy + Homepage dashboard ingress, operated within Dokploy's managed scope (not a standalone hand-built stack). Owns: TLS termination (Let's Encrypt DNS-01 wildcard), Entra OIDC, routing to backend apps, landing-page tiles. Backend apps (price-tracker, future ai-agent-platform consolidation, etc.) join a shared `edge` docker network and trust `X-Auth-Request-Email` headers (D-18 in `01-CONTEXT.md`; hosting reassessed 2026-07-06 per D-20). Subdomain strategy: `prices.<domain>`, `mcp.<domain>`, `agent.<domain>`. **Does NOT belong inside the price-tracker extraction milestone** — ingress is managed via Dokploy, not built as part of this repo.
+- **EDGE-01**: Traefik + oauth2-proxy + Homepage dashboard ingress, operated within Dokploy's managed scope (not a standalone hand-built stack). **LIVE in production since 2026-07-09** (oauth2-proxy v7.15.2 + Traefik forwardAuth `entra-auth@file`). Owns: TLS termination (Let's Encrypt DNS-01 wildcard), Entra OIDC, routing to backend apps, landing-page tiles. Backend apps (price-tracker, future ai-agent-platform consolidation, etc.) join a shared `edge` docker network and trust `X-Auth-Request-Email` headers (D-18 in `01-CONTEXT.md`; hosting reassessed 2026-07-06 per D-20). Host strategy: `price.<domain>` (portal + API at root, MCP at `/mcp/` via a path-scoped un-gated router — no `mcp.<domain>` subdomain, D-29). **Does NOT belong inside the price-tracker extraction milestone** — ingress is managed via Dokploy, not built as part of this repo.
 
 ## Out of Scope
 

@@ -4,7 +4,7 @@
 
 Mechanical port of ~3,400 LOC of working price-tracker code from the `ai-agent-platform` monolith into this standalone repo. Goal is **byte-equivalent feature parity** behind a new MCP boundary, then unwiring the source repo. Five phases mirror EXTRACTION.md §8: skeleton + domain copy → service infra → admin UI + IAP header trust → MCP server → source-repo cleanup. Each phase has a verifiable gate; phases run sequentially because each gate is a precondition for the next phase's work (domain code before infra, infra before app shell, app shell before MCP plug-in, MCP live before source deletion is safe).
 
-**Auth topology (locked 2026-05-02 in 01-CONTEXT.md, reassessed 2026-05-04; ingress hosting reassessed 2026-07-06 per D-20):** This repo does NOT terminate Entra OIDC. An upstream Identity-Aware Proxy (Traefik + oauth2-proxy, operated within Dokploy's managed scope per D-20) terminates OIDC once at the edge and forwards `X-Auth-Request-Email` to the admin host. The MCP host is excluded from the IAP middleware so it can authenticate purely with `MCP_BEARER_TOKEN`. Phase 3 reads the header; Phase 4 wires the bearer-only subdomain.
+**Auth topology (locked 2026-05-02 in 01-CONTEXT.md, reassessed 2026-05-04; ingress hosting reassessed 2026-07-06 per D-20; ingress LIVE since 2026-07-09):** This repo does NOT terminate Entra OIDC. An upstream Identity-Aware Proxy (Traefik + oauth2-proxy v7.15.2 forwardAuth, operated within Dokploy's managed scope per D-20) terminates OIDC once at the edge and forwards `X-Auth-Request-Email` (email claim = `preferred_username`/UPN) to the app host `price.<domain>`. The MCP endpoint is served on the **same host** at `price.<domain>/mcp/` via a path-scoped, un-gated Traefik router (priority bypass, NOT a `mcp.<domain>` subdomain — D-29 supersedes D-18) and authenticates purely with `MCP_BEARER_TOKEN`. Phase 3 reads the header; Phase 4 wires the bearer-only `/mcp` route (route prepared in the home-server repo; only agent-platform registration remains).
 
 ## Phases
 
@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
 - [x] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
 - [x] **Phase 3: Admin UI + IAP Header Trust** - Ported admin endpoints + HTML behind upstream IAP. App reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, denies otherwise. No OIDC client in this repo; routed to `prices.<domain>` by the external edge proxy
-- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools built and tested (bearer auth working); `mcp.<domain>` subdomain ingress and agent platform registration NOT done (gaps_found, retroactive verification 2026-07-06)
+- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools built and tested (bearer auth fail-closed); `price.<domain>/mcp/` path-route prepared in the home-server repo (D-29). Remaining gap is ONLY the agent-platform Hermes registration (`/platformadmin/mcp/` in ai-agent-platform)
 - [ ] **Phase 5: Source-repo Cleanup** - Delete price-tracker code from `ai-agent-platform`, drop `price_tracker_*` tables, verify platform deploys with `priser` still working
 
 ## Phase Details
@@ -77,12 +77,12 @@ Decimal phases appear between their surrounding integers in numeric order.
 **UI hint**: yes
 
 ### Phase 4: MCP Server + Agent Wiring
-**Goal**: Expose the four price-tracker tools over MCP on a dedicated `mcp.<domain>` subdomain that the upstream IAP excludes from oauth2-proxy middleware (per-host bypass, not per-path — D-18). The MCP host authenticates purely with `MCP_BEARER_TOKEN`. Register the server in the agent platform and confirm `priser` answers a real Swedish price query end-to-end.
+**Goal**: Expose the four price-tracker tools over MCP at `price.<domain>/mcp/` — a path-scoped Traefik router (explicit priority) that bypasses the Entra forwardAuth gate for `/mcp` only, on the same host as the portal (D-29 supersedes D-18's per-host subdomain plan). The MCP route authenticates purely with `MCP_BEARER_TOKEN` (fail-closed 503 without it). Register the server in the agent platform and confirm `priser` answers a real Swedish price query end-to-end.
 **Depends on**: Phase 3
 **Requirements**: MCP-01, MCP-02, MCP-03, MCP-04, MCP-05, MCP-06, MCP-07, AUTH-04
 **Success Criteria** (what must be TRUE):
   1. The FastMCP server, mounted on the FastAPI app, exposes `check_price`, `find_deals`, `compare_stores`, and `list_products` and rejects calls without a valid `MCP_BEARER_TOKEN`
-  2. The MCP endpoint is reachable on `mcp.<domain>` (subdomain, not `/mcp` path) — verifiable from the agent-platform host with a bearer-only request that returns 200 and never sees an IAP redirect
+  2. The MCP endpoint is reachable at `price.<domain>/mcp/` (path route, not a subdomain — D-29) — verifiable from the agent-platform host with a bearer-only request that returns 200 and never sees an IAP redirect
   3. The agent platform's `/platformadmin/mcp/` registry has this server configured and discovers all 4 tools by name; `skills/general/price_tracker.md` frontmatter `tools:` lists the MCP-discovered tool names verified via the platform's test-connection flow
   4. An agent in the platform answers "Vad kostar Apotea omega-3?" by calling MCP tools against this server (no chat-tool fallback path)
 **Plans**: TBD
