@@ -1,3 +1,22 @@
+---
+gsd_state_version: 1.0
+milestone: v7.15.2
+milestone_name: milestone
+current_phase: 4
+current_phase_name: MCP Server + Agent Wiring
+status: verifying
+stopped_at: Phase 1 verified + D-19 roadmap reassess complete. REQUIREMENTS.md AUTH-01..04, MCP-05, DEPLOY-01/03/04, DB-03, TEST-02 rewritten to match locked decisions (D-03/D-04/D-10/D-17/D-18). ROADMAP.md Phase 3 + Phase 4 sections rewritten. PROJECT.md Constraints + Key Decisions updated; EDGE-01 added to v2 backlog. Ready to enter Phase 2 (Service Infrastructure) discuss → plan → execute.
+last_updated: "2026-07-13T22:05:34.975Z"
+last_activity: 2026-07-13
+last_activity_desc: "Djupanalys av hela kodbasen + autonom åtgärdssession (utan formell GSD-pipeline på Magnus begäran, med gating + state-loggning): JSON-LD-extractor (D-22), confidence-golv (D-23), MCP fail-closed (D-24). Faktakorrigering: Entra-ingressen är live sedan 2026-07-09 (se Decisions). Pågående: MCP-route-förberedelse i home-server-repot (egen branch, Magnus granskar)."
+progress:
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 8
+  percent: 67
+---
+
 # Project State
 
 ## Project Reference
@@ -6,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 
 **Project code:** PT
 **Core value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
-**Current focus:** Phase 4 — MCP Server + Agent Wiring has a verified gap (agent-platform registration + `mcp.<domain>` ingress not done); Phase 5 is blocked on this until resolved
+**Current focus:** Phase 04.1 — Package data moves to the store link (INSERTED, urgent): package_size + package_quantity move Product -> ProductStore. Runs before Phase 5.
 
 ## Current Position
 
@@ -20,6 +39,7 @@ Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 5
 - Average duration: ~11 min
 - Total execution time: ~54 min
@@ -34,6 +54,7 @@ Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 
 | 4. MCP Server + Agent Wiring | 1/1 | — | — |
 
 **Recent Trend:**
+
 - Phases 2-4 completed in a single autonomous session
 - New test coverage: 2 test files (~120 LOC) covering admin API and MCP tools
 
@@ -95,6 +116,10 @@ Recent decisions affecting current work:
 | 260706-tha | Fix 4 stale Entra OIDC references in CLAUDE.md to match the locked IAP header-trust auth model (X-Auth-Request-Email via Dokploy-managed Traefik+auth-middleware ingress, not yet built) | 2026-07-06 | d094d70 | [260706-tha-fix-4-stale-entra-oidc-references-in-cla](./quick/260706-tha-fix-4-stale-entra-oidc-references-in-cla/) |
 | 260706-w69 | Backfill retroactive GSD phase artifacts for Phases 2-4 (implemented outside the formal pipeline); discovered and corrected Phase 4's optimistic "Complete" marking to gaps_found (agent-platform registration + mcp.<domain> ingress not done) | 2026-07-06 | d1ae100 | [260706-w69-backfill-retroactive-gsd-phase-artifacts](./quick/260706-w69-backfill-retroactive-gsd-phase-artifacts/) |
 | 260706-tq5 | Reassess edge-proxy/ingress hosting (EDGE-01, D-18) across PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md: corrected from a standalone hand-built VM to Dokploy-managed ingress (architecture and IAP header-trust auth unchanged); recorded D-20 | 2026-07-06 | e8e208c | [260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac](./quick/260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac/) |
+
+### Roadmap Evolution
+
+- Phase 04.1 inserted after Phase 4: Package data moves to the store link — package_size + package_quantity move Product -> ProductStore; unit stays on Product. Runs before Phase 5 (source-repo cleanup). Brief: .planning/SEED-package-data-moves-to-link.md (URGENT)
 
 ## Deferred Items
 
