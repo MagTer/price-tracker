@@ -5,8 +5,8 @@ milestone_name: milestone
 current_phase: 4
 current_phase_name: MCP Server + Agent Wiring
 status: verifying
-stopped_at: Phase 1 verified + D-19 roadmap reassess complete. REQUIREMENTS.md AUTH-01..04, MCP-05, DEPLOY-01/03/04, DB-03, TEST-02 rewritten to match locked decisions (D-03/D-04/D-10/D-17/D-18). ROADMAP.md Phase 3 + Phase 4 sections rewritten. PROJECT.md Constraints + Key Decisions updated; EDGE-01 added to v2 backlog. Ready to enter Phase 2 (Service Infrastructure) discuss → plan → execute.
-last_updated: "2026-07-13T22:05:34.975Z"
+stopped_at: Phase 04.1 context gathered
+last_updated: "2026-07-13T22:39:39.543Z"
 last_activity: 2026-07-13
 last_activity_desc: "Djupanalys av hela kodbasen + autonom åtgärdssession (utan formell GSD-pipeline på Magnus begäran, med gating + state-loggning): JSON-LD-extractor (D-22), confidence-golv (D-23), MCP fail-closed (D-24). Faktakorrigering: Entra-ingressen är live sedan 2026-07-09 (se Decisions). Pågående: MCP-route-förberedelse i home-server-repot (egen branch, Magnus granskar)."
 progress:
@@ -136,6 +136,8 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 
 ## Session Continuity
 
-Last session: 2026-05-04
-Stopped at: Phase 1 verified + D-19 roadmap reassess complete. REQUIREMENTS.md AUTH-01..04, MCP-05, DEPLOY-01/03/04, DB-03, TEST-02 rewritten to match locked decisions (D-03/D-04/D-10/D-17/D-18). ROADMAP.md Phase 3 + Phase 4 sections rewritten. PROJECT.md Constraints + Key Decisions updated; EDGE-01 added to v2 backlog. Ready to enter Phase 2 (Service Infrastructure) discuss → plan → execute.
+**Resume file:** .planning/phases/04.1-package-data-moves-to-the-store-link/04.1-CONTEXT.md
+
+Last session: 2026-07-13T22:39:39.533Z
+Stopped at: Phase 04.1 context gathered
 Resume command: `/gsd-discuss-phase 2` (or continue `/gsd-autonomous` from current main thread)
