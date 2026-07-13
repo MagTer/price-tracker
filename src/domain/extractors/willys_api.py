@@ -61,14 +61,20 @@ class WillysApiExtractor:
         price_value = data.get("priceValue")
         price_sek = Decimal(str(price_value)) if price_value is not None else None
 
-        # Parse compare price (format: "33,29 kr" or "33.29 kr")
+        # Parse compare price. Formats seen: "33,29 kr", "33.29 kr",
+        # "33,29 kr/kg", "12,50 kr/st" — grab the leading amount and drop any
+        # unit suffix so "/kg" etc. never reaches Decimal.
         unit_price_sek: Decimal | None = None
         compare_price_str = data.get("comparePrice", "")
         if compare_price_str:
-            cleaned = str(compare_price_str).replace("kr", "").replace(",", ".").strip()
-            try:
-                unit_price_sek = Decimal(cleaned)
-            except Exception:
+            match = re.search(r"[\d.,]+", str(compare_price_str))
+            if match:
+                cleaned = match.group(0).replace(",", ".")
+                try:
+                    unit_price_sek = Decimal(cleaned)
+                except Exception:
+                    logger.debug("Could not parse compare price: %s", compare_price_str)
+            else:
                 logger.debug("Could not parse compare price: %s", compare_price_str)
 
         # Check for offers

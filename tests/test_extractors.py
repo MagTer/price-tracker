@@ -204,6 +204,28 @@ class TestParseResponse:
         result = extractor._parse_response(data)
         assert result.unit_price_sek == Decimal("33.29")
 
+    def test_parse_compare_price_with_per_kg_unit(self) -> None:
+        """Compare price "33,29 kr/kg" strips the unit suffix before Decimal."""
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 49.90,
+            "comparePrice": "33,29 kr/kg",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert result.unit_price_sek == Decimal("33.29")
+
+    def test_parse_compare_price_with_per_st_unit(self) -> None:
+        """Compare price "12,50 kr/st" strips the unit suffix before Decimal."""
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 49.90,
+            "comparePrice": "12,50 kr/st",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert result.unit_price_sek == Decimal("12.50")
+
     def test_parse_missing_compare_price(self) -> None:
         """Missing comparePrice results in None unit_price_sek."""
         extractor = _make_extractor()
