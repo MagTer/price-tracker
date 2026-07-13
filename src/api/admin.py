@@ -336,10 +336,9 @@ async def create_product(
 @router.get(
     "/products/{product_id}",
     response_model=ProductResponse,
-    dependencies=[Depends(require_auth)]
 )
 async def get_product(
-    product_id: str | None = None,
+    product_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> ProductResponse:
     """Get a product by ID.
@@ -494,7 +493,6 @@ async def update_product(
 @router.post(
     "/products/{product_id}/stores",
     status_code=201,
-    dependencies=[Depends(require_auth)]
 )
 async def link_product_to_store(
     product_id: str,
@@ -550,7 +548,6 @@ async def link_product_to_store(
 
 @router.put(
     "/products/{product_id}/stores/{store_id}/frequency",
-    dependencies=[Depends(require_auth)]
 )
 async def update_check_frequency(
     product_id: str,
@@ -659,11 +656,10 @@ async def update_check_frequency(
 
 @router.delete(
     "/products/{product_id}/stores/{store_id}",
-    dependencies=[Depends(require_auth)]
 )
 async def unlink_product_from_store(
-    product_id: str | None = None,
-    store_id: str | None = None,
+    product_id: str,
+    store_id: str,
     session: AsyncSession = Depends(get_db),
 ):
     """Remove product-store link.
@@ -713,10 +709,9 @@ async def unlink_product_from_store(
 @router.get(
     "/products/{product_id}/prices",
     response_model=list[PricePointResponse],
-    dependencies=[Depends(require_auth)]
 )
 async def get_price_history(
-    product_id: str | None = None,
+    product_id: str,
     days: int = 30,
     session: AsyncSession = Depends(get_db),
 ):
@@ -1162,7 +1157,7 @@ async def update_watch(
     "/watches/{watch_id}"
 )
 async def delete_watch(
-    watch_id: str | None = None,
+    watch_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Delete a price watch.
