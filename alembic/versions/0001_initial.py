@@ -14,6 +14,38 @@ Schema derived from the final state of src/domain/models.py per D-07.
 Source-prefix dropped per DB-04 (table names are bare: stores, products, etc.).
 context_id FK to the source platform's context table is replaced with a
 free-floating tenant_id UUID column per D-02/D-03 (no FK, no separate table).
+
+Phase 04.1 — REWRITTEN IN PLACE (D-14), so the above is only half the story now.
+The reshape this file also carries:
+- package_size / package_quantity moved from `products` to `product_stores`: the package is a
+  property of the store LISTING, not of the abstract good. `products.unit` stays.
+- `product_stores.scraped_package_quantity` added — the page's own reading of the quantity,
+  which never overwrites the operator's typed value (D-07/D-09).
+- `store_url` became globally UNIQUE, replacing the (product_id, store_id) unique pair: a link
+  IS a store page, so the URL is its natural key, and the old pair forbade the very thing this
+  phase exists to enable (two pack sizes of one product at the same store) — D-01.
+- `price_points.unit_price_sek` replaced by `store_unit_price_sek`: unit price is now COMPUTED
+  on read from the link's package_quantity and never stored, so correcting a quantity fixes all
+  of its history for free. Only the store's PRINTED comparison price is persisted (D-03/D-05).
+
+⚠ WARNING — OPERATOR CONSEQUENCE OF THE IN-PLACE REWRITE (D-15). Read before deploying.
+
+Alembic keys on the revision ID and does NOT checksum migration bodies. A database already
+stamped with revision `0001_initial` — which the deployed v0.2.0 instance is — therefore sees
+revision == head, applies NOTHING, exits 0 SILENTLY, and then runs the app against the OLD
+schema. Nothing detects the edit; the first failure is a query against a column that does not
+exist, at runtime.
+
+Any existing deployment MUST have its volume dropped before `alembic upgrade head`:
+
+    docker compose down -v          # drops the postgres volume (tables AND alembic_version)
+    docker compose up -d postgres
+    alembic upgrade head            # runs this rewritten revision against an empty DB
+    alembic current                 # must print 0001_initial (head)
+    alembic check                   # must print "No new upgrade operations detected."
+
+See the README reset runbook. This is a destructive, deliberate step — the DB is empty, which
+is what sanctions D-14; there is nothing to rescue.
 """
 
 from collections.abc import Sequence
@@ -47,6 +79,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_stores_slug"), "stores", ["slug"], unique=True)
 
     # 2. products (tenant-scoped via tenant_id; NO FK per D-03)
+    #    The abstract good: no package columns — they live on product_stores (04.1 / D-01).
     op.create_table(
         "products",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -55,8 +88,6 @@ def upgrade() -> None:
         sa.Column("brand", sa.String(100), nullable=True),
         sa.Column("category", sa.String(100), nullable=True),
         sa.Column("unit", sa.String(50), nullable=True),
-        sa.Column("package_size", sa.String(50), nullable=True),
-        sa.Column("package_quantity", sa.Numeric(10, 2), nullable=True),
         sa.Column("created_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -71,6 +102,9 @@ def upgrade() -> None:
         sa.Column("store_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("store_url", sa.String(512), nullable=False),
         sa.Column("store_product_id", sa.String(100), nullable=True),
+        sa.Column("package_size", sa.String(50), nullable=True),
+        sa.Column("package_quantity", sa.Numeric(10, 2), nullable=True),
+        sa.Column("scraped_package_quantity", sa.Numeric(10, 2), nullable=True),
         sa.Column("is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         sa.Column("last_checked_at", sa.DateTime(), nullable=True),
         sa.Column("check_frequency_hours", sa.Integer(), server_default="72", nullable=False),
@@ -79,18 +113,27 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["product_id"], ["products.id"]),
         sa.ForeignKeyConstraint(["store_id"], ["stores.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("product_id", "store_id", name="uq_product_store"),
+        # D-01: the URL is the link's natural key. (product_id, store_id) is deliberately NOT
+        # unique — two pack sizes of one product at one store are two legitimate links.
+        # A unique B-tree entry on String(512) is safe: 512 chars x 4 bytes UTF-8 = 2048 bytes,
+        # under Postgres's ~2704-byte per-entry limit. No hash or md5() expression index needed.
+        # The name must stay byte-identical to models.py __table_args__ or `alembic check` drifts.
+        sa.UniqueConstraint("store_url", name="uq_product_stores_store_url"),
     )
+    # product_id stays indexed: it is still the product-page lookup key, even though it is no
+    # longer half of a unique pair.
     op.create_index(op.f("ix_product_stores_product_id"), "product_stores", ["product_id"], unique=False)
     op.create_index(op.f("ix_product_stores_store_id"), "product_stores", ["store_id"], unique=False)
 
     # 4. price_points (history table)
+    #    No stored unit price (D-04): it is computed on read from product_stores.package_quantity.
+    #    Only the store's PRINTED comparison price is persisted, and it is never sorted on (D-05).
     op.create_table(
         "price_points",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("product_store_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("price_sek", sa.Numeric(10, 2), nullable=False),
-        sa.Column("unit_price_sek", sa.Numeric(10, 2), nullable=True),
+        sa.Column("store_unit_price_sek", sa.Numeric(10, 2), nullable=True),
         sa.Column("offer_price_sek", sa.Numeric(10, 2), nullable=True),
         sa.Column("offer_type", sa.String(50), nullable=True),
         sa.Column("offer_details", sa.String(255), nullable=True),
