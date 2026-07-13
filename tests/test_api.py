@@ -37,10 +37,10 @@ def client(mock_session):
 
 
 class TestPublicEndpoints:
-    def test_root(self, client):
-        r = client.get("/")
-        assert r.status_code == 200
-        assert r.json()["service"] == "price-tracker"
+    def test_root_redirects_to_dashboard(self, client):
+        r = client.get("/", follow_redirects=False)
+        assert r.status_code == 307
+        assert r.headers["location"] == "/admin/"
 
     def test_health_db_up(self, client):
         from unittest.mock import patch

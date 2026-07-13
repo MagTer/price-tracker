@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import text
 
 from api.admin import router as admin_router
@@ -39,7 +39,10 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     async def root():
-        return {"status": "ok", "service": "price-tracker"}
+        # The /admin prefix is a holdover from the source platform where
+        # OpenWebUI owned "/" — standalone, the dashboard is the only UI,
+        # so the root just takes you there.
+        return RedirectResponse(url="/admin/", status_code=307)
 
     @app.get("/health")
     async def health():
