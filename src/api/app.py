@@ -69,7 +69,8 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
 
-    # MCP server mounted at /mcp (served on dedicated mcp.<domain> subdomain)
+    # MCP server mounted at /mcp — the ingress bypasses the Entra gate for
+    # exactly this path; bearer-only, fail-closed auth (D-29)
     app.mount("/mcp", mcp_app)
 
     return app

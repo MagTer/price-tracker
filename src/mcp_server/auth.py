@@ -1,7 +1,8 @@
 """Bearer-token ASGI middleware for MCP endpoints.
 
-The MCP subdomain is excluded from the upstream IAP (D-18),
-so authentication is handled here via a static bearer token.
+The /mcp path is excluded from the upstream Entra gate (path-scoped
+router bypass, D-29), so authentication is handled here via a static
+bearer token.
 
 Fail-closed: if no token is configured the middleware answers 503 for
 every request instead of letting traffic through — a misconfigured env

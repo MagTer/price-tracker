@@ -6,8 +6,9 @@ Four tools mirror the legacy chat-tool surface:
 - compare_stores
 - list_products
 
-Mounted at /mcp on the FastAPI app and served on the dedicated mcp.<domain>
-subdomain (IAP-bypassed, bearer-only auth).
+Mounted at /mcp on the FastAPI app. The ingress bypasses the Entra gate for
+exactly this path (per-router forwardAuth bypass, D-29 — supersedes the
+D-18 mcp.<domain> subdomain plan); auth here is bearer-only, fail-closed.
 """
 
 from __future__ import annotations
