@@ -5,18 +5,26 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from infra.providers import get_fetcher
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
+from domain.pricing import (
+    apply_scrape_to_link,
+    quantity_mismatch,
+    unit_price_expr,
+    unit_price_py,
+)
 
 logger = logging.getLogger(__name__)
+
+_CENT = Decimal("0.01")
 
 
 def _utc_now() -> datetime:
@@ -25,6 +33,30 @@ def _utc_now() -> datetime:
     Returns naive datetime to match TIMESTAMP WITHOUT TIME ZONE columns.
     """
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _as_float(value: Decimal | None) -> float | None:
+    """Decimal -> float for a row dict, preserving None."""
+    return float(value) if value is not None else None
+
+
+def _computed_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
+    """kr/unit for a row dict — the single definition (D-03), rounded at this presentation boundary.
+
+    None when the link has no amount yet (D-02): the row says "needs amount", it does not lie
+    with a zero.
+    """
+    value = unit_price_py(price, quantity)
+    if value is None:
+        return None
+    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
+
+
+def _effective_price(price_point: PricePoint) -> Decimal | None:
+    """The price actually paid: the offer when there is one, else the regular price."""
+    if price_point.offer_price_sek is not None:
+        return price_point.offer_price_sek
+    return price_point.price_sek
 
 
 class PriceTrackerService:
@@ -50,7 +82,9 @@ class PriceTrackerService:
             product_store_id: UUID string of the ProductStore.
             price_data: Dictionary containing price information:
                 - price_sek: Regular price (required)
-                - unit_price_sek: Price per unit (optional)
+                - store_unit_price_sek: The store's PRINTED comparison price, as scraped
+                  (optional; D-05). NOT the computed kr/unit — that is derived on read from
+                  the link's package_quantity and is never persisted (D-04).
                 - offer_price_sek: Offer price (optional)
                 - offer_type: Type of offer (optional)
                 - offer_details: Offer description (optional)
@@ -77,9 +111,9 @@ class PriceTrackerService:
             price_point = PricePoint(
                 product_store_id=product_store_uuid,
                 price_sek=Decimal(str(price_data["price_sek"])),
-                unit_price_sek=(
-                    Decimal(str(price_data["unit_price_sek"]))
-                    if price_data.get("unit_price_sek")
+                store_unit_price_sek=(
+                    Decimal(str(price_data["store_unit_price_sek"]))
+                    if price_data.get("store_unit_price_sek")
                     else None
                 ),
                 offer_price_sek=(
@@ -114,8 +148,17 @@ class PriceTrackerService:
 
     async def get_price_history(
         self, product_id: str, days: int = 30
-    ) -> list[dict[str, str | float | datetime | None]]:
-        """Get price history for a product across all stores.
+    ) -> list[dict[str, str | float | bool | datetime | None]]:
+        """Get price history for a product across all of its links.
+
+        Each row is one price observation on one LINK, and carries the COMPUTED kr/unit
+        (D-03) derived from that link's package_quantity — not anything a store printed.
+        `store_unit_price_sek` is the store's own claim, shown beside it and never sorted on
+        (D-05).
+
+        NB: `unit_price_sek` and `in_stock` are NEW keys here. MCP's compare_stores has read
+        both off these rows since extraction and found neither, so its "Jämförspris" column has
+        printed N/A and its "Lager" column "Nej" for every row (RESEARCH.md Pitfall 4).
 
         Args:
             product_id: UUID string of the product.
@@ -129,8 +172,11 @@ class PriceTrackerService:
                 product_uuid = uuid.UUID(product_id)
                 cutoff_date = _utc_now() - timedelta(days=days)
 
+                # ProductStore is already joined for the product filter — adding it to the
+                # select tuple costs no extra query, and it carries the quantity every
+                # computed unit price in this method needs.
                 stmt = (
-                    select(PricePoint, Store)
+                    select(PricePoint, ProductStore, Store)
                     .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
                     .join(Store, ProductStore.store_id == Store.id)
                     .where(ProductStore.product_id == product_uuid)
@@ -144,31 +190,140 @@ class PriceTrackerService:
                 return [
                     {
                         "checked_at": price_point.checked_at,
-                        "price_sek": float(price_point.price_sek),
+                        "product_store_id": str(product_store.id),
                         "store_name": store.name,
-                        "offer_price_sek": (
-                            float(price_point.offer_price_sek)
-                            if price_point.offer_price_sek
-                            else None
+                        "store_slug": store.slug,
+                        "package_size": product_store.package_size,
+                        "package_quantity": _as_float(product_store.package_quantity),
+                        "price_sek": float(price_point.price_sek),
+                        "offer_price_sek": _as_float(price_point.offer_price_sek),
+                        "store_unit_price_sek": _as_float(price_point.store_unit_price_sek),
+                        "unit_price_sek": _computed_unit_price(
+                            _effective_price(price_point), product_store.package_quantity
                         ),
+                        "in_stock": price_point.in_stock,
                     }
-                    for price_point, store in rows
+                    for price_point, product_store, store in rows
                 ]
 
             except (SQLAlchemyError, ValueError):
                 logger.exception(f"Failed to get price history for product {product_id}")
                 return []
 
+    async def get_links_for_product(
+        self, product_id: str
+    ) -> list[dict[str, str | float | bool | datetime | None]]:
+        """One row per LINK for a product, ranked cheapest-per-unit first.
+
+        This is the view that answers the phase's core question ("which pack size at which
+        store is cheapest per roll"), and the single data source for both the product page and
+        MCP's compare_stores. Each row carries the latest price observed on that link.
+
+        Ranking is by the COMPUTED kr/unit with NULLs explicitly last: a link that still needs
+        an amount (D-02) sinks to the bottom instead of masquerading as free. (Postgres already
+        sorts NULLs last on ASC; saying so keeps the intent legible and survives a flip to DESC.)
+
+        Args:
+            product_id: UUID string of the product.
+
+        Returns:
+            List of link dictionaries, cheapest computed unit price first.
+        """
+        async with self.session_factory() as session:
+            try:
+                product_uuid = uuid.UUID(product_id)
+
+                latest = (
+                    select(
+                        PricePoint.product_store_id.label("ps_id"),
+                        func.max(PricePoint.checked_at).label("checked_at"),
+                    )
+                    .group_by(PricePoint.product_store_id)
+                    .subquery()
+                )
+
+                unit_price = unit_price_expr(
+                    PricePoint.effective_price_sek, ProductStore.package_quantity
+                )
+
+                # Outer-joined: a link with no price point yet is still a link, and still needs
+                # to show its "needs amount" flag.
+                stmt = (
+                    select(ProductStore, Store, PricePoint)
+                    .join(Store, ProductStore.store_id == Store.id)
+                    .outerjoin(latest, latest.c.ps_id == ProductStore.id)
+                    .outerjoin(
+                        PricePoint,
+                        (PricePoint.product_store_id == latest.c.ps_id)
+                        & (PricePoint.checked_at == latest.c.checked_at),
+                    )
+                    .where(ProductStore.product_id == product_uuid)
+                    .order_by(unit_price.asc().nulls_last())
+                )
+
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                links: list[dict[str, str | float | bool | datetime | None]] = []
+                for product_store, store, price_point in rows:
+                    effective = _effective_price(price_point) if price_point else None
+                    links.append(
+                        {
+                            "product_store_id": str(product_store.id),
+                            "store_id": str(product_store.store_id),
+                            "store_name": store.name,
+                            "store_slug": store.slug,
+                            "store_url": product_store.store_url,
+                            "package_size": product_store.package_size,
+                            "package_quantity": _as_float(product_store.package_quantity),
+                            "scraped_package_quantity": _as_float(
+                                product_store.scraped_package_quantity
+                            ),
+                            "price_sek": (
+                                float(price_point.price_sek) if price_point else None
+                            ),
+                            "offer_price_sek": (
+                                _as_float(price_point.offer_price_sek) if price_point else None
+                            ),
+                            "store_unit_price_sek": (
+                                _as_float(price_point.store_unit_price_sek)
+                                if price_point
+                                else None
+                            ),
+                            "unit_price_sek": _computed_unit_price(
+                                effective, product_store.package_quantity
+                            ),
+                            "in_stock": price_point.in_stock if price_point else None,
+                            "checked_at": price_point.checked_at if price_point else None,
+                            # D-02's visible flag: the link is saveable without an amount, but
+                            # it is never silently blank.
+                            "needs_amount": product_store.package_quantity is None,
+                            # D-09's derived, self-clearing flag — never persisted.
+                            "quantity_mismatch": quantity_mismatch(product_store),
+                        }
+                    )
+
+                return links
+
+            except (SQLAlchemyError, ValueError):
+                logger.exception(f"Failed to get links for product {product_id}")
+                return []
+
     async def get_current_deals(
         self, store_type: str | None = None
-    ) -> list[dict[str, str | float]]:
-        """Get products currently on offer.
+    ) -> list[dict[str, str | float | None]]:
+        """Get links currently on offer.
+
+        Ordering stays RECENCY-based, deliberately. Now that kr/unit is computed it could rank
+        these rows, but re-ranking find_deals is a behavior change to an unrelated feature; the
+        decision here is to EXPOSE the number and not re-rank on it. Each row carries the
+        computed `unit_price_sek` so a consumer that wants to sort by it can.
 
         Args:
             store_type: Filter by store type (grocery, pharmacy, etc.). Optional.
 
         Returns:
-            List of product dictionaries with current offers.
+            List of deal dictionaries — one per LINK.
         """
         async with self.session_factory() as session:
             try:
@@ -176,7 +331,7 @@ class PriceTrackerService:
                 cutoff = _utc_now() - timedelta(days=1)
 
                 stmt = (
-                    select(PricePoint, Product, Store)
+                    select(PricePoint, ProductStore, Product, Store)
                     .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
                     .join(Product, ProductStore.product_id == Product.id)
                     .join(Store, ProductStore.store_id == Store.id)
@@ -191,12 +346,14 @@ class PriceTrackerService:
                 result = await session.execute(stmt)
                 rows = result.all()
 
-                # Deduplicate by product-store (keep latest)
-                seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
-                deals: list[dict[str, str | float]] = []
+                # Deduplicate by LINK (keep latest). NOT by (product, store): under D-01 a
+                # product may hold several links at one store (a 24-pack and an 8-pack), and
+                # the old pair key silently collapsed them into a single arbitrary deal row.
+                seen: set[uuid.UUID] = set()
+                deals: list[dict[str, str | float | None]] = []
 
-                for price_point, product, store in rows:
-                    key = (product.id, store.id)
+                for price_point, product_store, product, store in rows:
+                    key = product_store.id
                     if key in seen:
                         continue
                     seen.add(key)
@@ -205,9 +362,14 @@ class PriceTrackerService:
                         {
                             "product_id": str(product.id),
                             "product_name": product.name,
+                            "product_store_id": str(product_store.id),
                             "store_name": store.name,
+                            "package_size": product_store.package_size,
                             "regular_price_sek": float(price_point.price_sek),
                             "offer_price_sek": float(price_point.offer_price_sek),
+                            "unit_price_sek": _computed_unit_price(
+                                price_point.offer_price_sek, product_store.package_quantity
+                            ),
                             "offer_type": price_point.offer_type or "unknown",
                         }
                     )
@@ -263,6 +425,9 @@ class PriceTrackerService:
                         "name": product.name,
                         "brand": product.brand or "",
                         "category": product.category or "",
+                        # The canonical comparison unit — what a kr/unit column is measured in
+                        # ("kr/st"). MCP needs it to label that column.
+                        "unit": product.unit or "",
                     }
                     for product in products
                 ]
@@ -305,29 +470,28 @@ class PriceTrackerService:
         brand: str | None,
         category: str | None,
         unit: str | None,
-        package_size: str | None = None,
-        package_quantity: Decimal | None = None,
     ) -> Product:
-        """Create a new product.
+        """Create a new product — the abstract good, NOT a specific package.
 
-                For products with package sizes (e.g., toilet paper, beverages),
-                create separate products for each size variant:
-                - "Toalettpapper 24-pack" (package_size="24-pack", package_quantity=24)
-                - "Toalettpapper 16-pack" (package_size="16-pack", package_quantity=16)
+        A product is "Lambi toalettpapper", not "Lambi toalettpapper 24-pack". `unit` is its
+        canonical comparison unit (st / liter / kg) — the property that makes its per-store
+        package listings comparable with one another.
 
-                This enables unit price comparison across package sizes.
+        Package data belongs to the LINK (`link_product_store`), which is what actually
+        describes a package: a 24-pack at Willys and an 8-pack at ICA are two listings of ONE
+        product. Creating a separate product per size variant — which this method used to
+        teach — is the model this design abolishes: it left the sizes unrelated, with no
+        grouping key, so "cheapest kr/rulle across pack sizes" was unanswerable.
 
-                Args:
-                    tenant_id: Context UUID for multi-tenancy.
-                    name: Product name.
-                    brand: Product brand. Optional.
-                    category: Product category. Optional.
-                    unit: Unit of measurement. Optional.
-        package_size: Human-readable package size (e.g., "24-pack", "500ml").
-                    package_quantity: Numeric quantity for calculations (e.g., 24, 0.5).
+        Args:
+            tenant_id: Context UUID for multi-tenancy.
+            name: Product name.
+            brand: Product brand. Optional.
+            category: Product category. Optional.
+            unit: Canonical comparison unit (st / liter / kg). Optional.
 
-                Returns:
-                    Created Product instance.
+        Returns:
+            Created Product instance.
         """
         async with self.session_factory() as session:
             product = Product(
@@ -336,8 +500,6 @@ class PriceTrackerService:
                 brand=brand,
                 category=category,
                 unit=unit,
-                package_size=package_size,
-                package_quantity=package_quantity,
             )
 
             session.add(product)
@@ -354,8 +516,10 @@ class PriceTrackerService:
         store_url: str,
         check_frequency_hours: int = 72,
         check_weekday: int | None = None,
+        package_size: str | None = None,
+        package_quantity: Decimal | None = None,
     ) -> ProductStore:
-        """Link a product to a store.
+        """Link a product to a store — the concrete package listing at one store page.
 
         Args:
             product_id: UUID string of the product.
@@ -364,6 +528,13 @@ class PriceTrackerService:
             check_frequency_hours: How often to check price (default 72 hours / 3 days).
             check_weekday: Day of week to check (0=Monday, 6=Sunday). If set,
                            overrides frequency with weekly checks on that day.
+            package_size: Human display label ("24-pack", "500 ml"). Optional.
+            package_quantity: The amount in the package, in the PRODUCT's canonical unit —
+                           every kr/unit in the app is computed from this number. Optional:
+                           a NULL quantity is a legitimate state (D-02), not an error. The
+                           link is saveable before its pack size is known, the first
+                           successful scrape autofills it (D-07), and until then the link is
+                           rendered "needs amount" rather than silently blank.
 
         Returns:
             Created ProductStore instance.
@@ -378,6 +549,8 @@ class PriceTrackerService:
                 store_url=store_url,
                 check_frequency_hours=check_frequency_hours,
                 check_weekday=check_weekday,
+                package_size=package_size,
+                package_quantity=package_quantity,
             )
 
             session.add(product_store)
@@ -510,12 +683,23 @@ class PriceTrackerService:
                         "offer_price_sek": None,
                     }
 
+                # Scrape write-path #2 of three (D-07/D-09): autofill when the link has no
+                # amount, flag on conflict, NEVER overwrite the operator's typed value. The
+                # link is attached to the session record_price() commits below, so the
+                # autofilled quantity and the page's reading persist with the price point —
+                # no second commit.
+                mismatch = apply_scrape_to_link(product_store, extraction_result, product.unit)
+                if mismatch:
+                    logger.warning(
+                        f"Package quantity mismatch on ProductStore {product_store_id}: {mismatch}"
+                    )
+
                 # Record price
                 price_data: dict[str, Any] = {
                     "price_sek": float(extraction_result.price_sek),
-                    "unit_price_sek": (
-                        float(extraction_result.unit_price_sek)
-                        if extraction_result.unit_price_sek
+                    "store_unit_price_sek": (
+                        float(extraction_result.store_unit_price_sek)
+                        if extraction_result.store_unit_price_sek
                         else None
                     ),
                     "offer_price_sek": (
@@ -545,6 +729,8 @@ class PriceTrackerService:
                     ),
                     "in_stock": price_point.in_stock,
                     "checked_at": price_point.checked_at,
+                    "package_quantity": _as_float(product_store.package_quantity),
+                    "quantity_mismatch": mismatch,
                 }
 
             except Exception:  # Intentional: catches fetcher, parser, and DB errors
