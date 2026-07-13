@@ -6,7 +6,7 @@ import random
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -95,10 +95,16 @@ class PriceCheckScheduler:
             await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
 
     async def _check_due_products(self) -> None:
-        """Check all products that are due for a price check."""
-        async with self.session_factory() as session:
-            now = datetime.now(UTC).replace(tzinfo=None)
+        """Check all products that are due for a price check.
 
+        Due items are loaded (with product/store eagerly joined) in one short
+        session, which is then closed. Each item gets its own session so the
+        per-store rate-limit sleeps never hold a DB connection, and one item's
+        failure rolls back only its own transaction.
+        """
+        now = datetime.now(UTC).replace(tzinfo=None)
+
+        async with self.session_factory() as session:
             # Find product-stores where:
             # 1. is_active = True
             # 2. next_check_at <= now (or NULL for backwards compatibility)
@@ -119,60 +125,65 @@ class PriceCheckScheduler:
             result = await session.execute(stmt)
             due_items = result.unique().scalars().all()
 
-            if not due_items:
-                logger.debug("No products due for price check")
-                return
+        if not due_items:
+            logger.debug("No products due for price check")
+            return
 
-            logger.info(f"Checking {len(due_items)} products")
+        logger.info(f"Checking {len(due_items)} products")
 
-            last_store_id = None
-            for product_store in due_items:
-                try:
-                    # Rate limit per store
-                    if last_store_id == product_store.store_id:
-                        await asyncio.sleep(self.RATE_LIMIT_DELAY)
+        last_store_id = None
+        for product_store in due_items:
+            try:
+                # Rate limit per store (no session held during the sleep)
+                if last_store_id == product_store.store_id:
+                    await asyncio.sleep(self.RATE_LIMIT_DELAY)
 
+                async with self.session_factory() as session:
                     await self._check_single_product(product_store, session)
 
-                    # Update timestamps with jittered next check time
+                    # Update timestamps with jittered next check time via an
+                    # explicit UPDATE — product_store is detached here.
                     now_utc = datetime.now(UTC).replace(tzinfo=None)
-                    product_store.last_checked_at = now_utc
-
-                    # Calculate next check time based on weekday or frequency
-                    if product_store.check_weekday is not None:
-                        # Weekday-based: schedule for next occurrence of that weekday
-                        # Spread checks over morning hours (06:00 - 12:00)
-                        days_until = (product_store.check_weekday - now_utc.weekday()) % 7
-                        if days_until == 0:
-                            # Already checked today, schedule for next week
-                            days_until = 7
-                        # Random hour between 6 and 12
-                        check_hour = 6 + int(random.random() * 6)  # noqa: S311
-                        check_minute = int(random.random() * 60)  # noqa: S311
-                        next_check = now_utc.replace(
-                            hour=check_hour, minute=check_minute, second=0, microsecond=0
-                        )
-                        product_store.next_check_at = next_check + timedelta(days=days_until)
-                    else:
-                        # Frequency-based: use jitter as before
-                        jitter_percent = 0.1
-                        jitter_hours = (
-                            (random.random() * 2 - 1)  # noqa: S311
-                            * jitter_percent
-                            * product_store.check_frequency_hours
-                        )
-                        product_store.next_check_at = now_utc + timedelta(
-                            hours=product_store.check_frequency_hours + jitter_hours
-                        )
+                    next_check = self._compute_next_check(product_store, now_utc)
+                    await session.execute(
+                        update(ProductStore)
+                        .where(ProductStore.id == product_store.id)
+                        .values(last_checked_at=now_utc, next_check_at=next_check)
+                    )
 
                     await session.commit()
 
-                    last_store_id = product_store.store_id
+                last_store_id = product_store.store_id
 
-                except Exception as e:
-                    logger.error(f"Failed to check product {product_store.id}: {e}")
-                    self._stats["checks_failed"] += 1
-                    await session.rollback()
+            except Exception as e:
+                logger.error(f"Failed to check product {product_store.id}: {e}")
+                self._stats["checks_failed"] += 1
+
+    def _compute_next_check(self, product_store: ProductStore, now_utc: datetime) -> datetime:
+        """Next check time: weekly on a weekday (morning spread) or jittered frequency."""
+        if product_store.check_weekday is not None:
+            # Weekday-based: schedule for next occurrence of that weekday
+            # Spread checks over morning hours (06:00 - 12:00)
+            days_until = (product_store.check_weekday - now_utc.weekday()) % 7
+            if days_until == 0:
+                # Already checked today, schedule for next week
+                days_until = 7
+            # Random hour between 6 and 12
+            check_hour = 6 + int(random.random() * 6)  # noqa: S311
+            check_minute = int(random.random() * 60)  # noqa: S311
+            next_check = now_utc.replace(
+                hour=check_hour, minute=check_minute, second=0, microsecond=0
+            )
+            return next_check + timedelta(days=days_until)
+
+        # Frequency-based: use jitter as before
+        jitter_percent = 0.1
+        jitter_hours = (
+            (random.random() * 2 - 1)  # noqa: S311
+            * jitter_percent
+            * product_store.check_frequency_hours
+        )
+        return now_utc + timedelta(hours=product_store.check_frequency_hours + jitter_hours)
 
     async def _check_single_product(
         self,

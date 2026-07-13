@@ -414,3 +414,80 @@ class TestWeeklySummary:
         # Guard set the date so we don't re-send, but send_weekly_summary was not called
         assert scheduler._last_summary_date == monday.date()
         mock_send_summary.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _check_due_products (session lifecycle)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckDueProducts:
+    @pytest.mark.asyncio
+    async def test_each_item_gets_its_own_session(self) -> None:
+        """One session loads due items; each item then gets a fresh session
+        (rate-limit sleeps must never hold a DB connection)."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps1 = _make_product_store()
+        ps2 = _make_product_store()
+
+        # First session: due query. Later sessions: per-item work.
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps1, ps2]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        with patch.object(
+            scheduler, "_check_single_product", new_callable=AsyncMock
+        ) as mock_check:
+            await scheduler._check_due_products()
+
+        # 1 load session + 2 per-item sessions
+        assert session_factory.call_count == 3
+        assert mock_check.call_count == 2
+        # Each per-item session committed its own transaction
+        sessions[1].commit.assert_awaited_once()
+        sessions[2].commit.assert_awaited_once()
+        # The load session never commits (read-only)
+        sessions[0].commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_item_does_not_stop_batch(self) -> None:
+        """An exception on item 1 increments checks_failed; item 2 still runs."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps1 = _make_product_store()
+        ps2 = _make_product_store()
+
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps1, ps2]
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        with patch.object(
+            scheduler, "_check_single_product", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.side_effect = [RuntimeError("boom"), None]
+            await scheduler._check_due_products()
+
+        assert mock_check.call_count == 2
+        assert scheduler._stats["checks_failed"] == 1
