@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -19,6 +20,13 @@ import domain.models  # noqa: F401  registers ORM models with Base.metadata
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Deployment override: prefer the runtime DATABASE_URL (injected by the
+# deployment compose, e.g. home-server's dokploy-apps entry) over
+# alembic.ini's hardcoded localhost dev default — without this, migrations
+# can only ever run against a local postgres.
+if os.environ.get("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
