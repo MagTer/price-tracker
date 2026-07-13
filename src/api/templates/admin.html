@@ -402,9 +402,9 @@ function buildProductsTable(products) {
             <td>${escapeHtml(storeNames)}</td>
             <td>${priceStr}</td>
             <td>
-                <button class="action-btn" onclick="showLinkStoreModal('${p.id}')">Link</button>
-                <button class="action-btn" onclick="showPriceHistory('${p.id}', '${escapeHtml(p.name)}')">History</button>
-                <button class="action-btn" onclick="deleteProduct('${p.id}')">Delete</button>
+                <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Link</button>
+                <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">History</button>
+                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>
             </td>
         </tr>`;
     }
@@ -684,9 +684,12 @@ async function deleteWatch(id) {
 
 function escapeHtml(text) {
     if (text == null) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 // Search debounce
@@ -694,6 +697,23 @@ let searchTimeout;
 document.getElementById('product-search').addEventListener('input', () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(loadProducts, 250);
+});
+
+// Delegated product action handlers — avoids embedding product names in
+// inline onclick attributes (which breaks for names containing quotes).
+document.getElementById('products-table-container').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-id');
+    const action = btn.getAttribute('data-action');
+    if (action === 'link') {
+        showLinkStoreModal(id);
+    } else if (action === 'history') {
+        const product = (allProducts || []).find(p => p.id === id);
+        showPriceHistory(id, product ? product.name : '');
+    } else if (action === 'delete') {
+        deleteProduct(id);
+    }
 });
 
 // Init
