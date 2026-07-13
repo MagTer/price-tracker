@@ -8,6 +8,7 @@ from decimal import Decimal
 import httpx
 
 from domain.extractors.base import PriceExtractor
+from domain.extractors.jsonld import JsonLdExtractor
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.result import PriceExtractionResult
 from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
@@ -26,10 +27,14 @@ class PriceParser:
         "meta-llama/llama-4-scout,anthropic/claude-haiku-4.5",
     ).split(",")
 
+    # Acceptance floor: extractions below this confidence are discarded rather
+    # than recorded — a gap in price history beats a hallucinated price point.
+    MIN_ACCEPT_CONFIDENCE = float(os.getenv("PRICE_PARSER_MIN_CONFIDENCE", "0.6"))
+
     # Model-specific confidence thresholds
     CONFIDENCE_THRESHOLDS = {
         "meta-llama/llama-4-scout": 0.70,
-        "anthropic/claude-haiku-4.5": 0.0,  # Accept any confidence (last resort)
+        "anthropic/claude-haiku-4.5": MIN_ACCEPT_CONFIDENCE,  # Last resort still honors the floor
     }
 
     CONFIDENCE_THRESHOLD = 0.7
@@ -40,6 +45,7 @@ class PriceParser:
         self._api_extractors: dict[str, PriceExtractor] = {
             "willys": WillysApiExtractor(),
         }
+        self._jsonld_extractor = JsonLdExtractor()
 
     def _load_store_hints(self) -> None:
         """Load store-specific parsing hints."""
@@ -53,8 +59,9 @@ class PriceParser:
         store_slug: str,
         product_name: str | None = None,
         store_url: str | None = None,
+        html_content: str | None = None,
     ) -> PriceExtractionResult:
-        """Extract price data using API-first strategy with LLM cascade fallback."""
+        """Extract price data: store API first, then JSON-LD, then LLM cascade."""
 
         # API-first: try structured extractor if available
         if store_url and store_slug in self._api_extractors:
@@ -78,6 +85,33 @@ class PriceParser:
             except Exception as e:
                 logger.warning(
                     "API extractor failed, falling back to LLM: %s",
+                    e,
+                    extra={"store": store_slug},
+                )
+
+        # JSON-LD second: exact structured data from the already-fetched page
+        if html_content:
+            try:
+                jsonld_result = self._jsonld_extractor.extract_from_html(
+                    html_content, product_name
+                )
+                if jsonld_result is not None:
+                    logger.info(
+                        "Price extracted via JSON-LD",
+                        extra={
+                            "method": "jsonld",
+                            "store": store_slug,
+                            "product": product_name,
+                        },
+                    )
+                    return jsonld_result
+                logger.debug(
+                    "No usable JSON-LD Product, falling back to LLM",
+                    extra={"store": store_slug},
+                )
+            except Exception as e:
+                logger.warning(
+                    "JSON-LD extraction failed, falling back to LLM: %s",
                     e,
                     extra={"store": store_slug},
                 )
@@ -128,11 +162,33 @@ class PriceParser:
 
         # If all models failed or returned low confidence, return last result or raise error
         if last_result:
+            if last_result.confidence >= self.MIN_ACCEPT_CONFIDENCE:
+                logger.warning(
+                    f"All models below threshold, using {self.MODEL_CASCADE[-1]} anyway",
+                    extra={"confidence": last_result.confidence, "product": product_name},
+                )
+                return last_result
+            # Below the acceptance floor: discard the price so callers skip
+            # recording, instead of storing a likely-hallucinated value.
             logger.warning(
-                f"All models below threshold, using {self.MODEL_CASCADE[-1]} anyway",
-                extra={"confidence": last_result.confidence, "product": product_name},
+                f"Best confidence {last_result.confidence:.2f} below acceptance floor "
+                f"{self.MIN_ACCEPT_CONFIDENCE:.2f} - discarding extraction",
+                extra={"product": product_name, "store": store_slug},
             )
-            return last_result
+            return PriceExtractionResult(
+                price_sek=None,
+                unit_price_sek=None,
+                offer_price_sek=None,
+                offer_type=None,
+                offer_details=None,
+                in_stock=last_result.in_stock,
+                confidence=last_result.confidence,
+                pack_size=None,
+                raw_response={
+                    "source": "discarded_low_confidence",
+                    "confidence": last_result.confidence,
+                },
+            )
 
         # All models failed
         raise RuntimeError(f"All models failed. Last error: {last_error}")

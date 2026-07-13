@@ -799,6 +799,7 @@ async def trigger_price_check(
             store_slug=store.slug,
             product_name=product.name,
             store_url=product_store.store_url,
+            html_content=fetch_result.get("html"),
         )
 
         if not extraction_result.price_sek:

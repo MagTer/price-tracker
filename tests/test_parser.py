@@ -382,3 +382,104 @@ class TestPriceParser:
         mock_api_extractor.extract.assert_not_called()
         mock_llm.assert_called_once()
         assert result == llm_result
+
+    @pytest.mark.asyncio
+    async def test_extract_price_uses_jsonld_before_llm(self) -> None:
+        """html_content with a JSON-LD Product short-circuits the LLM cascade."""
+        parser = PriceParser()
+        html = (
+            '<script type="application/ld+json">{"@type":"Product","name":"Mjolk",'
+            '"offers":{"@type":"Offer","price":"18.50","priceCurrency":"SEK"}}</script>'
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            result = await parser.extract_price(
+                text_content="page content",
+                store_slug="apotea",
+                product_name="Mjolk",
+                html_content=html,
+            )
+
+        mock_llm.assert_not_called()
+        assert result.price_sek == Decimal("18.50")
+        assert result.raw_response["source"] == "jsonld"
+
+    @pytest.mark.asyncio
+    async def test_extract_price_falls_back_to_llm_without_jsonld(self) -> None:
+        """html_content without JSON-LD falls through to the LLM cascade."""
+        parser = PriceParser()
+
+        llm_result = PriceExtractionResult(
+            price_sek=Decimal("29.90"),
+            unit_price_sek=None,
+            offer_price_sek=None,
+            offer_type=None,
+            offer_details=None,
+            in_stock=True,
+            confidence=0.9,
+            pack_size=None,
+            raw_response={},
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm_result
+            result = await parser.extract_price(
+                text_content="page content",
+                store_slug="apotea",
+                html_content="<html><body>no structured data</body></html>",
+            )
+
+        mock_llm.assert_called_once()
+        assert result == llm_result
+
+    @pytest.mark.asyncio
+    async def test_extract_price_discards_below_acceptance_floor(self) -> None:
+        """All models under MIN_ACCEPT_CONFIDENCE -> price is discarded, not returned."""
+        parser = PriceParser()
+
+        low_result = PriceExtractionResult(
+            price_sek=Decimal("99.90"),
+            unit_price_sek=None,
+            offer_price_sek=None,
+            offer_type=None,
+            offer_details=None,
+            in_stock=True,
+            confidence=0.2,  # below both model thresholds and the 0.6 floor
+            pack_size=None,
+            raw_response={},
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = low_result
+            result = await parser.extract_price("page content", "apotea")
+
+        # Both cascade models were tried
+        assert mock_llm.call_count == 2
+        # Price is discarded so callers skip recording
+        assert result.price_sek is None
+        assert result.confidence == 0.2
+        assert result.raw_response["source"] == "discarded_low_confidence"
+
+    @pytest.mark.asyncio
+    async def test_extract_price_accepts_above_floor_below_model_threshold(self) -> None:
+        """Confidence between the floor and model thresholds is still accepted."""
+        parser = PriceParser()
+
+        mid_result = PriceExtractionResult(
+            price_sek=Decimal("49.90"),
+            unit_price_sek=None,
+            offer_price_sek=None,
+            offer_type=None,
+            offer_details=None,
+            in_stock=True,
+            confidence=0.65,  # above 0.6 floor, below scout's 0.70
+            pack_size=None,
+            raw_response={},
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mid_result
+            result = await parser.extract_price("page content", "apotea")
+
+        # scout rejects (0.65 < 0.70), haiku accepts (0.65 >= 0.6 floor)
+        assert result.price_sek == Decimal("49.90")

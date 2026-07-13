@@ -56,9 +56,11 @@ class WebFetcher:
             response = await self._client.get(url)
             response.raise_for_status()
             text = _extract_text(response.text)
-            return {"url": url, "ok": True, "text": text, "error": None}
+            # "html" carries the raw page for structured extraction (JSON-LD
+            # lives in <script> tags, which _extract_text strips out).
+            return {"url": url, "ok": True, "text": text, "html": response.text, "error": None}
         except Exception as e:
-            return {"url": url, "ok": False, "text": "", "error": str(e)}
+            return {"url": url, "ok": False, "text": "", "html": "", "error": str(e)}
 
     async def search(self, query: str, k: int = 5, lang: str = "en") -> dict[str, Any]:
         return {"query": query, "results": []}

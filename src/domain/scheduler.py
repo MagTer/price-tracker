@@ -52,6 +52,7 @@ class PriceCheckScheduler:
             "checks_success": 0,
             "checks_failed": 0,
             "checks_api": 0,
+            "checks_jsonld": 0,
             "checks_llm": 0,
             "alerts_sent": 0,
             "summaries_sent": 0,
@@ -188,13 +189,14 @@ class PriceCheckScheduler:
             logger.warning(f"Failed to fetch {product_store.store_url}")
             return
 
-        # Extract price using LLM
+        # Extract price (store API -> JSON-LD -> LLM cascade)
         text_content = fetch_result.get("text", "")
         extraction = await self.parser.extract_price(
             text_content=text_content,
             store_slug=product_store.store.slug,
             product_name=product_store.product.name,
             store_url=product_store.store_url,
+            html_content=fetch_result.get("html"),
         )
 
         # Skip recording if no price was extracted (required field)
@@ -205,10 +207,13 @@ class PriceCheckScheduler:
             )
             return
 
-        # Track extraction source (API vs LLM)
+        # Track extraction source (API/JSON-LD vs LLM)
         raw = extraction.raw_response or {}
-        if isinstance(raw, dict) and raw.get("source") == "willys_api":
+        source = raw.get("source") if isinstance(raw, dict) else None
+        if source == "willys_api":
             self._stats["checks_api"] += 1
+        elif source == "jsonld":
+            self._stats["checks_jsonld"] += 1
         else:
             self._stats["checks_llm"] += 1
 

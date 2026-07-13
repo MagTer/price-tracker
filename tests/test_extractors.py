@@ -226,3 +226,130 @@ class TestParseResponse:
         assert result.offer_price_sek is None
         assert result.offer_type is None
         assert result.offer_details is None
+
+
+# ---------------------------------------------------------------------------
+# JsonLdExtractor
+# ---------------------------------------------------------------------------
+
+from domain.extractors.jsonld import JsonLdExtractor  # noqa: E402
+
+
+def _wrap_ldjson(payload: str) -> str:
+    return f'<html><head><script type="application/ld+json">{payload}</script></head><body>x</body></html>'
+
+
+class TestJsonLdExtractor:
+    """Shapes verified against live store pages 2026-07-13."""
+
+    def test_top_level_product_string_price(self) -> None:
+        """ICA shape: top-level Product, price as string."""
+        html = _wrap_ldjson(
+            '{"@context":"https://schema.org","@type":"Product",'
+            '"name":"Bad & Toalettpapper 16-p","offers":{"@type":"Offer",'
+            '"price":"108.95","priceCurrency":"SEK",'
+            '"availability":"https://schema.org/InStock"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("108.95")
+        assert result.in_stock is True
+        assert result.confidence == 0.95
+        assert result.raw_response["source"] == "jsonld"
+
+    def test_top_level_product_numeric_price(self) -> None:
+        """Apotea shape: price as JSON number."""
+        html = _wrap_ldjson(
+            '{"@context":"https://schema.org","@type":"Product","name":"Sukrin 500 g",'
+            '"offers":{"@type":"Offer","price":69,"priceCurrency":"SEK",'
+            '"availability":"https://schema.org/InStock"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("69")
+
+    def test_itempage_mainentity_wrapper(self) -> None:
+        """DOZ shape: ItemPage wrapper with mainEntity Product."""
+        html = _wrap_ldjson(
+            '{"@context":"https://schema.org/","@type":"ItemPage",'
+            '"mainEntity":{"@type":"Product","name":"Pevaryl",'
+            '"offers":{"@type":"Offer","price":"133","priceCurrency":"SEK",'
+            '"availability":"http://schema.org/InStock"}}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("133")
+
+    def test_product_among_multiple_blocks(self) -> None:
+        """Med24 shape: Product after non-Product blocks."""
+        html = (
+            '<script type="application/ld+json">{"@type":"WebSite","name":"x"}</script>'
+            '<script type="application/ld+json">{"@type":"Product","name":"Kantskydd",'
+            '"offers":{"@type":"Offer","price":"149.00","priceCurrency":"SEK"}}</script>'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("149.00")
+
+    def test_out_of_stock(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x","offers":{"@type":"Offer","price":"10",'
+            '"priceCurrency":"SEK","availability":"https://schema.org/OutOfStock"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.in_stock is False
+
+    def test_rejects_non_sek_currency(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x","offers":{"@type":"Offer","price":"10",'
+            '"priceCurrency":"EUR"}}'
+        )
+        assert JsonLdExtractor().extract_from_html(html) is None
+
+    def test_comma_decimal_price(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x","offers":{"@type":"Offer","price":"108,95",'
+            '"priceCurrency":"SEK"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("108.95")
+
+    def test_offers_as_list(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x","offers":[{"@type":"Offer","price":"25",'
+            '"priceCurrency":"SEK"}]}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("25")
+
+    def test_returns_none_without_product(self) -> None:
+        html = _wrap_ldjson('{"@type":"BreadcrumbList","itemListElement":[]}')
+        assert JsonLdExtractor().extract_from_html(html) is None
+
+    def test_returns_none_without_offers(self) -> None:
+        html = _wrap_ldjson('{"@type":"Product","name":"x"}')
+        assert JsonLdExtractor().extract_from_html(html) is None
+
+    def test_tolerates_malformed_json_block(self) -> None:
+        """A broken block is skipped; a later valid block is still used."""
+        html = (
+            '<script type="application/ld+json">{not json</script>'
+            '<script type="application/ld+json">{"@type":"Product","name":"x",'
+            '"offers":{"@type":"Offer","price":"10","priceCurrency":"SEK"}}</script>'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("10")
+
+    def test_rejects_zero_price(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x","offers":{"@type":"Offer","price":0,'
+            '"priceCurrency":"SEK"}}'
+        )
+        assert JsonLdExtractor().extract_from_html(html) is None
+
+    def test_returns_none_on_plain_html(self) -> None:
+        assert JsonLdExtractor().extract_from_html("<html><body>hej</body></html>") is None
