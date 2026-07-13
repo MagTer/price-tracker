@@ -91,7 +91,7 @@ class TestExtract:
         assert result is not None
         assert isinstance(result, PriceExtractionResult)
         assert result.price_sek == Decimal("29.9")
-        assert result.unit_price_sek == Decimal("14.95")
+        assert result.store_unit_price_sek == Decimal("14.95")
         assert result.offer_price_sek is None
         assert result.in_stock is True
         assert result.confidence == 0.99
@@ -202,7 +202,7 @@ class TestParseResponse:
             "outOfStock": False,
         }
         result = extractor._parse_response(data)
-        assert result.unit_price_sek == Decimal("33.29")
+        assert result.store_unit_price_sek == Decimal("33.29")
 
     def test_parse_compare_price_with_per_kg_unit(self) -> None:
         """Compare price "33,29 kr/kg" strips the unit suffix before Decimal."""
@@ -213,7 +213,7 @@ class TestParseResponse:
             "outOfStock": False,
         }
         result = extractor._parse_response(data)
-        assert result.unit_price_sek == Decimal("33.29")
+        assert result.store_unit_price_sek == Decimal("33.29")
 
     def test_parse_compare_price_with_per_st_unit(self) -> None:
         """Compare price "12,50 kr/st" strips the unit suffix before Decimal."""
@@ -224,17 +224,17 @@ class TestParseResponse:
             "outOfStock": False,
         }
         result = extractor._parse_response(data)
-        assert result.unit_price_sek == Decimal("12.50")
+        assert result.store_unit_price_sek == Decimal("12.50")
 
     def test_parse_missing_compare_price(self) -> None:
-        """Missing comparePrice results in None unit_price_sek."""
+        """Missing comparePrice results in None store_unit_price_sek."""
         extractor = _make_extractor()
         data: dict[str, object] = {
             "priceValue": 29.90,
             "outOfStock": False,
         }
         result = extractor._parse_response(data)
-        assert result.unit_price_sek is None
+        assert result.store_unit_price_sek is None
 
     def test_parse_no_savings_no_offer(self) -> None:
         """Response without savingsAmount has no offer fields."""

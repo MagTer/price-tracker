@@ -67,13 +67,15 @@ class JsonLdExtractor:
 
         return PriceExtractionResult(
             price_sek=price,
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=in_stock,
             confidence=self.CONFIDENCE,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={
                 "source": "jsonld",
                 "name": name,

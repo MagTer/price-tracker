@@ -16,48 +16,56 @@ class TestPriceExtractionResult:
         """Test creating result with all fields populated."""
         result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=Decimal("149.50"),
+            store_unit_price_sek=Decimal("149.50"),
             offer_price_sek=Decimal("19.90"),
             offer_type="stammispris",
             offer_details="Köp 2 betala för 1",
             in_stock=True,
             confidence=0.95,
             pack_size=16,
+            package_amount=Decimal("400"),
+            package_unit="g",
             raw_response={"price": 29.90, "in_stock": True},
         )
 
         assert result.price_sek == Decimal("29.90")
-        assert result.unit_price_sek == Decimal("149.50")
+        assert result.store_unit_price_sek == Decimal("149.50")
         assert result.offer_price_sek == Decimal("19.90")
         assert result.offer_type == "stammispris"
         assert result.offer_details == "Köp 2 betala för 1"
         assert result.in_stock is True
         assert result.confidence == 0.95
         assert result.pack_size == 16
+        assert result.package_amount == Decimal("400")
+        assert result.package_unit == "g"
         assert result.raw_response == {"price": 29.90, "in_stock": True}
 
     def test_create_with_none_values(self) -> None:
         """Test creating result with None values."""
         result = PriceExtractionResult(
             price_sek=None,
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=False,
             confidence=0.3,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
         assert result.price_sek is None
-        assert result.unit_price_sek is None
+        assert result.store_unit_price_sek is None
         assert result.offer_price_sek is None
         assert result.offer_type is None
         assert result.offer_details is None
         assert result.in_stock is False
         assert result.confidence == 0.3
         assert result.pack_size is None
+        assert result.package_amount is None
+        assert result.package_unit is None
 
 
 class TestPriceParser:
@@ -158,11 +166,91 @@ class TestPriceParser:
             result = await parser._extract_with_model("test prompt", "price_tracker")
 
             assert result.price_sek == Decimal("29.90")
-            assert result.unit_price_sek == Decimal("149.50")
+            assert result.store_unit_price_sek == Decimal("149.50")
             assert result.offer_price_sek is None
             assert result.in_stock is True
             assert result.confidence == 0.95
             mock_client.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_printed_unit_price_is_not_synthesized(self) -> None:
+        """A page that prints no unit price yields None — never price / pack_size (D-05).
+
+        Regression guard: store_unit_price_sek is "what the store claims". If the decoder
+        ever computes a fallback again, the "Store says" column silently becomes a mix of
+        store claims and our own arithmetic, and a store/page mismatch stops being visible.
+        """
+        parser = PriceParser()
+
+        mock_response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "price": 139.90,
+                                # no "unit_price" — the page printed none
+                                "pack_size": 24,
+                                "in_stock": True,
+                                "confidence": 0.9,
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_response_data
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post.return_value = mock_response
+
+            result = await parser._extract_with_model("test prompt", "price_tracker")
+
+        assert result.price_sek == Decimal("139.90")
+        assert result.pack_size == 24
+        # 139.90 / 24 == 5.829… would be the old synthesized value. It must NOT appear.
+        assert result.store_unit_price_sek is None
+
+    @pytest.mark.asyncio
+    async def test_parses_package_amount_and_unit(self) -> None:
+        """package_amount decodes to Decimal and package_unit to a lowercased str (D-08)."""
+        parser = PriceParser()
+
+        mock_response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "price": 24.90,
+                                "package_amount": 0.5,
+                                "package_unit": "L",
+                                "in_stock": True,
+                                "confidence": 0.9,
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_response_data
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post.return_value = mock_response
+
+            result = await parser._extract_with_model("test prompt", "price_tracker")
+
+        assert isinstance(result.package_amount, Decimal)
+        assert result.package_amount == Decimal("0.5")
+        assert result.package_unit == "l"
 
     @pytest.mark.asyncio
     async def test_extract_with_model_strips_markdown_code_blocks(self) -> None:
@@ -193,13 +281,15 @@ class TestPriceParser:
 
         mock_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.85,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -220,25 +310,29 @@ class TestPriceParser:
 
         primary_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.5,  # Below threshold
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
         fallback_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.95,  # High confidence
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -258,13 +352,15 @@ class TestPriceParser:
 
         fallback_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.9,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -287,13 +383,15 @@ class TestPriceParser:
 
         api_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.99,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={"source": "willys_api"},
         )
 
@@ -324,13 +422,15 @@ class TestPriceParser:
 
         llm_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.85,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -359,13 +459,15 @@ class TestPriceParser:
 
         llm_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.90,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -411,13 +513,15 @@ class TestPriceParser:
 
         llm_result = PriceExtractionResult(
             price_sek=Decimal("29.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.9,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -439,13 +543,15 @@ class TestPriceParser:
 
         low_result = PriceExtractionResult(
             price_sek=Decimal("99.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.2,  # below both model thresholds and the 0.6 floor
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 
@@ -467,13 +573,15 @@ class TestPriceParser:
 
         mid_result = PriceExtractionResult(
             price_sek=Decimal("49.90"),
-            unit_price_sek=None,
+            store_unit_price_sek=None,
             offer_price_sek=None,
             offer_type=None,
             offer_details=None,
             in_stock=True,
             confidence=0.65,  # above 0.6 floor, below scout's 0.70
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={},
         )
 

@@ -64,14 +64,14 @@ class WillysApiExtractor:
         # Parse compare price. Formats seen: "33,29 kr", "33.29 kr",
         # "33,29 kr/kg", "12,50 kr/st" — grab the leading amount and drop any
         # unit suffix so "/kg" etc. never reaches Decimal.
-        unit_price_sek: Decimal | None = None
+        store_unit_price_sek: Decimal | None = None
         compare_price_str = data.get("comparePrice", "")
         if compare_price_str:
             match = re.search(r"[\d.,]+", str(compare_price_str))
             if match:
                 cleaned = match.group(0).replace(",", ".")
                 try:
-                    unit_price_sek = Decimal(cleaned)
+                    store_unit_price_sek = Decimal(cleaned)
                 except Exception:
                     logger.debug("Could not parse compare price: %s", compare_price_str)
             else:
@@ -96,12 +96,14 @@ class WillysApiExtractor:
 
         return PriceExtractionResult(
             price_sek=price_sek,
-            unit_price_sek=unit_price_sek,
+            store_unit_price_sek=store_unit_price_sek,
             offer_price_sek=offer_price_sek,
             offer_type=offer_type,
             offer_details=offer_details,
             in_stock=in_stock,
             confidence=0.99,
             pack_size=None,
+            package_amount=None,
+            package_unit=None,
             raw_response={"source": "willys_api"},
         )
