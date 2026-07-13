@@ -13,13 +13,9 @@
 
 ## Uppgifter i prioritetsordning
 
-### 1. Dockerfile-härdning
-- Lägg till icke-root `USER` i final stage (skapa user `app`, chown `/app`).
-- Ta bort den inaktuella kommentaren ovanför CMD ("module not yet implemented (Phase 2)... fails at import") — den har varit fel sedan commit 16245a4.
-- Ta bort `libpq-dev` (builder) och `libpq5` (final) — asyncpg använder inte libpq. Verifiera med `docker build .` att bygget går igenom.
+### 1. Dockerfile-härdning — KLART 2026-07-13 (Fable, commit 8d7ad3c, D-30)
 
-### 2. Självhostad Chart.js
-- `src/api/admin.py:1636` laddar Chart.js 4.4.1 från cdn.jsdelivr.net på den autentiserade admin-sidan. Ladda ner UMD-filen till `src/api/static/chart.umd.min.js`, mounta StaticFiles på `/static` i `src/api/app.py`, byt script-src i dashboarden. Statiska filer behöver inte auth (publikt bibliotek).
+### 2. Självhostad Chart.js — KLART 2026-07-13 (Fable, commit 8d7ad3c, D-30)
 
 ### 3. Stale referenser i dokumentation och docstrings
 - `CLAUDE.md` (price-tracker-repot): auth-avsnitten säger fortfarande att ingressen "not yet built, pending Entra client registration" — den är LIVE sedan 2026-07-09 (se STATE.md FAKTAKORRIGERING 2026-07-13). Uppdatera Architecture/Auth-styckena.
