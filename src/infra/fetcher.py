@@ -62,14 +62,6 @@ class WebFetcher:
         except Exception as e:
             return {"url": url, "ok": False, "text": "", "html": "", "error": str(e)}
 
-    async def search(self, query: str, k: int = 5, lang: str = "en") -> dict[str, Any]:
-        return {"query": query, "results": []}
-
-    async def research(
-        self, query: str, k: int = 5, model: str = "gpt-3.5-turbo"
-    ) -> dict[str, Any]:
-        return {"query": query, "sources": [], "summary": ""}
-
     async def close(self) -> None:
         await self._client.aclose()
 
