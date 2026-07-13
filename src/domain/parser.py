@@ -177,13 +177,15 @@ class PriceParser:
             )
             return PriceExtractionResult(
                 price_sek=None,
-                unit_price_sek=None,
+                store_unit_price_sek=None,
                 offer_price_sek=None,
                 offer_type=None,
                 offer_details=None,
                 in_stock=last_result.in_stock,
                 confidence=last_result.confidence,
                 pack_size=None,
+                package_amount=None,
+                package_unit=None,
                 raw_response={
                     "source": "discarded_low_confidence",
                     "confidence": last_result.confidence,
@@ -215,13 +217,16 @@ Page content (truncated):
 
 Return a JSON object with exactly these fields:
 - "price": Regular price in SEK as a number (e.g., 29.90), null if not found
-- "unit_price": Price per piece/item for multi-packs. For products like toilet paper,
-  diapers, etc. this should be price per roll/piece, NOT per kg. If the page shows
-  an irrelevant unit price (like kr/kg for toilet paper), calculate it yourself:
-  unit_price = price / pack_size. Null if not applicable.
+- "unit_price": The comparison price (jamforpris) EXACTLY as printed on the page,
+  including when its unit differs from the pack unit (e.g. kr/kg printed for toilet
+  paper). Do NOT compute it. Null if the page prints none.
 - "pack_size": Number of items in the pack, extracted from product title patterns like
   "16-p", "24-p", "16 st", "24 st", "16-pack", "24-pack", "16 rullar". Null if not
   a multi-pack product.
+- "package_amount": The numeric amount of product in the package, as printed
+  (e.g. 0.5 for "0,5 l", 400 for "400 g", 24 for "24-pack"). Null if not stated.
+- "package_unit": The unit that amount is expressed in - one of "st", "ml", "l",
+  "g", "kg". Null if not stated.
 - "offer_price": Discounted/campaign price if on sale, null if no discount
 - "offer_type": Type of offer ("stammispris", "extrapris", "kampanj", "medlemspris"),
   null if no offer
@@ -256,18 +261,23 @@ Only output the JSON object, no explanation or markdown."""
 
         data = json.loads(content)
 
-        # Extract values
+        # Extract values. The unit price is REPORTED, never synthesized: this field carries
+        # only what the store printed (D-05), so a page/store mismatch stays detectable
+        # instead of being papered over by our own arithmetic. When the page prints nothing
+        # it stays None — the computed unit price covers that case.
         price = Decimal(str(data["price"])) if data.get("price") else None
-        unit_price = Decimal(str(data["unit_price"])) if data.get("unit_price") else None
+        store_unit_price = Decimal(str(data["unit_price"])) if data.get("unit_price") else None
         pack_size = int(data["pack_size"]) if data.get("pack_size") else None
-
-        # If we have price and pack_size but no unit_price, calculate it
-        if price and pack_size and not unit_price:
-            unit_price = price / pack_size
+        package_amount = (
+            Decimal(str(data["package_amount"])) if data.get("package_amount") else None
+        )
+        package_unit = (
+            str(data["package_unit"]).strip().lower() if data.get("package_unit") else None
+        )
 
         return PriceExtractionResult(
             price_sek=price,
-            unit_price_sek=unit_price,
+            store_unit_price_sek=store_unit_price,
             offer_price_sek=(
                 Decimal(str(data["offer_price"])) if data.get("offer_price") else None
             ),
@@ -276,5 +286,7 @@ Only output the JSON object, no explanation or markdown."""
             in_stock=data.get("in_stock", True),
             confidence=float(data.get("confidence", 0.5)),
             pack_size=pack_size,
+            package_amount=package_amount,
+            package_unit=package_unit,
             raw_response=data,
         )
