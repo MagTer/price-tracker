@@ -117,15 +117,51 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A product page shows all its links with package label, current price, and **kr/unit, sortable** — the toilet-paper question answered on one screen
   4. A scraper run against a real store page fills or verifies the link's `package_quantity` (a mismatch between page and stored quantity is signal, not noise)
   5. `alembic upgrade head` migrates a fresh DB cleanly and the full test suite is green
-**Plans**: TBD
+**Plans**: 8 plans across 7 waves
 
 **Constraints:**
   - DB is **empty** — no data rescue needed. A clean new revision is fine; collapsing/resetting the revision chain is sanctioned (operator prefers fresh-start over compat in test-stage systems)
   - Do **not** reintroduce a middle `Variant` entity — considered and deliberately rejected as over-modeling for a home tool
+  - **The D-15 reset is the OPERATOR's step.** The agent documents the runbook and never runs it against the deployed instance: the live DB is stamped at the old `0001`, and a rewritten `0001` would otherwise silently no-op onto the OLD schema
+  - Plans run strictly in wave order — this is a coordinated model change, so the test suite is deliberately RED between waves 1 and 5 and closes at 04.1-06
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 04.1 to break down)
+**Wave 1**
+
+- [ ] 04.1-01-PLAN.md — pricing.py (single unit-price + package-normalization definition), models.py reshape, 0001 migration rewritten in place
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 04.1-02-PLAN.md — extraction contract: `PriceExtractionResult` gains package_amount/package_unit, `store_unit_price_sek` renamed, the `price / pack_size` synthesis deleted
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 04.1-03-PLAN.md — service + scheduler rewire: watch evaluation onto the computed unit price with a NULL guard (the silent-6am-crash fix), `get_links_for_product()`, scrape write-paths 1 and 2
+
+**Wave 4** *(blocked on Wave 3; plans within wave run in parallel)*
+
+- [ ] 04.1-04-PLAN.md — re-key the 3 pair-keyed link endpoints to `/product-stores/{id}`, move package validation to the link, 409 on duplicate store_url
+- [ ] 04.1-05-PLAN.md — MCP `compare_stores`: one row per link, ranked by kr/unit (also fixes the always-`N/A` column)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 04.1-06-PLAN.md — admin read paths onto the computed unit price; `GET /products/{id}/links`; scrape write-path 3 (`POST /check/{id}`)
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 04.1-07-PLAN.md — admin UI: product dialog unit-only, link dialog packaging chain, product links panel with sortable kr/unit
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 04.1-08-PLAN.md — phase gate: first DB-backed test tier (auto-skipping Postgres), migration/constraint/ranking proofs, operator reset runbook, blocking human checkpoint
+
+**Cross-cutting constraints** (truths shared across multiple plans):
+
+  - Unit price has exactly ONE definition — `price_sek / link.package_quantity`, computed on read (D-03/D-04) — implemented once in `src/domain/pricing.py` and never re-derived by a consumer
+  - The autofill/flag/never-overwrite rule (D-07) is implemented once (`apply_scrape_to_link`) and called by ALL THREE scrape write-paths: `scheduler._check_single_product`, `service.check_price`, and `POST /check/{id}`
+  - Dropping `uq_product_store` breaks three `(product_id, store_id)` link lookups that resolve with `.scalar_one_or_none()` — they raise `MultipleResultsFound` → HTTP 500 on the phase's OWN acceptance scenario. Re-keying them is part of MODEL-02, not a follow-up
+  - The watch evaluation lives in `scheduler.py::_check_alerts`, NOT `notifier.py` (which only renders HTML). A NULL-quantity link must produce no alert and no crash — a `TypeError` there is swallowed by the per-product `except Exception` and fails silently at 06:00
 
 ### Phase 5: Source-repo Cleanup
 
@@ -155,5 +191,5 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 | 2. Service Infrastructure | 1/1 | Complete | 2026-05-22 |
 | 3. Admin UI + Entra Auth | 1/1 | Complete | 2026-05-22 |
 | 4. MCP Server + Agent Wiring | 1/1 | Gaps Found | 2026-07-06 (retroactive verification) |
-| 04.1. Package data moves to the store link (INSERTED) | 0/TBD | Not started | - |
+| 04.1. Package data moves to the store link (INSERTED) | 0/8 | Planned | - |
 | 5. Source-repo Cleanup | 0/TBD | Not started | - |
