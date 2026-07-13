@@ -82,17 +82,32 @@
                 <label>Category</label>
                 <input type="text" name="category" class="form-input">
             </div>
+            <!-- Packaging: the unit dropdown drives the other two fields.
+                 Entry units ml/g are normalized to liter/kg on submit; the
+                 label is auto-suggested from unit+amount but stays editable
+                 for odd formats ("3×90 blad"). Stored exactly as before:
+                 unit (canonical), package_quantity (numeric, normalized),
+                 package_size (display label) — no backend change. -->
             <div class="form-group">
                 <label>Unit</label>
-                <input type="text" name="unit" class="form-input" placeholder="e.g. g, ml, st">
+                <select name="unit_entry" id="pkg-unit" class="form-input" onchange="pkgFieldsChanged()">
+                    <option value="">— none —</option>
+                    <option value="st">st (styck)</option>
+                    <option value="ml">ml</option>
+                    <option value="l">liter</option>
+                    <option value="g">gram</option>
+                    <option value="kg">kg</option>
+                </select>
             </div>
             <div class="form-group">
-                <label>Package Size</label>
-                <input type="text" name="package_size" class="form-input" placeholder="e.g. 24-pack, 500ml">
+                <label>Amount in package</label>
+                <input type="number" step="0.01" id="pkg-amount" class="form-input"
+                       placeholder="e.g. 16 (st) or 500 (ml)" oninput="pkgFieldsChanged()">
             </div>
             <div class="form-group">
-                <label>Package Quantity</label>
-                <input type="number" step="0.01" name="package_quantity" class="form-input" placeholder="e.g. 24, 0.5">
+                <label>Quantity label</label>
+                <input type="text" name="package_size" id="pkg-label" class="form-input"
+                       placeholder="auto — e.g. 16-pack, 500 ml" oninput="pkgLabelDirty = true">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Create Product</button>
@@ -479,20 +494,48 @@ async function loadWatches() {
 }
 
 function showCreateProductModal() {
+    pkgLabelDirty = false;
     document.getElementById('modal-create-product').style.display = 'flex';
+}
+
+// --- Packaging field chain (unit dropdown -> amount -> label suggestion) ---
+// Entry units ml/g normalize to the canonical comparison units the model
+// documents (models.py: "kg, liter, st") so unit_price math stays coherent
+// across products entered in different granularities.
+let pkgLabelDirty = false;
+
+const PKG_UNITS = {
+    st: { canonical: 'st',    factor: 1,     label: (n) => `${n}-pack`,  integer: true },
+    ml: { canonical: 'liter', factor: 0.001, label: (n) => `${n} ml`,    integer: false },
+    l:  { canonical: 'liter', factor: 1,     label: (n) => `${n} l`,     integer: false },
+    g:  { canonical: 'kg',    factor: 0.001, label: (n) => `${n} g`,     integer: false },
+    kg: { canonical: 'kg',    factor: 1,     label: (n) => `${n} kg`,    integer: false }
+};
+
+function pkgFieldsChanged() {
+    const unit = document.getElementById('pkg-unit').value;
+    const amountEl = document.getElementById('pkg-amount');
+    const labelEl = document.getElementById('pkg-label');
+    const spec = PKG_UNITS[unit];
+    amountEl.step = spec && spec.integer ? '1' : '0.01';
+    if (!spec || !amountEl.value || pkgLabelDirty) return;
+    labelEl.value = spec.label(amountEl.value);
 }
 
 async function handleCreateProduct(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
+    const entryUnit = fd.get('unit_entry');
+    const amount = document.getElementById('pkg-amount').value;
+    const spec = PKG_UNITS[entryUnit];
     const body = {
         tenant_id: 'f21b6620-c793-46e3-a354-dfcd9956b4a2',
         name: fd.get('name'),
         brand: fd.get('brand') || null,
         category: fd.get('category') || null,
-        unit: fd.get('unit') || null,
+        unit: spec ? spec.canonical : null,
         package_size: fd.get('package_size') || null,
-        package_quantity: fd.get('package_quantity') ? parseFloat(fd.get('package_quantity')) : null
+        package_quantity: (spec && amount) ? parseFloat(amount) * spec.factor : null
     };
     try {
         await apiPost('/products', body);
