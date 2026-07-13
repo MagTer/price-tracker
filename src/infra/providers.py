@@ -1,8 +1,8 @@
-from infra.email import SmtpEmailService
+from infra.email import ResendEmailService
 from infra.fetcher import WebFetcher
 
 _fetcher_instance: WebFetcher | None = None
-_email_service_instance: SmtpEmailService | None = None
+_email_service_instance: ResendEmailService | None = None
 
 
 def get_fetcher() -> WebFetcher:
@@ -12,8 +12,8 @@ def get_fetcher() -> WebFetcher:
     return _fetcher_instance
 
 
-def get_email_service() -> SmtpEmailService:
+def get_email_service() -> ResendEmailService:
     global _email_service_instance
     if _email_service_instance is None:
-        _email_service_instance = SmtpEmailService()
+        _email_service_instance = ResendEmailService()
     return _email_service_instance

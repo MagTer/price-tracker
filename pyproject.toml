@@ -13,7 +13,6 @@ dependencies = [
     "pydantic (>=2.7,<3.0)",
     "fastapi (>=0.111,<0.112)",
     "uvicorn[standard] (>=0.30,<0.31)",
-    "aiosmtplib (>=3.0,<4.0)",
     "fastmcp (>=2.0,<3.0)",
 ]
 

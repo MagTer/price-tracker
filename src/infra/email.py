@@ -1,54 +1,73 @@
-"""aiosmtplib email service implementing IEmailService."""
+"""Resend HTTP API email service implementing IEmailService."""
 
+import logging
 import os
-from email.message import EmailMessage as StdEmailMessage
+from typing import Any
 
-import aiosmtplib
+import httpx
 
 from domain.protocols.email import EmailMessage, EmailResult
 
+logger = logging.getLogger(__name__)
 
-class SmtpEmailService:
-    """Email service using aiosmtplib (SMTP)."""
+RESEND_API_URL = "https://api.resend.com/emails"
+
+
+class ResendEmailService:
+    """Email service using Resend's HTTP API (https://resend.com).
+
+    Same provider the source platform used. EMAIL_FROM must be an address
+    on a domain verified in the Resend account.
+    """
+
+    TIMEOUT = 15.0
 
     def __init__(self) -> None:
-        self._host = os.getenv("SMTP_HOST", "")
-        self._port = int(os.getenv("SMTP_PORT", "587"))
-        self._user = os.getenv("SMTP_USER", "")
-        self._password = os.getenv("SMTP_PASSWORD", "")
-        self._from_addr = os.getenv("SMTP_FROM", "")
+        self._api_key = os.getenv("RESEND_API_KEY", "")
+        self._from_addr = os.getenv("EMAIL_FROM", "")
 
     def is_configured(self) -> bool:
-        return bool(self._host and self._user and self._password and self._from_addr)
+        return bool(self._api_key and self._from_addr)
 
     async def send(self, message: EmailMessage) -> EmailResult:
         if not self.is_configured():
             return EmailResult(
                 success=False,
-                error="SMTP not configured (missing host, user, password, or from address)",
+                error="Resend not configured (missing RESEND_API_KEY or EMAIL_FROM)",
             )
 
-        msg = StdEmailMessage()
-        msg["From"] = self._from_addr
-        msg["To"] = ", ".join(message.to)
-        msg["Subject"] = message.subject
-        if message.reply_to:
-            msg["Reply-To"] = message.reply_to
-
-        msg.add_alternative(message.html_body, subtype="html")
+        payload: dict[str, Any] = {
+            "from": self._from_addr,
+            "to": message.to,
+            "subject": message.subject,
+            "html": message.html_body,
+        }
         if message.text_body:
-            msg.set_content(message.text_body)
+            payload["text"] = message.text_body
+        if message.reply_to:
+            payload["reply_to"] = message.reply_to
 
         try:
-            await aiosmtplib.send(
-                msg,
-                hostname=self._host,
-                port=self._port,
-                username=self._user,
-                password=self._password,
-                start_tls=True,
+            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                response = await client.post(
+                    RESEND_API_URL,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+
+            if response.status_code in (200, 201):
+                message_id = response.json().get("id")
+                return EmailResult(success=True, message_id=message_id)
+
+            # Resend returns a JSON error body; keep it short in the result
+            error_text = response.text[:200]
+            logger.warning(
+                "Resend API error %d: %s", response.status_code, error_text
             )
-            return EmailResult(success=True)
+            return EmailResult(
+                success=False,
+                error=f"Resend API {response.status_code}: {error_text}",
+            )
         except Exception as e:
             return EmailResult(success=False, error=str(e))
 
