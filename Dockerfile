@@ -10,9 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
     POETRY_NO_INTERACTION=1
 
+# build-essential kept for any dependency that lacks a wheel; libpq is NOT
+# needed — the app talks Postgres via asyncpg, which doesn't use libpq.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install "poetry==${POETRY_VERSION}"
@@ -33,10 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src"
 
-# Runtime libs only (no build tools)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd --system --uid 1001 --create-home app
 
 WORKDIR /app
 
@@ -48,8 +46,8 @@ COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
 
+USER app
+
 EXPOSE 8000
 
-# Phase-1 CMD (D-11): uvicorn pointing at src.api.app:app — module not yet implemented (Phase 2)
-# Build succeeds; running this image fails at import. Phase 2 implements api/app.py.
 CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]

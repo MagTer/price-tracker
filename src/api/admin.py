@@ -1682,7 +1682,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Price Tracker - Admin</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="/static/chart.umd.min.js"></script>
     <style>
         {base_css}
         {extra_css}

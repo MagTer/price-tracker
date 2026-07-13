@@ -2,9 +2,11 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from api.admin import router as admin_router
@@ -68,6 +70,14 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(admin_router)
+
+    # Vendored JS (Chart.js) — self-hosted so the portal has no CDN
+    # dependency; public library files, so no auth on this mount.
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).parent / "static"),
+        name="static",
+    )
 
     # MCP server mounted at /mcp — the ingress bypasses the Entra gate for
     # exactly this path; bearer-only, fail-closed auth (D-29)
