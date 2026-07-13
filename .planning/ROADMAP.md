@@ -110,7 +110,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Goal**: Move `package_size` + `package_quantity` from `Product` to `ProductStore` so that the link (the store URL) owns the package data it actually describes. `unit` stays on `Product`. Product becomes the abstract good (name, brand, category, unit); the link becomes the concrete package listing. This makes the app's core question answerable — "cheapest kr/unit for Lambi across pack sizes and stores" becomes a single product view with all links sorted by unit price, where today three pack sizes are three unrelated products with no grouping key.
 **Depends on**: Nothing in-repo (independent of Phase 4's agent-platform wiring, which is external). Sequenced before Phase 5 so the source-repo cleanup deletes against a settled model.
-**Requirements**: New — captured in `.planning/SEED-package-data-moves-to-link.md` (decision, rejected `Variant` alternative, touch-point inventory)
+**Requirements**: MODEL-01, MODEL-02, MODEL-03, MODEL-04, MODEL-05, MODEL-06, MODEL-07, MODEL-08 — full rationale in `.planning/SEED-package-data-moves-to-link.md` (decision, rejected `Variant` alternative, touch-point inventory)
 **Success Criteria** (what must be TRUE):
   1. Creating a product asks for name / brand / category / **unit only** — no package fields
   2. Creating or editing a link asks for amount in the product's unit, with an auto-suggested editable package label (the v0.2.1 guided chain moves from the product dialog to the link dialog; no unit selector needed there)

@@ -67,6 +67,19 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 - [ ] **DEPLOY-03**: `docker-compose.yml` defines postgres + app. The app service joins an external `edge` docker network so the upstream proxy (separate repo per D-18) can reach it. **No Traefik labels in this repo** (D-13 in `01-CONTEXT.md`) — routing/TLS/auth live in the edge-proxy stack. App container does NOT publish ports to the host
 - [ ] **DEPLOY-04**: `.env.template` documents all required env vars (DATABASE_URL, OpenRouter API key + model cascade, `ALLOWED_ENTRA_EMAIL`, `MCP_BEARER_TOKEN`, `RESEND_API_KEY` + `EMAIL_FROM`). No OIDC client secrets — IAP owns those
 
+### Data Model — package data on the link (Phase 04.1, INSERTED 2026-07-14)
+
+Post-extraction model change. The verbatim-port doctrine does **not** apply to this group — it is an intentional model change. Full rationale: `.planning/SEED-package-data-moves-to-link.md`; decisions: `.planning/phases/04.1-package-data-moves-to-the-store-link/04.1-CONTEXT.md`.
+
+- [ ] **MODEL-01**: `package_size` + `package_quantity` move from `Product` to `ProductStore`; `unit` stays on `Product`. Product is the abstract good (name, brand, category, unit); the link is the concrete package listing. `Product`'s "represents a specific SKU including package size" docstring is corrected
+- [ ] **MODEL-02**: `uq_product_store(product_id, store_id)` is **dropped** and `store_url` becomes globally UNIQUE. One product may hold several links at the same store (different pack sizes); the same URL may not be tracked twice (D-01)
+- [ ] **MODEL-03**: Unit price is **computed, never scraped**: `price_sek / link.package_quantity`, derived on read. `PricePoint.unit_price_sek` is dropped. **Every** unit-price consumer computes it — the product page, MCP, and the notifier's watch evaluation (`PriceWatch.unit_price_target_sek` / `unit_price_drop_threshold_percent`), which must tolerate a NULL quantity without crashing or firing a false alert (D-03, D-04)
+- [ ] **MODEL-04**: `PricePoint.store_unit_price_sek` added — the store's *printed* unit price as scraped. Displayed beside the computed value as a raw signal, **never sorted on** (store definitions differ: kr/rulle vs kr/100g) (D-05)
+- [ ] **MODEL-05**: Scraper verifies the link's quantity. `PriceExtractionResult` gains `package_amount` + `package_unit`, normalized to the product's canonical unit via the existing st/liter/kg factors. `ProductStore.scraped_package_quantity` records the page's reading. Behavior: **autofill when empty, flag on conflict, never overwrite** (D-06 – D-09)
+- [ ] **MODEL-06**: Admin UI — product dialog asks name/brand/category/**unit only**; the link dialog carries the packaging chain (amount + auto-suggested editable label, no unit selector); the product page lists all links with package label, price, and **kr/unit, sortable**, flagging links that still need an amount (D-10 – D-12)
+- [ ] **MODEL-07**: MCP `compare_stores` returns **one row per link**, sorted by kr/unit (replacing one-row-per-store) (D-13)
+- [ ] **MODEL-08**: `alembic/versions/0001_initial.py` is rewritten in place (DB is empty). `alembic upgrade head` on a fresh DB is green and the full test suite passes. The mandatory reset for the deployed instance (`docker compose down -v` → recreate → `upgrade head`, because the live DB is stamped 0001 and would otherwise no-op) is documented (D-14, D-15)
+
 ### Source-repo Cleanup
 
 - [ ] **CLEAN-01**: Delete from `ai-agent-platform`: `services/agent/src/modules/price_tracker/` (entire dir, including tests), `services/agent/src/orchestrator/price_tracker.py`, `services/agent/src/interfaces/http/admin_price_tracker.py`, `services/agent/src/interfaces/http/templates/admin_price_tracker.html`, `services/agent/src/interfaces/http/templates/price_tracker_dashboard.html`, `services/agent/src/core/tools/price_tracker.py`, `services/agent/src/core/protocols/price_tracker.py`, `services/agent/src/interfaces/http/schemas/price_tracker.py`
@@ -156,14 +169,22 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 | MCP-06 | Phase 4 | Pending |
 | MCP-07 | Phase 4 | Pending |
 | AUTH-04 | Phase 4 | Complete |
+| MODEL-01 | Phase 04.1 | Pending |
+| MODEL-02 | Phase 04.1 | Pending |
+| MODEL-03 | Phase 04.1 | Pending |
+| MODEL-04 | Phase 04.1 | Pending |
+| MODEL-05 | Phase 04.1 | Pending |
+| MODEL-06 | Phase 04.1 | Pending |
+| MODEL-07 | Phase 04.1 | Pending |
+| MODEL-08 | Phase 04.1 | Pending |
 | CLEAN-01 | Phase 5 | Pending |
 | CLEAN-02 | Phase 5 | Pending |
 | CLEAN-03 | Phase 5 | Pending |
 | CLEAN-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 40 total
-- Mapped to phases: 40 (100%)
+- v1 requirements: 48 total (40 extraction + 8 MODEL-* from the inserted Phase 04.1)
+- Mapped to phases: 48 (100%)
 - Unmapped: 0
 
 **Per-phase counts:**
@@ -171,6 +192,7 @@ Deferred to post-extraction backlog. Captured for visibility, not in current roa
 - Phase 2 (Service Infrastructure): 8 requirements
 - Phase 3 (Admin UI + Entra Auth): 7 requirements
 - Phase 4 (MCP Server + Agent Wiring): 8 requirements
+- Phase 04.1 (Package data moves to the store link, INSERTED): 8 requirements
 - Phase 5 (Source-repo Cleanup): 4 requirements
 
 ---
