@@ -20,6 +20,7 @@ from domain.models import (
 )
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
+from domain.pricing import apply_scrape_to_link, unit_price_py
 
 logger = logging.getLogger(__name__)
 
@@ -228,11 +229,12 @@ class PriceCheckScheduler:
         else:
             self._stats["checks_llm"] += 1
 
-        # Record price point
+        # Record price point. store_unit_price_sek is what the STORE printed (D-05) — the
+        # computed kr/unit is derived on read from the link's quantity and never persisted (D-04).
         price_point = PricePoint(
             product_store_id=product_store.id,
             price_sek=extraction.price_sek,
-            unit_price_sek=extraction.unit_price_sek,
+            store_unit_price_sek=extraction.store_unit_price_sek,
             offer_price_sek=extraction.offer_price_sek,
             offer_type=extraction.offer_type,
             offer_details=extraction.offer_details,
@@ -241,6 +243,20 @@ class PriceCheckScheduler:
             checked_at=datetime.now(UTC).replace(tzinfo=None),
         )
         session.add(price_point)
+
+        # Scrape write-path #1 of three (D-07/D-09): autofill the link's quantity when it has
+        # none, flag on conflict, NEVER overwrite the operator's typed value. product_store is
+        # this function's own parameter and _check_due_products joinedloads .product, so the
+        # link and the product's canonical unit are both in hand — no extra query, no lazy load.
+        # The link is attached to the session the caller commits, so the reading persists with
+        # the price point.
+        mismatch = apply_scrape_to_link(product_store, extraction, product_store.product.unit)
+        if mismatch:
+            logger.warning(
+                f"Package quantity mismatch for {product_store.product.name} "
+                f"at {product_store.store.name}: {mismatch}"
+            )
+
         self._stats["checks_success"] += 1
 
         # Check for alerts
@@ -268,13 +284,27 @@ class PriceCheckScheduler:
         if current_price is None:
             return
 
+        # kr/unit is COMPUTED from the LINK's quantity (D-03) — never from anything a store
+        # printed, whose definition varies per store (kr/rulle vs kr/pack vs kr/100g). The link
+        # is a parameter of this method and _check_due_products joinedloads it: no extra query.
+        #
+        # A NULL package_quantity is a LEGITIMATE state (D-02) until the first scrape autofills
+        # it, and it makes both of these None. Every comparison below therefore guards on
+        # `is not None` EXPLICITLY. This is not decoration: a `None <= Decimal` TypeError raised
+        # in here is swallowed by the per-product `except Exception` in _check_due_products,
+        # logged as a failed check, and the operator never learns the watch stopped working.
+        # The old code was only ACCIDENTALLY safe, via an `and extraction.unit_price_sek`
+        # truthiness short-circuit. Deliberate now.
+        package_quantity = product_store.package_quantity
+        current_unit_price = unit_price_py(current_price, package_quantity)
+        regular_unit_price = unit_price_py(extraction.price_sek, package_quantity)
+
         now = datetime.now(UTC).replace(tzinfo=None)
 
         for watch in watches:
             should_alert = False
             price_drop_percent = None
             unit_price_drop_percent = None
-            current_unit_price = extraction.unit_price_sek
 
             # Check target price
             if watch.target_price_sek and current_price <= watch.target_price_sek:
@@ -299,30 +329,34 @@ class PriceCheckScheduler:
                     should_alert = True
                     price_drop_percent = float(drop_percent)
 
-            # Check unit price target
-            if watch.unit_price_target_sek and extraction.unit_price_sek:
-                if extraction.unit_price_sek <= watch.unit_price_target_sek:
-                    should_alert = True
+            # Check unit price target — against the COMPUTED value, with an explicit NULL guard.
+            # A link that still needs an amount produces no alert and no crash.
+            if (
+                watch.unit_price_target_sek is not None
+                and current_unit_price is not None
+                and current_unit_price <= watch.unit_price_target_sek
+            ):
+                should_alert = True
 
-            # Check unit price drop percentage
+            # Check unit price drop percentage. The old code back-derived a package size here
+            # (dividing the offer price BY the scraped unit price) purely because the scheduler
+            # had no quantity to work with — and that divisor can legitimately be None now that
+            # the parser no longer synthesizes one. The quantity lives on the link, so the hack
+            # is deleted rather than ported. Guard the divisor against BOTH None and zero.
             if (
                 watch.unit_price_drop_threshold_percent
-                and extraction.unit_price_sek
-                and extraction.price_sek
+                and extraction.offer_price_sek is not None
+                and current_unit_price is not None
+                and regular_unit_price is not None
+                and regular_unit_price != 0
             ):
-                # Calculate what regular unit price would be if there's an offer
-                if extraction.offer_price_sek:
-                    # units_in_package = offer_price / unit_price
-                    units_in_package = extraction.offer_price_sek / extraction.unit_price_sek
-                    # regular_unit_price = regular_price / units_in_package
-                    regular_unit_price = extraction.price_sek / units_in_package
-                    drop_percent_unit = (
-                        (regular_unit_price - extraction.unit_price_sek) / regular_unit_price
-                    ) * 100
+                drop_percent_unit = (
+                    (regular_unit_price - current_unit_price) / regular_unit_price
+                ) * 100
 
-                    if drop_percent_unit >= watch.unit_price_drop_threshold_percent:
-                        should_alert = True
-                        unit_price_drop_percent = float(drop_percent_unit)
+                if drop_percent_unit >= watch.unit_price_drop_threshold_percent:
+                    should_alert = True
+                    unit_price_drop_percent = float(drop_percent_unit)
 
             # Don't spam - check last alerted time (24h cooldown)
             if should_alert and watch.last_alerted_at:

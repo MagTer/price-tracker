@@ -15,19 +15,28 @@ def _make_extraction(
     price_sek: Decimal | None = Decimal("29.90"),
     offer_price_sek: Decimal | None = None,
     offer_type: str | None = None,
-    unit_price_sek: Decimal | None = None,
+    store_unit_price_sek: Decimal | None = None,
+    package_amount: Decimal | None = None,
+    package_unit: str | None = None,
+    pack_size: int | None = None,
     raw_response: dict[str, str | float | bool | None] | None = None,
 ) -> PriceExtractionResult:
-    """Build a PriceExtractionResult for tests."""
+    """Build a PriceExtractionResult for tests.
+
+    `store_unit_price_sek` is what the STORE printed (D-05) — the scheduler never compares
+    against it. `package_amount` / `package_unit` are the page's quantity EVIDENCE (D-08).
+    """
     return PriceExtractionResult(
         price_sek=price_sek,
-        unit_price_sek=unit_price_sek,
+        store_unit_price_sek=store_unit_price_sek,
         offer_price_sek=offer_price_sek,
         offer_type=offer_type,
         offer_details=None,
         in_stock=True,
         confidence=0.95,
-        pack_size=None,
+        pack_size=pack_size,
+        package_amount=package_amount,
+        package_unit=package_unit,
         raw_response=raw_response if raw_response is not None else {},
     )
 
@@ -39,8 +48,14 @@ def _make_product_store(
     product_id: uuid.UUID | None = None,
     check_weekday: int | None = None,
     check_frequency_hours: int = 72,
+    package_quantity: Decimal | None = None,
+    scraped_package_quantity: Decimal | None = None,
+    product_unit: str | None = "st",
 ) -> MagicMock:
-    """Create a mock ProductStore with nested product and store."""
+    """Create a mock ProductStore with nested product and store.
+
+    package_quantity defaults to None — the D-02 state a link sits in until its first scrape.
+    """
     ps = MagicMock()
     ps.id = uuid.uuid4()
     ps.store_id = store_id or uuid.uuid4()
@@ -50,9 +65,12 @@ def _make_product_store(
     ps.check_frequency_hours = check_frequency_hours
     ps.last_checked_at = None
     ps.next_check_at = None
+    ps.package_quantity = package_quantity
+    ps.scraped_package_quantity = scraped_package_quantity
 
     product = MagicMock()
     product.name = "Mjolk Arla 1.5%"
+    product.unit = product_unit
     ps.product = product
 
     store = MagicMock()
@@ -207,6 +225,52 @@ class TestCheckSingleProduct:
         assert scheduler._stats["checks_llm"] == 1
         assert scheduler._stats["checks_api"] == 0
 
+    @pytest.mark.asyncio
+    async def test_check_single_product_autofills_link_quantity(self) -> None:
+        """Scrape write-path #1 honours D-07: fill the link's quantity when it has none."""
+        scheduler, _, fetcher = _make_scheduler()
+        extraction = _make_extraction(
+            price_sek=Decimal("139.90"),
+            package_amount=Decimal("24"),
+            package_unit="st",
+        )
+
+        with patch.object(
+            scheduler.parser, "extract_price", new_callable=AsyncMock, return_value=extraction
+        ):
+            fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page content"})
+            mock_session = AsyncMock()
+            product_store = _make_product_store(package_quantity=None, product_unit="st")
+
+            await scheduler._check_single_product(product_store, mock_session)
+
+        assert product_store.package_quantity == Decimal("24")
+        assert product_store.scraped_package_quantity == Decimal("24")
+
+    @pytest.mark.asyncio
+    async def test_check_single_product_never_overwrites_link_quantity(self) -> None:
+        """D-07: the page is evidence, the typed value is intent. Evidence does not rewrite it."""
+        scheduler, _, fetcher = _make_scheduler()
+        extraction = _make_extraction(
+            price_sek=Decimal("139.90"),
+            package_amount=Decimal("12"),
+            package_unit="st",
+        )
+
+        with patch.object(
+            scheduler.parser, "extract_price", new_callable=AsyncMock, return_value=extraction
+        ):
+            fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page content"})
+            mock_session = AsyncMock()
+            product_store = _make_product_store(
+                package_quantity=Decimal("24"), product_unit="st"
+            )
+
+            await scheduler._check_single_product(product_store, mock_session)
+
+        assert product_store.package_quantity == Decimal("24")  # untouched
+        assert product_store.scraped_package_quantity == Decimal("12")  # the page's reading
+
 
 # ---------------------------------------------------------------------------
 # _check_alerts
@@ -337,6 +401,138 @@ class TestCheckAlerts:
 
         notifier_mock.send_price_alert.assert_not_called()
         assert scheduler._stats["alerts_sent"] == 0
+
+    @pytest.mark.asyncio
+    async def test_null_quantity_watch_fires_no_alert_and_does_not_crash(self) -> None:
+        """A unit-price watch on a link with NO amount: no alert, no exception (D-02/MODEL-03).
+
+        This is the failure mode the phase exists to prevent. `_check_alerts` is called DIRECTLY
+        here on purpose: going through the outer loop would let the per-product `except Exception`
+        in `_check_due_products` swallow a `None <= Decimal` TypeError, count it as checks_failed,
+        and let this test pass over a scheduler that dies unattended at 06:00 every morning.
+        """
+        email_service = MagicMock()
+        scheduler, _, _ = _make_scheduler(email_service=email_service)
+
+        # The watch would clear its target IF a unit price could be computed at all.
+        watch = _make_watch(unit_price_target_sek=Decimal("10.00"), last_alerted_at=None)
+
+        mock_session = AsyncMock()
+        scalar_result = MagicMock()
+        scalar_result.scalars.return_value.all.return_value = [watch]
+        mock_session.execute = AsyncMock(return_value=scalar_result)
+
+        assert scheduler.notifier is not None
+        notifier_mock: MagicMock = scheduler.notifier  # type: ignore[assignment]
+        notifier_mock.send_price_alert = AsyncMock(return_value=True)
+
+        product_store = _make_product_store(package_quantity=None)
+        extraction = _make_extraction(price_sek=Decimal("139.90"))
+
+        # No try/except: an exception here MUST fail this test, not be counted as a failed check.
+        await scheduler._check_alerts(product_store, extraction, mock_session)
+
+        notifier_mock.send_price_alert.assert_not_called()
+        assert scheduler._stats["alerts_sent"] == 0
+
+    @pytest.mark.asyncio
+    async def test_null_quantity_still_fires_a_plain_target_price_alert(self) -> None:
+        """The NULL guard must not disable the alert paths that never touch a unit price."""
+        email_service = MagicMock()
+        scheduler, _, _ = _make_scheduler(email_service=email_service)
+
+        watch = _make_watch(target_price_sek=Decimal("150.00"), last_alerted_at=None)
+
+        mock_session = AsyncMock()
+        scalar_result = MagicMock()
+        scalar_result.scalars.return_value.all.return_value = [watch]
+        mock_session.execute = AsyncMock(return_value=scalar_result)
+
+        assert scheduler.notifier is not None
+        notifier_mock: MagicMock = scheduler.notifier  # type: ignore[assignment]
+        notifier_mock.send_price_alert = AsyncMock(return_value=True)
+
+        product_store = _make_product_store(package_quantity=None)
+        extraction = _make_extraction(price_sek=Decimal("139.90"))
+
+        await scheduler._check_alerts(product_store, extraction, mock_session)
+
+        notifier_mock.send_price_alert.assert_called_once()
+        # The computed unit price is None — the notifier simply renders no kr/enhet row.
+        assert notifier_mock.send_price_alert.call_args.kwargs["unit_price_sek"] is None
+        assert scheduler._stats["alerts_sent"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unit_price_target_fires_on_computed_value(self) -> None:
+        """The watch compares against the COMPUTED kr/unit, not against anything a store printed.
+
+        24 rolls at 139.90 = 5.83 kr/rulle. A 6.00 target clears; a 5.00 target does not. The
+        store's printed value (99.00 here — a deliberately absurd kr/kg-style number) is ignored.
+        """
+        for target, expect_alert in ((Decimal("6.00"), True), (Decimal("5.00"), False)):
+            email_service = MagicMock()
+            scheduler, _, _ = _make_scheduler(email_service=email_service)
+
+            watch = _make_watch(unit_price_target_sek=target, last_alerted_at=None)
+
+            mock_session = AsyncMock()
+            scalar_result = MagicMock()
+            scalar_result.scalars.return_value.all.return_value = [watch]
+            mock_session.execute = AsyncMock(return_value=scalar_result)
+
+            assert scheduler.notifier is not None
+            notifier_mock: MagicMock = scheduler.notifier  # type: ignore[assignment]
+            notifier_mock.send_price_alert = AsyncMock(return_value=True)
+
+            product_store = _make_product_store(package_quantity=Decimal("24"))
+            extraction = _make_extraction(
+                price_sek=Decimal("139.90"), store_unit_price_sek=Decimal("99.00")
+            )
+
+            await scheduler._check_alerts(product_store, extraction, mock_session)
+
+            if expect_alert:
+                notifier_mock.send_price_alert.assert_called_once()
+                sent = notifier_mock.send_price_alert.call_args.kwargs["unit_price_sek"]
+                assert sent is not None
+                assert round(float(sent), 2) == 5.83
+            else:
+                notifier_mock.send_price_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unit_price_drop_percent_uses_the_links_quantity(self) -> None:
+        """The drop-% is computed from two computed unit prices — no back-derivation, no crash.
+
+        Regular 159.90 / 24 = 6.66; offer 139.90 / 24 = 5.83 → a 12.5% drop clears a 10% threshold.
+        The old code divided BY the scraped unit price, which is None on this extraction.
+        """
+        email_service = MagicMock()
+        scheduler, _, _ = _make_scheduler(email_service=email_service)
+
+        watch = _make_watch(unit_price_drop_threshold_percent=10, last_alerted_at=None)
+
+        mock_session = AsyncMock()
+        scalar_result = MagicMock()
+        scalar_result.scalars.return_value.all.return_value = [watch]
+        mock_session.execute = AsyncMock(return_value=scalar_result)
+
+        assert scheduler.notifier is not None
+        notifier_mock: MagicMock = scheduler.notifier  # type: ignore[assignment]
+        notifier_mock.send_price_alert = AsyncMock(return_value=True)
+
+        product_store = _make_product_store(package_quantity=Decimal("24"))
+        extraction = _make_extraction(
+            price_sek=Decimal("159.90"),
+            offer_price_sek=Decimal("139.90"),
+            store_unit_price_sek=None,  # the page printed none — legitimate after 04.1-02
+        )
+
+        await scheduler._check_alerts(product_store, extraction, mock_session)
+
+        notifier_mock.send_price_alert.assert_called_once()
+        drop = notifier_mock.send_price_alert.call_args.kwargs["unit_price_drop_percent"]
+        assert drop is not None
+        assert round(drop, 1) == 12.5
 
 
 # ---------------------------------------------------------------------------
