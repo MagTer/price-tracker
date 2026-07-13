@@ -1,0 +1,38 @@
+[project]
+name = "price-tracker"
+version = "0.1.0"
+description = "Standalone Swedish grocery and pharmacy price tracker (extracted from ai-agent-platform)"
+authors = [{ name = "Magnus Ternstrom", email = "magnus.ternstrom@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "sqlalchemy[asyncio] (>=2.0,<3.0)",
+    "alembic (>=1.13,<2.0)",
+    "asyncpg (>=0.29,<0.30)",
+    "httpx (>=0.28,<0.29)",
+    "pydantic (>=2.7,<3.0)",
+    "fastapi (>=0.111,<0.112)",
+    "uvicorn[standard] (>=0.30,<0.31)",
+    "fastmcp (>=2.0,<3.0)",
+]
+
+[tool.poetry]
+packages = [
+    { include = "domain", from = "src" },
+    { include = "infra", from = "src" },
+    { include = "api", from = "src" },
+    { include = "mcp_server", from = "src" },
+]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2"
+pytest-asyncio = "^0.23"
+aiosqlite = "^0.22.1"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,726 @@
+<div class="page-title">Price Tracker Admin</div>
+
+<div class="stats-grid">
+    <div class="stat-box">
+        <div class="stat-value" id="stat-products">-</div>
+        <div class="stat-label">Products</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value" id="stat-watches">-</div>
+        <div class="stat-label">Active Watches</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value" id="stat-deals">-</div>
+        <div class="stat-label">Deals Today</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value" id="stat-scheduler">-</div>
+        <div class="stat-label">Scheduler</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Products</div>
+        <div class="header-actions">
+            <input type="text" id="product-search" placeholder="Search products..." class="search-input">
+            <button class="btn btn-primary" onclick="showCreateProductModal()">+ Add Product</button>
+            <button class="btn" onclick="loadExport()">Export</button>
+            <button class="btn" onclick="showImportModal()">Import</button>
+        </div>
+    </div>
+    <div id="products-table-container">
+        <div class="loading">Loading products...</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Current Deals</div>
+        <div class="header-actions">
+            <select id="deal-filter" class="search-input" onchange="loadDeals()">
+                <option value="">All stores</option>
+                <option value="grocery">Grocery</option>
+                <option value="pharmacy">Pharmacy</option>
+            </select>
+        </div>
+    </div>
+    <div id="deals-table-container">
+        <div class="loading">Loading deals...</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Price Watches</div>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="showCreateWatchModal()">+ Add Watch</button>
+        </div>
+    </div>
+    <div id="watches-table-container">
+        <div class="loading">Loading watches...</div>
+    </div>
+</div>
+
+<!-- Create Product Modal -->
+<div class="modal" id="modal-create-product" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Add Product</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-create-product')">&times;</button>
+        </div>
+        <form id="form-create-product" onsubmit="handleCreateProduct(event)">
+            <div class="form-group">
+                <label>Name *</label>
+                <input type="text" name="name" required class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Brand</label>
+                <input type="text" name="brand" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Category</label>
+                <input type="text" name="category" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Unit</label>
+                <input type="text" name="unit" class="form-input" placeholder="e.g. g, ml, st">
+            </div>
+            <div class="form-group">
+                <label>Package Size</label>
+                <input type="text" name="package_size" class="form-input" placeholder="e.g. 24-pack, 500ml">
+            </div>
+            <div class="form-group">
+                <label>Package Quantity</label>
+                <input type="number" step="0.01" name="package_quantity" class="form-input" placeholder="e.g. 24, 0.5">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Create Product</button>
+                <button type="button" class="btn" onclick="closeModal('modal-create-product')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Link Store Modal -->
+<div class="modal" id="modal-link-store" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Link to Store</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-link-store')">&times;</button>
+        </div>
+        <form id="form-link-store" onsubmit="handleLinkStore(event)">
+            <input type="hidden" name="product_id" id="link-product-id">
+            <div class="form-group">
+                <label>Store *</label>
+                <select name="store_id" id="link-store-select" required class="form-input"></select>
+            </div>
+            <div class="form-group">
+                <label>Product URL *</label>
+                <input type="url" name="store_url" required class="form-input" placeholder="https://...">
+            </div>
+            <div class="form-group">
+                <label>Check Frequency (hours)</label>
+                <input type="number" name="check_frequency_hours" value="72" min="72" max="240" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Check Weekday (0=Mon, 6=Sun, empty=frequency)</label>
+                <input type="number" name="check_weekday" min="0" max="6" class="form-input">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Link Store</button>
+                <button type="button" class="btn" onclick="closeModal('modal-link-store')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Price History Modal -->
+<div class="modal" id="modal-price-history" style="display:none;">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>Price History</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-price-history')">&times;</button>
+        </div>
+        <div id="price-history-chart-container">
+            <canvas id="price-history-chart"></canvas>
+        </div>
+        <div id="price-history-table"></div>
+    </div>
+</div>
+
+<!-- Create Watch Modal -->
+<div class="modal" id="modal-create-watch" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Add Price Watch</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-create-watch')">&times;</button>
+        </div>
+        <form id="form-create-watch" onsubmit="handleCreateWatch(event)">
+            <div class="form-group">
+                <label>Product *</label>
+                <select name="product_id" id="watch-product-select" required class="form-input"></select>
+            </div>
+            <div class="form-group">
+                <label>Email *</label>
+                <input type="email" name="email_address" required class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Target Price (SEK)</label>
+                <input type="number" step="0.01" name="target_price_sek" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="alert_on_any_offer"> Alert on any offer
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Price Drop Threshold (%)</label>
+                <input type="number" name="price_drop_threshold_percent" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Unit Price Target (SEK)</label>
+                <input type="number" step="0.01" name="unit_price_target_sek" class="form-input">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Create Watch</button>
+                <button type="button" class="btn" onclick="closeModal('modal-create-watch')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Import Modal -->
+<div class="modal" id="modal-import" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Import Data</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-import')">&times;</button>
+        </div>
+        <form id="form-import" onsubmit="handleImport(event)">
+            <div class="form-group">
+                <label>Mode</label>
+                <select name="mode" class="form-input">
+                    <option value="merge">Merge</option>
+                    <option value="replace">Replace</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>JSON File *</label>
+                <input type="file" name="file" accept="application/json" required class="form-input">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Import</button>
+                <button type="button" class="btn" onclick="closeModal('modal-import')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Toast container -->
+<div class="shared-toast" id="toast"></div>
+
+<!-- SECTION_SEPARATOR -->
+/* Admin dashboard-specific styles */
+.search-input {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    min-width: 180px;
+}
+.search-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+}
+.modal-content {
+    background: var(--bg-card);
+    border-radius: 8px;
+    width: 90%;
+    max-width: 520px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+}
+.modal-large {
+    max-width: 800px;
+}
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+.modal-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+}
+form {
+    padding: 20px;
+}
+.form-group {
+    margin-bottom: 16px;
+}
+.form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    color: var(--text);
+}
+.form-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: var(--bg-card);
+    color: var(--text);
+}
+.form-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    padding-top: 8px;
+}
+.price-good {
+    color: var(--success);
+    font-weight: 600;
+}
+.price-warn {
+    color: var(--warning);
+    font-weight: 600;
+}
+.price-bad {
+    color: var(--error);
+    font-weight: 600;
+}
+.action-btn {
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+}
+.action-btn:hover {
+    background: var(--bg);
+}
+.chart-wrap {
+    height: 300px;
+    padding: 16px;
+}
+
+<!-- SECTION_SEPARATOR -->
+// Dashboard scripts
+const API_BASE = '';
+let allProducts = [];
+let allStores = [];
+
+function showToast(message, type='success') {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = 'shared-toast ' + type;
+    setTimeout(() => { toast.className = 'shared-toast'; }, 3000);
+}
+
+function closeModal(id) {
+    document.getElementById(id).style.display = 'none';
+}
+
+async function apiGet(path) {
+    const r = await fetch(API_BASE + path);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+}
+
+async function apiPost(path, body) {
+    const r = await fetch(API_BASE + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+}
+
+async function apiDelete(path) {
+    const r = await fetch(API_BASE + path, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+}
+
+async function loadStats() {
+    try {
+        const [products, watches, deals, sched] = await Promise.all([
+            apiGet('/products'),
+            apiGet('/watches'),
+            apiGet('/deals'),
+            apiGet('/scheduler/status')
+        ]);
+        document.getElementById('stat-products').textContent = products.length;
+        document.getElementById('stat-watches').textContent = watches.length || 0;
+        document.getElementById('stat-deals').textContent = deals.length;
+        document.getElementById('stat-scheduler').textContent = sched.running ? 'ON' : 'OFF';
+        document.getElementById('stat-scheduler').style.color = sched.running ? 'var(--success)' : 'var(--error)';
+    } catch (e) {
+        console.error('Stats load failed', e);
+    }
+}
+
+async function loadStores() {
+    allStores = await apiGet('/stores');
+}
+
+function buildProductsTable(products) {
+    if (!products.length) {
+        return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>No products yet. Add one to get started.</p></div>';
+    }
+    let html = '<table><thead><tr><th>Name</th><th>Brand</th><th>Category</th><th>Stores</th><th>Latest Price</th><th>Actions</th></tr></thead><tbody>';
+    for (const p of products) {
+        const storeNames = (p.stores || []).map(s => s.store_name).join(', ') || '-';
+        const latest = (p.stores || []).find(s => s.price_sek != null);
+        const priceStr = latest ? latest.price_sek + ' kr' : '-';
+        html += `<tr>
+            <td>${escapeHtml(p.name)}</td>
+            <td>${escapeHtml(p.brand || '-')}</td>
+            <td>${escapeHtml(p.category || '-')}</td>
+            <td>${escapeHtml(storeNames)}</td>
+            <td>${priceStr}</td>
+            <td>
+                <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Link</button>
+                <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">History</button>
+                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>
+            </td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+async function loadProducts() {
+    try {
+        const search = document.getElementById('product-search').value;
+        const url = search ? `/products?search=${encodeURIComponent(search)}` : '/products';
+        allProducts = await apiGet(url);
+        document.getElementById('products-table-container').innerHTML = buildProductsTable(allProducts);
+    } catch (e) {
+        document.getElementById('products-table-container').innerHTML = '<div class="empty-state"><p>Failed to load products.</p></div>';
+    }
+}
+
+async function loadDeals() {
+    try {
+        const filter = document.getElementById('deal-filter').value;
+        const url = filter ? `/deals?store_type=${encodeURIComponent(filter)}` : '/deals';
+        const deals = await apiGet(url);
+        const container = document.getElementById('deals-table-container');
+        if (!deals.length) {
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>No active deals right now.</p></div>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Product</th><th>Store</th><th>Regular</th><th>Offer</th><th>Discount</th><th>Type</th></tr></thead><tbody>';
+        for (const d of deals) {
+            html += `<tr>
+                <td>${escapeHtml(d.product_name)}</td>
+                <td>${escapeHtml(d.store_name)}</td>
+                <td>${d.price_sek != null ? d.price_sek + ' kr' : '-'}</td>
+                <td class="price-good">${d.offer_price_sek} kr</td>
+                <td class="price-good">${d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent}%</td>
+                <td><span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } catch (e) {
+        document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Failed to load deals.</p></div>';
+    }
+}
+
+async function loadWatches() {
+    try {
+        const watches = await apiGet('/watches');
+        const container = document.getElementById('watches-table-container');
+        if (!watches.length) {
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>No price watches set up yet.</p></div>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Product</th><th>Email</th><th>Target</th><th>Alert on Offer</th><th>Actions</th></tr></thead><tbody>';
+        for (const w of watches) {
+            html += `<tr>
+                <td>${escapeHtml(w.product_name || w.product_id)}</td>
+                <td>${escapeHtml(w.email_address)}</td>
+                <td>${w.target_price_sek != null ? w.target_price_sek + ' kr' : '-'}</td>
+                <td>${w.alert_on_any_offer ? 'Yes' : 'No'}</td>
+                <td>
+                    <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Delete</button>
+                </td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } catch (e) {
+        document.getElementById('watches-table-container').innerHTML = '<div class="empty-state"><p>Failed to load watches.</p></div>';
+    }
+}
+
+function showCreateProductModal() {
+    document.getElementById('modal-create-product').style.display = 'flex';
+}
+
+async function handleCreateProduct(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+        tenant_id: 'f21b6620-c793-46e3-a354-dfcd9956b4a2',
+        name: fd.get('name'),
+        brand: fd.get('brand') || null,
+        category: fd.get('category') || null,
+        unit: fd.get('unit') || null,
+        package_size: fd.get('package_size') || null,
+        package_quantity: fd.get('package_quantity') ? parseFloat(fd.get('package_quantity')) : null
+    };
+    try {
+        await apiPost('/products', body);
+        closeModal('modal-create-product');
+        e.target.reset();
+        showToast('Product created');
+        loadProducts();
+        loadStats();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+async function deleteProduct(id) {
+    if (!confirm('Delete this product and all its data?')) return;
+    try {
+        await apiDelete('/products/' + id);
+        showToast('Product deleted');
+        loadProducts();
+        loadStats();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+function showLinkStoreModal(productId) {
+    const select = document.getElementById('link-store-select');
+    select.innerHTML = allStores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    document.getElementById('link-product-id').value = productId;
+    document.getElementById('modal-link-store').style.display = 'flex';
+}
+
+async function handleLinkStore(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const productId = document.getElementById('link-product-id').value;
+    const body = {
+        store_id: fd.get('store_id'),
+        store_url: fd.get('store_url'),
+        check_frequency_hours: parseInt(fd.get('check_frequency_hours')),
+        check_weekday: fd.get('check_weekday') ? parseInt(fd.get('check_weekday')) : null
+    };
+    try {
+        await apiPost('/products/' + productId + '/stores', body);
+        closeModal('modal-link-store');
+        e.target.reset();
+        showToast('Store linked');
+        loadProducts();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+let priceChart = null;
+
+async function showPriceHistory(productId, productName) {
+    document.getElementById('modal-price-history').style.display = 'flex';
+    try {
+        const history = await apiGet('/products/' + productId + '/prices?days=90');
+        const tableDiv = document.getElementById('price-history-table');
+        if (!history.length) {
+            tableDiv.innerHTML = '<p class="empty-state">No price history yet.</p>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Date</th><th>Store</th><th>Price</th><th>Offer</th><th>In Stock</th></tr></thead><tbody>';
+        for (const h of history.slice(0, 50)) {
+            html += `<tr>
+                <td>${h.checked_at ? h.checked_at.slice(0,10) : '-'}</td>
+                <td>${escapeHtml(h.store_name)}</td>
+                <td>${h.price_sek != null ? h.price_sek + ' kr' : '-'}</td>
+                <td>${h.offer_price_sek != null ? h.offer_price_sek + ' kr' : '-'}</td>
+                <td>${h.in_stock ? 'Yes' : 'No'}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        tableDiv.innerHTML = html;
+
+        // Chart.js line chart
+        if (window.Chart && history.length > 1) {
+            const ctx = document.getElementById('price-history-chart').getContext('2d');
+            if (priceChart) priceChart.destroy();
+            const labels = history.map(h => h.checked_at ? h.checked_at.slice(0,10) : '').reverse();
+            const data = history.map(h => h.price_sek).reverse();
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Price (SEK)',
+                        data: data,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37,99,235,0.1)',
+                        fill: true,
+                        tension: 0.2,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { title: { display: true, text: productName } },
+                    scales: { y: { beginAtZero: false } }
+                }
+            });
+        }
+    } catch (err) {
+        document.getElementById('price-history-table').innerHTML = '<p class="empty-state">Failed to load history.</p>';
+    }
+}
+
+async function loadExport() {
+    try {
+        const r = await fetch(API_BASE + '/export?include_history=true');
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'price-tracker-export.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Export downloaded');
+    } catch (err) {
+        showToast('Export failed: ' + err.message, 'error');
+    }
+}
+
+function showImportModal() {
+    document.getElementById('modal-import').style.display = 'flex';
+}
+
+async function handleImport(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+        const r = await fetch(API_BASE + '/import?mode=' + encodeURIComponent(fd.get('mode')), {
+            method: 'POST',
+            body: fd
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        closeModal('modal-import');
+        showToast(`Import done: ${data.summary.products_created} created, ${data.summary.watches_created} watches`);
+        loadProducts(); loadWatches(); loadStats();
+    } catch (err) {
+        showToast('Import failed: ' + err.message, 'error');
+    }
+}
+
+function showCreateWatchModal() {
+    const select = document.getElementById('watch-product-select');
+    select.innerHTML = allProducts.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    document.getElementById('modal-create-watch').style.display = 'flex';
+}
+
+async function handleCreateWatch(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+        product_id: fd.get('product_id'),
+        email_address: fd.get('email_address'),
+        target_price_sek: fd.get('target_price_sek') ? parseFloat(fd.get('target_price_sek')) : null,
+        alert_on_any_offer: !!fd.get('alert_on_any_offer'),
+        price_drop_threshold_percent: fd.get('price_drop_threshold_percent') ? parseInt(fd.get('price_drop_threshold_percent')) : null,
+        unit_price_target_sek: fd.get('unit_price_target_sek') ? parseFloat(fd.get('unit_price_target_sek')) : null
+    };
+    try {
+        await apiPost('/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2', body);
+        closeModal('modal-create-watch');
+        e.target.reset();
+        showToast('Watch created');
+        loadWatches();
+        loadStats();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+async function deleteWatch(id) {
+    if (!confirm('Delete this watch?')) return;
+    try {
+        await apiDelete('/watches/' + id);
+        showToast('Watch deleted');
+        loadWatches();
+        loadStats();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+function escapeHtml(text) {
+    if (text == null) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Search debounce
+let searchTimeout;
+document.getElementById('product-search').addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(loadProducts, 250);
+});
+
+// Delegated product action handlers — avoids embedding product names in
+// inline onclick attributes (which breaks for names containing quotes).
+document.getElementById('products-table-container').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-id');
+    const action = btn.getAttribute('data-action');
+    if (action === 'link') {
+        showLinkStoreModal(id);
+    } else if (action === 'history') {
+        const product = (allProducts || []).find(p => p.id === id);
+        showPriceHistory(id, product ? product.name : '');
+    } else if (action === 'delete') {
+        deleteProduct(id);
+    }
+});
+
+// Init
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadStores();
+    loadProducts();
+    loadDeals();
+    loadWatches();
+    loadStats();
+});

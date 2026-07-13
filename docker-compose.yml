@@ -1,0 +1,49 @@
+# Local development only. The production deployment lives in the home-server
+# repo (compose/dokploy-apps/price-tracker/) — Dokploy-managed Traefik + Entra
+# ingress, pinned GHCR image, alembic migration in the command. This file is
+# never deployed; it just gives a Postgres + app stack for local dev.
+# D-13: No Traefik labels in this repo. Routing/TLS owned by the ingress stack.
+# The app service joins an external `edge` docker network so a local proxy can reach it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: price_tracker_postgres
+    environment:
+      POSTGRES_USER: price_tracker
+      POSTGRES_PASSWORD: price_tracker
+      POSTGRES_DB: price_tracker
+    ports:
+      # local dev only — lets you run psql against the container from the host
+      - "5432:5432"
+    volumes:
+      - price_tracker_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U price_tracker -d price_tracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: price_tracker_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://price_tracker:price_tracker@postgres:5432/price_tracker
+    networks:
+      - default
+      - edge
+    restart: unless-stopped
+    # No ports published — the upstream proxy reaches the app via the `edge` network.
+
+volumes:
+  price_tracker_pg_data:
+    name: price_tracker_pg_data
+
+networks:
+  edge:
+    external: true

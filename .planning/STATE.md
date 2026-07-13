@@ -1,0 +1,115 @@
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-05-04)
+
+**Project code:** PT
+**Core value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
+**Current focus:** Phase 4 — MCP Server + Agent Wiring has a verified gap (agent-platform registration + `mcp.<domain>` ingress not done); Phase 5 is blocked on this until resolved
+
+## Current Position
+
+Phase: 4 of 5 (MCP Server + Agent Wiring) — gaps found, blocking Phase 5
+Plan: 1 of 1 in current phase (retroactively documented 2026-07-06)
+Status: Phases 1-3 complete and verified (Phase 2/3 retroactively backfilled 2026-07-06 with 1 flagged live-check caveat each — see below). Phase 4's MCP server itself is built and tested (4 tools + bearer auth), but its `mcp.<domain>` ingress and agent-platform registration are NOT done — retroactive verification 2026-07-06 found `gaps_found` status. Phase 5 (Source-repo Cleanup) should not start until this is resolved, per ROADMAP.md's own stated Phase 5 dependency ("MCP must be live and `priser` verified end-to-end before deleting source paths").
+Last activity: 2026-07-13 — Djupanalys av hela kodbasen + autonom åtgärdssession (utan formell GSD-pipeline på Magnus begäran, med gating + state-loggning): JSON-LD-extractor (D-22), confidence-golv (D-23), MCP fail-closed (D-24). Faktakorrigering: Entra-ingressen är live sedan 2026-07-09 (se Decisions). Pågående: MCP-route-förberedelse i home-server-repot (egen branch, Magnus granskar).
+
+Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 5
+- Average duration: ~11 min
+- Total execution time: ~54 min
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 1. Skeleton + Domain Copy | 5/5 | ~54 min | ~11 min |
+| 2. Service Infrastructure | 1/1 | — | — |
+| 3. Admin UI + IAP Header Trust | 1/1 | — | — |
+| 4. MCP Server + Agent Wiring | 1/1 | — | — |
+
+**Recent Trend:**
+- Phases 2-4 completed in a single autonomous session
+- New test coverage: 2 test files (~120 LOC) covering admin API and MCP tools
+
+*Updated after each plan completion*
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- Initialization: Single-user (Magnus-only) auth with `tenant_id` UUID column kept for future
+- Initialization: Agent integration via MCP server (not REST), FastMCP library
+- Initialization: OpenRouter direct (no LiteLLM proxy)
+- Initialization: Squash 3 source migrations into one initial migration; drop `price_tracker_` table prefix
+- Plan 01-01: Adapted pyproject.toml to Poetry 2.x PEP 621 `[project]` table (deprecation-warning fix); kept `[tool.poetry] packages = [...]` for src-layout — same dep set, same Phase 1 minimums (Rule 3 deviation)
+- Plan 01-03: Removed redundant `uq_store_slug` named UniqueConstraint from squashed migration — the unique index `ix_stores_slug` produced by `mapped_column(unique=True, index=True)` already enforces slug uniqueness; the named constraint was reported as drift by `alembic check` (Rule 1 deviation, kept migration faithful to ORM metadata)
+- Plan 01-03: Used Alembic async template (env.py uses `async_engine_from_config` against the `postgresql+asyncpg://` URL) — keeps alembic CLI URL identical to runtime URL, avoids dual sync/async driver config
+- Plan 01-04: No `tests/conftest.py` created — source repo had none in `tests/`, each test file constructs its own MagicMock/AsyncMock fixtures inline. Adding a conftest would have been an unsolicited refactor (verbatim port doctrine).
+- Plan 01-05: Bumped Dockerfile `POETRY_VERSION` from plan-spec 1.8.3 to 2.3.2 to match the project's PEP 621 `[project]` table (Plan 01-01 deviation continuation) — Poetry 1.8.3 rejected the manifest with "fields ['authors', 'description', 'name', 'version'] are required in package mode" (Rule 1 deviation, fix folded into Task 1 commit)
+- Plan 01-05: Added `!.env.template` exception to `.gitignore` so the env-var-contract template can be committed (was matched by `.env.*` rule). Naming convention preserved per plan spec (Rule 3 deviation)
+- 2026-05-04 D-19 reassess: Locked MCP subdomain (`mcp.<domain>`) over `/mcp` path because IAP auth-bypass is per-host. Locked IAP header trust (`X-Auth-Request-Email`) as the Phase 3 auth model — drops `fastapi-azure-auth`, `pyjwt`, `cryptography` from this repo permanently. Locked edge-proxy stack as out of the price-tracker extraction milestone (does NOT belong inside extraction milestone; hosting target corrected 2026-07-06 — see D-20 below).
+- 2026-07-06 D-20 reassess: Corrected edge-proxy ingress hosting description from a standalone hand-built VM to Dokploy-managed ingress. Architecture unchanged — still Traefik + auth-middleware (oauth2-proxy-style header injection) terminating Entra OIDC and forwarding `X-Auth-Request-Email`; only the hosting/ownership model changed (Dokploy manages it, not a hand-built separate-repo stack). EDGE-01 remains out of the price-tracker extraction milestone's build scope; ingress is not yet built, pending Entra client registration.
+- 2026-07-06 D-21: Retroactively backfilled CONTEXT/PLAN/SUMMARY/VERIFICATION for Phases 2-4 (quick task 260706-w69) to reconcile GSD phase-tracking with actual delivered code (all 3 phases were implemented directly in commit d92372a without the formal pipeline, so `.planning/phases/` had no directories for them and GSD's tracking recommended a fresh `/gsd-discuss-phase 2` against already-working code). Phase 2/3 verified passed with 1 flagged live-check caveat each (Willys live price check; live UI walkthrough) — accepted per user decision. Phase 4 verified gaps_found: agent-platform registration and `mcp.<domain>` ingress genuinely not done. Corrected ROADMAP.md checkbox/progress-table and REQUIREMENTS.md's MCP-05/INFRA-06 traceability entries accordingly. Note: **D-20 is reserved** (not yet committed) for the still-pending edge-proxy Dokploy reassess quick task (260706-tq5) — use **D-22** for the next new decision, not D-20.
+
+- 2026-07-13 D-22: JSON-LD-extraktionssteg tillagt — kedjan är nu butiks-API → JSON-LD (schema.org Product/Offer ur rå HTML) → LLM-kaskad. Verifierat mot live-produktsidor hos alla fyra LLM-beroende butiker (ICA handlaprivatkund utan inloggning, Apotea, Med24, DOZ). WebFetcher returnerar nu rå `html` vid sidan av extraherad text. Motiv: exakta priser utan LLM-kostnad/hallucination, samma nätverksavtryck (Magnus 2026-07-13: manuell URL-inmatning är avsiktlig anti-block-policy — ingen produkt-discovery ska byggas). Commit 9337f3d.
+- 2026-07-13 D-23: `PRICE_PARSER_MIN_CONFIDENCE` (default 0.6) acceptansgolv — LLM-extraktioner under golvet kasseras (price_sek=None → callers hoppar över lagring) i stället för att sparas. Stänger REL-05 (fallback-tröskel 0.0). Commit 9337f3d.
+- 2026-07-13 D-24: MCP-endpointen failar stängt — utan `MCP_BEARER_TOKEN` svarar middlewaren 503 på allt (tidigare monterades appen oskyddad med bara en log-warning). hmac.compare_digest för tokenjämförelse. Motiv: containrar på delade `dokploy-network` når appen direkt förbi Traefik-gaten (ADR-009 i home-server accepterar den risken förutsatt att appar har egen auth). Commit 1815757.
+- 2026-07-13 D-25: MCP-endpointens path fixad till `/mcp/` (fastmcp:s interna default `/mcp` dubblades av FastAPI-mounten till `/mcp/mcp/`); extern URL blir `https://mcp.<domain>/mcp/` per D-18. Commit 3d42ab8.
+- 2026-07-13 D-26: Robusthetspaket — DB-medveten `/health` (SELECT 1, 503 vid nere), N+1 i list_products ersatt med batchade queries + row_number-window (verifierad mot riktig Postgres), import replace-läge i en transaktion, tenant/email-validering i create/update-endpoints. Commit c4e759b. Scheduler: per-item-sessioner i `_check_due_products` så rate-limit-sovningar aldrig håller DB-anslutning; schemauppdatering via explicit UPDATE på detachade rader. Commit 965d2b4.
+- 2026-07-13 D-27: home-server-branch `feat/price-tracker-mcp-route` (pushad, INTE mergad — Magnus granskar): path-scopad Traefik-router `Host(mcp.DOMAIN) && PathPrefix(/mcp)` utan entra-middleware (ADR-009-undantag dokumenterat), env-passthrough för ALLOWED_ENTRA_EMAIL/MCP_BEARER_TOKEN/OPENROUTER_*/SMTP_* (composen skickade tidigare bara DATABASE_URL — admin-UI:t hade 403:at allt), image-pin bumpad till v0.2.0, mcp.falle.se i zonfilen. Operatörssteg i commit-meddelandet (bbd43c1): tagga v0.2.0, Cloudflare-DNS, Dokploy-env + SOPS.
+- 2026-07-13 D-28: Portal + API flyttade från `/admin`-prefixet till roten (prefixet fanns bara för att OpenWebUI ägde `/` i källplattformen; Magnus beslut). Gamla `/admin`-URL:er 308-redirectar till `/`. Commit 4722f49 (+ home-server-kommentar 74eb6fa på MCP-branchen).
+- 2026-07-13 D-29 (SUPERSEDES D-18): Ingen mcp-subdomän — MCP:n serveras på `https://price.<domain>/mcp/`. D-18 låste `mcp.<domain>` utifrån antagandet att IAP-bypass är per host; med Traefik forwardAuth är bypass per router, så en path-scopad ogatad router (`Host(price) && PathPrefix(/mcp)`, explicit priority=100 över den gatade Host-routern) räcker (Magnus beslut). Sparar DNS-post, cert och ett operatörssteg. home-server-branch dff244d; app-repots docstrings uppdaterade.
+- 2026-07-13 D-30: Deploy-readiness för v0.2.0 — containern kör som uid 1001 (icke-root), libpq bortstädat, Chart.js self-hostad på `/static` (ingen CDN-dependens i portalen). Hela imagen röktestad lokalt mot dev-postgres: migrations seedar 5 butiker, /health db:true, auth-gate 403/200/403, /admin 308→/, /mcp/ 401 utan bearer + fullt MCP initialize-handskak med. Commit 8d7ad3c. Inga deploy-blockerare kvar från djupanalysen.
+- 2026-07-13 FAKTAKORRIGERING: Entra-ingressen ÄR byggd och i produktion sedan 2026-07-09/10 (home-server-repot: oauth2-proxy v7.15.2 + Traefik forwardAuth `entra-auth@file`, authResponseHeaders X-Auth-Request-User/Email, email-claim = preferred_username/UPN). Dokploy-composen för price-tracker (host `price.${DOMAIN}`, pinnad GHCR-tag, alembic-migrering i command, healthcheck) finns i home-server `compose/dokploy-apps/price-tracker/`. Detta gör tidigare "ingress not built"-skrivningar i STATE.md/CLAUDE.md/ROADMAP.md inaktuella — städning delegerad till Opus-kravställning. OBS: `ALLOWED_ENTRA_EMAIL` måste matcha UPN, inte nödvändigtvis gmail-adressen.
+- 2026-07-13 D-31: Opus städ-/härdningssession (OPUS-HANDOFF.md uppgift 3–8, utan formell GSD-pipeline, atomiska commits + pytest-gate 113→117 gröna). (3) docs-faktakorrigering: admin.py-docstrings IAP-header-trust i st f Entra-roll + döda `admin:`-args borttagna, CLAUDE.md/ROADMAP/REQUIREMENTS uppdaterade till live-ingress + `/mcp`-path (D-28/D-29), docker-compose.yml märkt local-dev-only (commit 26f20fe). (4) README-runbok med env-var-kontrakt, säkerhetsmodell och release-flöde (commit a295e2f). (5) admin.py: path-param-typer `str|None`→`str`, 5 redundanta per-route `require_auth`-deps borttagna (commit 239f46d). (6) escapeHtml escapar nu citattecken + produkt-action-knappar flyttade till data-attribut + delegerad listener — History-knappen quote-säker (verifierad via node-harness), commit f6ec6c4. (7) IFetcher krympt till fetch()+close(), döda search/research-stubbar borttagna (commit 6ed9f4f). (8) Willys comparePrice strippar enhetssuffix (`kr/kg`,`kr/st`) före Decimal + tester (commit 119f2f2). Mid-task-ändring från Magnus: e-postbackend byter SMTP→Resend HTTP-API (implementeras av huvudsessionen på samma branch); README dokumenterar RESEND_API_KEY+EMAIL_FROM, inga SMTP_*. Kvarvarande SMTP/aiosmtplib-omnämnanden i CLAUDE.md-stacken + REQUIREMENTS INFRA-02/DEPLOY-01/04 lämnade orörda (tillhör huvudsessionens email-swap-beslut).
+
+### Pending Todos
+
+- Opus-kravställning (skrivs när Magnus ber om den): Dockerfile USER + stale kommentar + libpq-trim, /health med DB-ping, självhostad Chart.js, N+1 i list_products, tenant/email-validering i create-endpoints, import-replace i en transaktion, stale Entra-docstrings + inaktuella ingress-referenser i CLAUDE.md/ROADMAP/STATE, README-runbok, escapeHtml-quotes i admin.html.
+- Hermes-registrering av MCP-servern (`/platformadmin/mcp/` i ai-agent-platform) — kvarstående Phase 4-gap, görs efter att MCP-routen finns i home-server.
+
+### Blockers/Concerns
+
+- Phases must run sequentially despite `parallelization=true` in config — each gate is a precondition for the next phase's work. Plans within a phase may parallelize.
+- Email backend (SMTP via aiosmtplib vs AWS SES) — decide during Phase 2
+- MCP subdomain (`mcp.<domain>`) is now LOCKED for Phase 4 (was: TBD); IAP per-host bypass is the rationale (D-18)
+- **Edge-proxy / portal stack** is operated within Dokploy's managed scope, out of this repo's build scope (D-18, EDGE-01; hosting reassessed 2026-07-06 per D-20). Phases 3 + 4 ASSUME the IAP exists; if it does not exist when Phase 3 lands, Phase 3 still ships behind a "trust the header" dependency and the operator runs the app in a private network until the Dokploy-managed ingress is built (pending Entra client registration).
+- **Phase 4 gap (2026-07-06 retroactive verification):** The MCP server itself works and is tested (4 tools, bearer auth), but the `mcp.<domain>` ingress (Dokploy-managed, not yet built) and agent-platform `/platformadmin/mcp/` registration (separate `ai-agent-platform` repo, never attempted) are NOT done. Phase 5 explicitly depends on "MCP must be live and `priser` verified end-to-end" — this precondition is unmet. Do not start Phase 5 until this gap is closed or the dependency is explicitly re-scoped. See `.planning/phases/04-mcp-server-agent-wiring/04-VERIFICATION.md` for the full gap summary.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260706-rso | Fix 4 pre-Phase-5 blockers: mcp/mcp_server package collision, doubled /v1 in OpenRouter URL, stale LiteLLM model aliases, fastmcp 1.0→2.x bump | 2026-07-06 | dd547bd | [260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-](./quick/260706-rso-fix-4-pre-phase-5-blockers-1-rename-src-/) |
+| 260706-t3p | Fix CLAUDE.md stale mcp/ reference + propagate MCP sub-app lifespan into create_app() so the streamable-HTTP session manager actually starts | 2026-07-06 | 7a3127b | [260706-t3p-fix-2-issues-flagged-after-quick-task-26](./quick/260706-t3p-fix-2-issues-flagged-after-quick-task-26/) |
+| 260706-tha | Fix 4 stale Entra OIDC references in CLAUDE.md to match the locked IAP header-trust auth model (X-Auth-Request-Email via Dokploy-managed Traefik+auth-middleware ingress, not yet built) | 2026-07-06 | d094d70 | [260706-tha-fix-4-stale-entra-oidc-references-in-cla](./quick/260706-tha-fix-4-stale-entra-oidc-references-in-cla/) |
+| 260706-w69 | Backfill retroactive GSD phase artifacts for Phases 2-4 (implemented outside the formal pipeline); discovered and corrected Phase 4's optimistic "Complete" marking to gaps_found (agent-platform registration + mcp.<domain> ingress not done) | 2026-07-06 | d1ae100 | [260706-w69-backfill-retroactive-gsd-phase-artifacts](./quick/260706-w69-backfill-retroactive-gsd-phase-artifacts/) |
+| 260706-tq5 | Reassess edge-proxy/ingress hosting (EDGE-01, D-18) across PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md: corrected from a standalone hand-built VM to Dokploy-managed ingress (architecture and IAP header-trust auth unchanged); recorded D-20 | 2026-07-06 | e8e208c | [260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac](./quick/260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac/) |
+
+## Deferred Items
+
+Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIREMENTS.md):
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Reliability | REL-01..05 (retry/backoff, raw_response, soft-delete, rate limiting, fallback threshold) | v2 backlog | Init |
+| Extraction Quality | EXT-01..02 (structured extractors, dedup) | v2 backlog | Init |
+| Notifications | NOTF-01 (Telegram/push) | v2 backlog | Init |
+| Analytics | ANAL-01 (price trends/volatility) | v2 backlog | Init |
+| i18n | I18N-01 (externalize sv-SE strings) | v2 backlog | Init |
+| Edge proxy / portal | EDGE-01 (Traefik + oauth2-proxy + Homepage, operated within Dokploy's managed scope) | Out of milestone | 2026-05-04 (D-19 reassess); hosting corrected 2026-07-06 (D-20) |
+
+## Session Continuity
+
+Last session: 2026-05-04
+Stopped at: Phase 1 verified + D-19 roadmap reassess complete. REQUIREMENTS.md AUTH-01..04, MCP-05, DEPLOY-01/03/04, DB-03, TEST-02 rewritten to match locked decisions (D-03/D-04/D-10/D-17/D-18). ROADMAP.md Phase 3 + Phase 4 sections rewritten. PROJECT.md Constraints + Key Decisions updated; EDGE-01 added to v2 backlog. Ready to enter Phase 2 (Service Infrastructure) discuss → plan → execute.
+Resume command: `/gsd-discuss-phase 2` (or continue `/gsd-autonomous` from current main thread)
