@@ -38,9 +38,10 @@ from domain.tenant import DEFAULT_TENANT_ID
 
 LOGGER = logging.getLogger(__name__)
 
+# No path prefix: the /admin prefix was a holdover from the source platform
+# where OpenWebUI owned "/" — standalone, this UI+API is the whole app.
 router = APIRouter(
-    prefix="/admin",
-    tags=["platform-admin", "price-tracker"],
+    tags=["price-tracker"],
     dependencies=[Depends(require_auth)],
 )
 
@@ -1797,13 +1798,13 @@ def _get_admin_sidebar_html() -> str:
     return """
     <aside class="admin-sidebar">
         <div class="sidebar-header">
-            <a href="/admin" class="sidebar-logo">
+            <a href="/" class="sidebar-logo">
                 <span>&#128181;</span>
                 Price Tracker
             </a>
         </div>
         <nav class="sidebar-nav">
-            <a href="/admin" class="nav-item active">
+            <a href="/" class="nav-item active">
                 <span class="nav-icon">&#128181;</span>
                 Price Tracker
             </a>
@@ -1822,7 +1823,7 @@ def _get_admin_header_html(user_email: str) -> str:
     return f"""
     <header class="admin-header">
         <div class="breadcrumbs">
-            <a href="/admin">Admin</a>
+            <a href="/">Admin</a>
             <span class="separator">/</span>
             <span class="current">Price Tracker</span>
         </div>

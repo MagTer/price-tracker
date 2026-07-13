@@ -37,12 +37,12 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Price Tracker", lifespan=lifespan)
 
-    @app.get("/")
-    async def root():
-        # The /admin prefix is a holdover from the source platform where
-        # OpenWebUI owned "/" — standalone, the dashboard is the only UI,
-        # so the root just takes you there.
-        return RedirectResponse(url="/admin/", status_code=307)
+    # Old bookmark compatibility: the UI lived under /admin until 2026-07-13
+    # (holdover from the source platform where OpenWebUI owned "/").
+    @app.get("/admin", include_in_schema=False)
+    @app.get("/admin/", include_in_schema=False)
+    async def legacy_admin_redirect():
+        return RedirectResponse(url="/", status_code=308)
 
     @app.get("/health")
     async def health():

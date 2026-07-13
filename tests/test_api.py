@@ -37,10 +37,10 @@ def client(mock_session):
 
 
 class TestPublicEndpoints:
-    def test_root_redirects_to_dashboard(self, client):
-        r = client.get("/", follow_redirects=False)
-        assert r.status_code == 307
-        assert r.headers["location"] == "/admin/"
+    def test_legacy_admin_path_redirects_to_root(self, client):
+        r = client.get("/admin", follow_redirects=False)
+        assert r.status_code == 308
+        assert r.headers["location"] == "/"
 
     def test_health_db_up(self, client):
         from unittest.mock import patch
@@ -74,7 +74,7 @@ class TestAuth:
     def test_admin_rejects_missing_header(self):
         app = create_app()
         client = TestClient(app)
-        r = client.get("/admin/")
+        r = client.get("/")
         assert r.status_code == 403
 
     def test_admin_rejects_wrong_email(self):
@@ -86,7 +86,7 @@ class TestAuth:
 
 class TestAdminDashboard:
     def test_dashboard_returns_html(self, client):
-        r = client.get("/admin/")
+        r = client.get("/")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
         assert "Price Tracker" in r.text
@@ -106,7 +106,7 @@ class TestStoresEndpoints:
         mock_result.scalars.return_value.all.return_value = [mock_store]
         mock_session.execute.return_value = mock_result
 
-        r = client.get("/admin/stores")
+        r = client.get("/stores")
         assert r.status_code == 200
         data = r.json()
         assert len(data) == 1
@@ -124,7 +124,7 @@ class TestProductsEndpoints:
         client.app.dependency_overrides[admin_get_service] = lambda: mock_service
 
         r = client.post(
-            "/admin/products",
+            "/products",
             json={
                 "tenant_id": "f21b6620-c793-46e3-a354-dfcd9956b4a2",
                 "name": "Test Product",
@@ -152,7 +152,7 @@ class TestProductsEndpoints:
         mock_result.scalars.return_value.all.return_value = [mock_product]
         mock_session.execute.return_value = mock_result
 
-        r = client.get("/admin/products")
+        r = client.get("/products")
         assert r.status_code == 200
         data = r.json()
         assert len(data) == 1
@@ -165,7 +165,7 @@ class TestProductsEndpoints:
         from api.admin import get_price_tracker_service as admin_get_service
         client.app.dependency_overrides[admin_get_service] = lambda: mock_service
 
-        r = client.delete("/admin/products/prod-1")
+        r = client.delete("/products/prod-1")
         assert r.status_code == 200
         assert r.json()["message"] == "Product deleted successfully"
 
@@ -177,7 +177,7 @@ class TestDealsEndpoints:
         mock_result.all.return_value = []
         mock_session.execute.return_value = mock_result
 
-        r = client.get("/admin/deals")
+        r = client.get("/deals")
         assert r.status_code == 200
         assert r.json() == []
 
@@ -187,7 +187,7 @@ class TestSchedulerEndpoints:
         # Lifespan doesn't run under a plain (non-context-manager) TestClient,
         # so app.state.scheduler is never set — set it explicitly here.
         client.app.state.scheduler = None
-        r = client.get("/admin/scheduler/status")
+        r = client.get("/scheduler/status")
         assert r.status_code == 200
         data = r.json()
         assert "running" in data
@@ -196,25 +196,25 @@ class TestSchedulerEndpoints:
 class TestValidation:
     def test_create_product_rejects_foreign_tenant(self, client):
         r = client.post(
-            "/admin/products",
+            "/products",
             json={"tenant_id": "11111111-2222-3333-4444-555555555555", "name": "X"},
         )
         assert r.status_code == 403
 
     def test_create_product_rejects_malformed_tenant(self, client):
-        r = client.post("/admin/products", json={"tenant_id": "not-a-uuid", "name": "X"})
+        r = client.post("/products", json={"tenant_id": "not-a-uuid", "name": "X"})
         assert r.status_code == 400
 
     def test_create_watch_rejects_invalid_email(self, client):
         r = client.post(
-            "/admin/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2",
+            "/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2",
             json={"product_id": "p1", "email_address": "not-an-email"},
         )
         assert r.status_code == 400
 
     def test_create_watch_rejects_foreign_tenant(self, client):
         r = client.post(
-            "/admin/watches?tenant_id=11111111-2222-3333-4444-555555555555",
+            "/watches?tenant_id=11111111-2222-3333-4444-555555555555",
             json={"product_id": "p1", "email_address": "a@b.se"},
         )
         assert r.status_code == 403
