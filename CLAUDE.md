@@ -19,7 +19,7 @@ Stack is **locked** by EXTRACTION.md §2 — deviations require touching ported 
 - **Web:** FastAPI + uvicorn
 - **DB:** PostgreSQL via SQLAlchemy 2.0 (asyncio) + Alembic; aiosqlite for tests
 - **HTTP client:** httpx (async)
-- **Email:** aiosmtplib (SMTP) — AWS SES is the alternative if needed
+- **Email:** Resend HTTP API (`https://api.resend.com/emails`) — same provider as the source platform; no SMTP (D-32)
 - **LLM:** OpenRouter direct at `https://openrouter.ai/api/v1` (OpenAI-compatible) — no LiteLLM proxy
 - **MCP:** `fastmcp` (mounts on FastAPI)
 - **Auth (UI):** IAP header trust — reads `X-Auth-Request-Email` forwarded by the upstream Traefik + auth-middleware ingress (managed via Dokploy); no in-app OIDC client
@@ -62,7 +62,7 @@ src/
 │   └── server.py  # FastMCP, bearer auth, 4 tools
 └── infra/
     ├── fetcher.py  # httpx (replaces IFetcher)
-    ├── email.py    # aiosmtplib (replaces IEmailService)
+    ├── email.py    # Resend HTTP client (replaces IEmailService)
     ├── llm.py      # OpenRouter (replaces LiteLLM proxy)
     └── db.py       # async session factory
 tests/

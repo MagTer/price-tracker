@@ -975,7 +975,6 @@ async def get_current_deals(
 @router.get("/watches")
 async def list_watches(
     tenant_id: str | None = None,
-    admin_email: str | None = None,
     session: AsyncSession = Depends(get_db),
 ):
     """List price watches, optionally filtered by context.

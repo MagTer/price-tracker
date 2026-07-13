@@ -30,7 +30,7 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 ### Infrastructure
 
 - [ ] **INFRA-01**: HTTP client `src/infra/fetcher.py` (httpx async wrapper with timeouts) replaces source's `IFetcher` interface
-- [ ] **INFRA-02**: Email client `src/infra/email.py` (aiosmtplib SMTP) replaces source's `IEmailService` interface
+- [ ] **INFRA-02**: Email client `src/infra/email.py` (Resend HTTP API; was aiosmtplib SMTP until D-32, 2026-07-13) replaces source's `IEmailService` interface
 - [ ] **INFRA-03**: LLM client `src/infra/llm.py` calls OpenRouter directly (OpenAI-compatible base URL `https://openrouter.ai/api/v1`); replaces LiteLLM proxy
 - [ ] **INFRA-04**: OpenRouter request headers include `Authorization: Bearer`, `HTTP-Referer`, and `X-Title`
 - [ ] **INFRA-05**: Async DB session factory `src/infra/db.py` with configured engine
@@ -62,10 +62,10 @@ Requirements for the extraction milestone. Goal is **byte-equivalent feature par
 
 ### Deployment
 
-- [ ] **DEPLOY-01**: `pyproject.toml` (poetry, Python 3.12) declares all required dependencies. Phase 1 minimum: sqlalchemy[asyncio], alembic, asyncpg, pydantic, pytest, pytest-asyncio. Phase 2 adds: fastapi, uvicorn, httpx, aiosmtplib, fastmcp. **Excluded** (per D-04 / D-17 in `01-CONTEXT.md`): `aiosqlite` (mocks-only tests), `fastapi-azure-auth`, `pyjwt`, `cryptography` (IAP terminates OIDC at the proxy)
+- [ ] **DEPLOY-01**: `pyproject.toml` (poetry, Python 3.12) declares all required dependencies. Phase 1 minimum: sqlalchemy[asyncio], alembic, asyncpg, pydantic, pytest, pytest-asyncio. Phase 2 adds: fastapi, uvicorn, httpx, fastmcp (aiosmtplib removed by D-32 — Resend rides httpx). **Excluded** (per D-04 / D-17 in `01-CONTEXT.md`): `fastapi-azure-auth`, `pyjwt`, `cryptography` (IAP terminates OIDC at the proxy). `aiosqlite` was originally excluded (mocks-only tests) but added as a dev dependency 2026-07-13 for DB-level verification
 - [ ] **DEPLOY-02**: `Dockerfile` based on `python:3.12-slim` builds and runs the app
 - [ ] **DEPLOY-03**: `docker-compose.yml` defines postgres + app. The app service joins an external `edge` docker network so the upstream proxy (separate repo per D-18) can reach it. **No Traefik labels in this repo** (D-13 in `01-CONTEXT.md`) — routing/TLS/auth live in the edge-proxy stack. App container does NOT publish ports to the host
-- [ ] **DEPLOY-04**: `.env.template` documents all required env vars (DATABASE_URL, OpenRouter API key + model cascade, `ALLOWED_ENTRA_EMAIL`, `MCP_BEARER_TOKEN`, SMTP credentials). No OIDC client secrets — IAP owns those
+- [ ] **DEPLOY-04**: `.env.template` documents all required env vars (DATABASE_URL, OpenRouter API key + model cascade, `ALLOWED_ENTRA_EMAIL`, `MCP_BEARER_TOKEN`, `RESEND_API_KEY` + `EMAIL_FROM`). No OIDC client secrets — IAP owns those
 
 ### Source-repo Cleanup
 
