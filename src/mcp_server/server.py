@@ -196,8 +196,10 @@ def get_mcp_app():
     `http_app.lifespan(http_app)` itself to actually start/stop fastmcp's
     internal streamable-HTTP session manager.
     """
-    # fastmcp >= 2.0 exposes the modern streamable-HTTP ASGI app via http_app()
-    http_app = mcp.http_app()
+    # fastmcp >= 2.0 exposes the modern streamable-HTTP ASGI app via http_app().
+    # path="/" because the FastAPI mount already provides the /mcp prefix —
+    # fastmcp's default (path="/mcp") would double it to /mcp/mcp/.
+    http_app = mcp.http_app(path="/")
 
     if not MCP_BEARER_TOKEN:
         logger.error(
