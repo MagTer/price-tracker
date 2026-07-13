@@ -55,6 +55,28 @@ async def get_db() -> AsyncSession:
         yield session
 
 
+EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def require_default_tenant(tenant_id: str) -> uuid.UUID:
+    """Validate a client-supplied tenant id against the single-tenant constant.
+
+    Raises:
+        HTTPException 400: malformed UUID.
+        HTTPException 403: valid UUID but not the seeded tenant.
+    """
+    try:
+        tenant_uuid = uuid.UUID(tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id format") from e
+    if tenant_uuid != DEFAULT_TENANT_ID:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: you can only act within your own context",
+        )
+    return tenant_uuid
+
+
 def sanitize_log(value: Any) -> str:
     """Sanitize a value for safe logging."""
     if value is None:
@@ -167,30 +189,50 @@ async def list_products(
         result = await session.execute(stmt)
         products = result.scalars().all()
 
-        # Fetch linked stores for each product
-        product_responses: list[ProductResponse] = []
-        for product in products:
-            # Get product stores
+        # Batch-fetch store links and latest prices (avoids N+1 per product)
+        product_ids = [product.id for product in products]
+        ps_by_product: dict[uuid.UUID, list[tuple[ProductStore, Store]]] = {}
+        latest_by_ps: dict[uuid.UUID, PricePoint] = {}
+        if product_ids:
             ps_stmt = (
                 select(ProductStore, Store)
                 .join(Store, ProductStore.store_id == Store.id)
-                .where(ProductStore.product_id == product.id)
+                .where(ProductStore.product_id.in_(product_ids))
             )
             ps_result = await session.execute(ps_stmt)
-            ps_rows = ps_result.all()
+            for ps, store in ps_result.all():
+                ps_by_product.setdefault(ps.product_id, []).append((ps, store))
 
-            stores_data: list[dict[str, str | int | None | float]] = []
-            for ps, store in ps_rows:
-                # Get latest price point for this product-store
+            ps_ids = [ps.id for rows in ps_by_product.values() for ps, _ in rows]
+            if ps_ids:
+                from sqlalchemy import func
+                from sqlalchemy.orm import aliased
 
-                price_stmt = (
-                    select(PricePoint)
-                    .where(PricePoint.product_store_id == ps.id)
-                    .order_by(PricePoint.checked_at.desc())
-                    .limit(1)
+                rn = (
+                    func.row_number()
+                    .over(
+                        partition_by=PricePoint.product_store_id,
+                        order_by=PricePoint.checked_at.desc(),
+                    )
+                    .label("rn")
                 )
-                price_result = await session.execute(price_stmt)
-                latest_price = price_result.scalar_one_or_none()
+                latest_subq = (
+                    select(PricePoint, rn)
+                    .where(PricePoint.product_store_id.in_(ps_ids))
+                    .subquery()
+                )
+                latest_pp = aliased(PricePoint, latest_subq)
+                latest_result = await session.execute(
+                    select(latest_pp).where(latest_subq.c.rn == 1)
+                )
+                for pp in latest_result.scalars().all():
+                    latest_by_ps[pp.product_store_id] = pp
+
+        product_responses: list[ProductResponse] = []
+        for product in products:
+            stores_data: list[dict[str, str | int | None | float]] = []
+            for ps, store in ps_by_product.get(product.id, []):
+                latest_price = latest_by_ps.get(ps.id)
 
                 store_data: dict[str, str | int | None | float] = {
                     "product_store_id": str(ps.id),
@@ -270,7 +312,7 @@ async def create_product(
         if data.package_quantity is not None and data.package_quantity <= 0:
             raise HTTPException(status_code=400, detail="package_quantity must be positive")
 
-        tenant_uuid = uuid.UUID(data.tenant_id)
+        tenant_uuid = require_default_tenant(data.tenant_id)
         package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
 
         product = await service.create_product(
@@ -1036,7 +1078,11 @@ async def create_watch(
 
     Security:
         Requires admin role via Entra ID authentication.
+        tenant_id must match the seeded tenant; email must be well-formed.
     """
+    require_default_tenant(tenant_id)
+    if not EMAIL_PATTERN.match(data.email_address):
+        raise HTTPException(status_code=400, detail="Invalid email address")
     try:
         watch = await service.create_watch(
             tenant_id=tenant_id,
@@ -1098,6 +1144,8 @@ async def update_watch(
         if data.unit_price_drop_threshold_percent is not None:
             watch.unit_price_drop_threshold_percent = data.unit_price_drop_threshold_percent
         if data.email_address is not None:
+            if not EMAIL_PATTERN.match(data.email_address):
+                raise HTTPException(status_code=400, detail="Invalid email address")
             watch.email_address = data.email_address
 
         await session.commit()
@@ -1416,11 +1464,13 @@ async def import_data(
         stores = stores_result.scalars().all()
         store_by_slug: dict[str, Store] = {store.slug: store for store in stores}
 
-        # If replace mode, delete all user's watches first (products are shared)
+        # If replace mode, delete all user's watches first (products are shared).
+        # No commit here — the delete rides the same transaction as the import,
+        # so a failed import rolls back to the pre-import state instead of
+        # leaving the watches gone.
         if mode == "replace":
             delete_stmt = delete(PriceWatch).where(PriceWatch.tenant_id == tenant_id)
             await session.execute(delete_stmt)
-            await session.commit()
 
         # Import statistics
         products_created = 0
@@ -1431,9 +1481,6 @@ async def import_data(
         watches_created = 0
         watches_skipped = 0
         warnings: list[str] = []
-
-        # Email validation regex
-        email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
         for prod_data in products_data:
             # Validate required fields
@@ -1524,7 +1571,7 @@ async def import_data(
             # Process watches
             for watch_data in prod_data.get("watches", []):
                 email = watch_data.get("email_address")
-                if not email or not email_pattern.match(email):
+                if not email or not EMAIL_PATTERN.match(email):
                     warnings.append(f"Skipped watch with invalid email: {email}")
                     watches_skipped += 1
                     continue

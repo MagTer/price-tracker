@@ -1,12 +1,15 @@
 """FastAPI application factory with scheduler lifespan."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from api.admin import router as admin_router
 from domain.scheduler import PriceCheckScheduler
-from infra.db import async_session_factory
+from infra.db import async_session_factory, engine
 from infra.providers import get_email_service, get_fetcher
 from mcp_server.server import get_mcp_app
 
@@ -40,11 +43,26 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
+        db_ok = True
+        try:
+            async with asyncio.timeout(3):
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+        except Exception:
+            db_ok = False
+
         scheduler = getattr(app.state, "scheduler", None)
-        return {
-            "status": "ok",
-            "scheduler_running": scheduler._running if scheduler else False,
-        }
+        scheduler_running = bool(scheduler and scheduler.get_status()["running"])
+
+        return JSONResponse(
+            {
+                "status": "ok" if db_ok else "degraded",
+                "db": db_ok,
+                "scheduler_running": scheduler_running,
+            },
+            # 503 makes the container healthcheck surface a dead DB in Dokploy
+            status_code=200 if db_ok else 503,
+        )
 
     app.include_router(admin_router)
 

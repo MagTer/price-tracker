@@ -42,10 +42,32 @@ class TestPublicEndpoints:
         assert r.status_code == 200
         assert r.json()["service"] == "price-tracker"
 
-    def test_health(self, client):
-        r = client.get("/health")
+    def test_health_db_up(self, client):
+        from unittest.mock import patch
+
+        mock_conn = AsyncMock()
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_engine.connect.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("api.app.engine", mock_engine):
+            r = client.get("/health")
         assert r.status_code == 200
-        assert r.json()["status"] == "ok"
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["db"] is True
+
+    def test_health_db_down_returns_503(self, client):
+        from unittest.mock import patch
+
+        mock_engine = MagicMock()
+        mock_engine.connect.side_effect = ConnectionError("db gone")
+
+        with patch("api.app.engine", mock_engine):
+            r = client.get("/health")
+        assert r.status_code == 503
+        assert r.json()["status"] == "degraded"
+        assert r.json()["db"] is False
 
 
 class TestAuth:
@@ -169,3 +191,30 @@ class TestSchedulerEndpoints:
         assert r.status_code == 200
         data = r.json()
         assert "running" in data
+
+
+class TestValidation:
+    def test_create_product_rejects_foreign_tenant(self, client):
+        r = client.post(
+            "/admin/products",
+            json={"tenant_id": "11111111-2222-3333-4444-555555555555", "name": "X"},
+        )
+        assert r.status_code == 403
+
+    def test_create_product_rejects_malformed_tenant(self, client):
+        r = client.post("/admin/products", json={"tenant_id": "not-a-uuid", "name": "X"})
+        assert r.status_code == 400
+
+    def test_create_watch_rejects_invalid_email(self, client):
+        r = client.post(
+            "/admin/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2",
+            json={"product_id": "p1", "email_address": "not-an-email"},
+        )
+        assert r.status_code == 400
+
+    def test_create_watch_rejects_foreign_tenant(self, client):
+        r = client.post(
+            "/admin/watches?tenant_id=11111111-2222-3333-4444-555555555555",
+            json={"product_id": "p1", "email_address": "a@b.se"},
+        )
+        assert r.status_code == 403
