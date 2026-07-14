@@ -503,7 +503,7 @@ async function loadStats() {
         document.getElementById('stat-products').textContent = products.length;
         document.getElementById('stat-watches').textContent = watches.length || 0;
         document.getElementById('stat-deals').textContent = deals.length;
-        document.getElementById('stat-scheduler').textContent = sched.running ? 'ON' : 'OFF';
+        document.getElementById('stat-scheduler').textContent = sched.running ? 'PÅ' : 'AV';
         document.getElementById('stat-scheduler').style.color = sched.running ? 'var(--success)' : 'var(--error)';
     } catch (e) {
         console.error('Stats load failed', e);
@@ -516,9 +516,9 @@ async function loadStores() {
 
 function buildProductsTable(products) {
     if (!products.length) {
-        return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>No products yet. Add one to get started.</p></div>';
+        return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
-    let html = '<table><thead><tr><th>Name</th><th>Brand</th><th>Category</th><th>Stores</th><th>Latest Price</th><th>Actions</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Senaste pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const storeNames = (p.stores || []).map(s => s.store_name).join(', ') || '-';
         const latest = (p.stores || []).find(s => s.price_sek != null);
@@ -530,10 +530,10 @@ function buildProductsTable(products) {
             <td>${escapeHtml(storeNames)}</td>
             <td>${priceStr}</td>
             <td>
-                <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Links</button>
-                <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Link</button>
-                <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">History</button>
-                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>
+                <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
+                <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>
+                <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
+                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Ta bort</button>
             </td>
         </tr>`;
     }
@@ -548,7 +548,7 @@ async function loadProducts() {
         allProducts = await apiGet(url);
         document.getElementById('products-table-container').innerHTML = buildProductsTable(allProducts);
     } catch (e) {
-        document.getElementById('products-table-container').innerHTML = '<div class="empty-state"><p>Failed to load products.</p></div>';
+        document.getElementById('products-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda produkter.</p></div>';
     }
 }
 
@@ -559,10 +559,10 @@ async function loadDeals() {
         const deals = await apiGet(url);
         const container = document.getElementById('deals-table-container');
         if (!deals.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>No active deals right now.</p></div>';
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>Inga aktiva erbjudanden just nu.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Product</th><th>Store</th><th>Regular</th><th>Offer</th><th>Discount</th><th>Type</th></tr></thead><tbody>';
+        let html = '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Ordinarie</th><th>Erbjudande</th><th>Rabatt</th><th>Typ</th></tr></thead><tbody>';
         for (const d of deals) {
             html += `<tr>
                 <td>${escapeHtml(d.product_name)}</td>
@@ -576,7 +576,7 @@ async function loadDeals() {
         html += '</tbody></table>';
         container.innerHTML = html;
     } catch (e) {
-        document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Failed to load deals.</p></div>';
+        document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div>';
     }
 }
 
@@ -585,25 +585,25 @@ async function loadWatches() {
         const watches = await apiGet('/watches');
         const container = document.getElementById('watches-table-container');
         if (!watches.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>No price watches set up yet.</p></div>';
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Product</th><th>Email</th><th>Target</th><th>Alert on Offer</th><th>Actions</th></tr></thead><tbody>';
+        let html = '<table><thead><tr><th>Produkt</th><th>E-post</th><th>Mål</th><th>Larma vid erbjudande</th><th>Åtgärder</th></tr></thead><tbody>';
         for (const w of watches) {
             html += `<tr>
                 <td>${escapeHtml(w.product_name || w.product_id)}</td>
                 <td>${escapeHtml(w.email_address)}</td>
                 <td>${w.target_price_sek != null ? w.target_price_sek + ' kr' : '-'}</td>
-                <td>${w.alert_on_any_offer ? 'Yes' : 'No'}</td>
+                <td>${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
                 <td>
-                    <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Delete</button>
+                    <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
                 </td>
             </tr>`;
         }
         html += '</tbody></table>';
         container.innerHTML = html;
     } catch (e) {
-        document.getElementById('watches-table-container').innerHTML = '<div class="empty-state"><p>Failed to load watches.</p></div>';
+        document.getElementById('watches-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda bevakningar.</p></div>';
     }
 }
 
@@ -675,7 +675,7 @@ function pkgSetEntryUnit(prefix, unit) {
         btn.classList.toggle('entry-unit-active', btn.getAttribute('data-entry-unit') === unit);
     }
     document.getElementById(prefix + '-pkg-amount-label').textContent =
-        unit ? `Amount in package (${unit})` : 'Amount in package';
+        unit ? `Mängd i förpackningen (${unit})` : 'Mängd i förpackningen';
     pkgFieldsChanged(prefix);
 }
 
@@ -718,23 +718,23 @@ async function handleCreateProduct(e) {
         await apiPost('/products', body);
         closeModal('modal-create-product');
         e.target.reset();
-        showToast('Product created');
+        showToast('Produkt skapad');
         loadProducts();
         loadStats();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
 async function deleteProduct(id) {
-    if (!confirm('Delete this product and all its data?')) return;
+    if (!confirm('Ta bort produkten och all dess data?')) return;
     try {
         await apiDelete('/products/' + id);
-        showToast('Product deleted');
+        showToast('Produkt borttagen');
         loadProducts();
         loadStats();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
@@ -764,10 +764,10 @@ async function handleLinkStore(e) {
         await apiPost('/products/' + productId + '/stores', body);
         closeModal('modal-link-store');
         e.target.reset();
-        showToast('Store linked');
+        showToast('Butik länkad');
         loadProducts();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
@@ -925,7 +925,7 @@ async function showPriceHistory(productId, productName, productUnit) {
     } catch (err) {
         historyRows = [];
         document.getElementById('price-history-table').innerHTML =
-            '<p class="empty-state">Failed to load history.</p>';
+            '<p class="empty-state">Kunde inte ladda historik.</p>';
     }
 }
 
@@ -946,7 +946,7 @@ function setHistoryMode(mode) {
 function renderPriceHistory() {
     const tableDiv = document.getElementById('price-history-table');
     if (!historyRows.length) {
-        tableDiv.innerHTML = '<p class="empty-state">No price history yet.</p>';
+        tableDiv.innerHTML = '<p class="empty-state">Ingen prishistorik än.</p>';
         if (priceChart) { priceChart.destroy(); priceChart = null; }
         return;
     }
@@ -990,7 +990,7 @@ function buildHistoryTable(rows, unit) {
     let html = `<table><thead><tr>
         <th>Datum</th>
         <th>Butik</th>
-        <th>F&#246;rpackning</th>
+        <th>Förpackning</th>
         <th>Pris</th>
         <th>${escapeHtml(unitPriceHeading(unit))}</th>
         <th>Erbjudande</th>
@@ -1071,17 +1071,17 @@ function unitPriceHeading(unit) {
 function buildLinksTable(rows, unit) {
     if (!rows.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128279;</div>' +
-               '<p>No links yet. A product with no links is fine — use the <strong>Link</strong> ' +
-               'button on the product row to add a store page.</p></div>';
+               '<p>Inga länkar än. En produkt utan länkar är helt okej — använd <strong>Länka</strong>' +
+               '-knappen på produktraden för att lägga till en butikssida.</p></div>';
     }
     let html = `<div class="links-table"><table><thead><tr>
         <th class="sortable-col" data-sort="store_name">Butik</th>
-        <th>F&#246;rpackning</th>
+        <th>Förpackning</th>
         <th class="sortable-col" data-sort="price_sek">Pris</th>
         <th class="sortable-col" data-sort="unit_price_sek">${escapeHtml(unitPriceHeading(unit))}</th>
         <th>Butiken anger</th>
         <th>Senast kollad</th>
-        <th>Actions</th>
+        <th>Åtgärder</th>
     </tr></thead><tbody>`;
 
     for (const r of rows) {
@@ -1095,13 +1095,13 @@ function buildLinksTable(rows, unit) {
         // only evidence), so the operator decides. The flag is derived and self-clears the
         // moment either number is corrected; there is nothing to dismiss.
         if (r.quantity_mismatch === true) {
-            pkg += ` <span class="badge badge-warning">sidan s&#228;ger ${escapeHtml(r.scraped_package_quantity)}` +
+            pkg += ` <span class="badge badge-warning">sidan säger ${escapeHtml(r.scraped_package_quantity)}` +
                    ` &#8212; du har ${escapeHtml(r.package_quantity)}</span>`;
         }
 
         // D-02: never a blank cell. A blank would read as "free" and sort like zero.
         const unitCell = r.needs_amount === true
-            ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar m&#228;ngd</button>`
+            ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar mängd</button>`
             : (r.unit_price_sek != null
                 ? `<span class="unit-price">${escapeHtml(r.unit_price_sek.toFixed(2))} kr</span>`
                 : '&#8212;');
@@ -1114,9 +1114,9 @@ function buildLinksTable(rows, unit) {
             <td class="store-says">${r.store_unit_price_sek != null ? escapeHtml(r.store_unit_price_sek) + ' kr' : '&#8212;'}</td>
             <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}</td>
             <td>
-                <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Packaging</button>
-                <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Check now</button>
-                <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Unlink</button>
+                <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Förpackning</button>
+                <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Kontrollera nu</button>
+                <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Avlänka</button>
             </td>
         </tr>`;
     }
@@ -1138,15 +1138,15 @@ async function showProductLinks(productId, productName, productUnit) {
     productLinksFor = { id: productId, name: productName || '', unit: productUnit || null };
     linkSort = { column: null, direction: 'asc' };
     document.getElementById('product-links-title').textContent =
-        productName ? 'Links — ' + productName : 'Links';
+        productName ? 'Länkar — ' + productName : 'Länkar';
     document.getElementById('modal-product-links').style.display = 'flex';
-    document.getElementById('product-links-table').innerHTML = '<div class="loading">Loading links...</div>';
+    document.getElementById('product-links-table').innerHTML = '<div class="loading">Laddar länkar…</div>';
     try {
         productLinks = await apiGet('/products/' + productId + '/links');
         renderProductLinks();
     } catch (err) {
         document.getElementById('product-links-table').innerHTML =
-            '<div class="empty-state"><p>Failed to load links.</p></div>';
+            '<div class="empty-state"><p>Kunde inte ladda länkar.</p></div>';
     }
 }
 
@@ -1180,39 +1180,39 @@ async function handleEditPackaging(e) {
     try {
         await apiPut('/product-stores/' + id + '/packaging', body);
         closeModal('modal-edit-packaging');
-        showToast('Packaging saved');
+        showToast('Förpackning sparad');
         await reloadProductLinks();
         loadProducts();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
 // AC#4 made visible: the scrape fills an empty amount in place, or flags a page that
 // disagrees with the stored one — the operator watches it happen on this screen.
 async function checkLinkNow(productStoreId) {
-    showToast('Checking price...');
+    showToast('Kontrollerar pris…');
     try {
         const res = await apiPost('/check/' + productStoreId, {});
-        showToast(res.quantity_mismatch ? 'Checked — ' + res.quantity_mismatch : 'Checked');
+        showToast(res.quantity_mismatch ? 'Kontrollerad — ' + res.quantity_mismatch : 'Kontrollerad');
         await reloadProductLinks();
         loadProducts();
         loadStats();
     } catch (err) {
-        showToast('Check failed: ' + err.message, 'error');
+        showToast('Kontrollen misslyckades: ' + err.message, 'error');
     }
 }
 
 async function unlinkStore(productStoreId) {
-    if (!confirm('Remove this store link and its price history?')) return;
+    if (!confirm('Ta bort butikslänken och dess prishistorik?')) return;
     try {
         await apiDelete('/product-stores/' + productStoreId);
-        showToast('Link removed');
+        showToast('Länk borttagen');
         await reloadProductLinks();
         loadProducts();
         loadStats();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
@@ -1226,9 +1226,9 @@ async function loadExport() {
         a.download = 'price-tracker-export.json';
         a.click();
         URL.revokeObjectURL(url);
-        showToast('Export downloaded');
+        showToast('Export nedladdad');
     } catch (err) {
-        showToast('Export failed: ' + err.message, 'error');
+        showToast('Exporten misslyckades: ' + err.message, 'error');
     }
 }
 
@@ -1247,10 +1247,10 @@ async function handleImport(e) {
         if (!r.ok) throw new Error(await r.text());
         const data = await r.json();
         closeModal('modal-import');
-        showToast(`Import done: ${data.summary.products_created} created, ${data.summary.watches_created} watches`);
+        showToast(`Import klar: ${data.summary.products_created} skapade, ${data.summary.watches_created} bevakningar`);
         loadProducts(); loadWatches(); loadStats();
     } catch (err) {
-        showToast('Import failed: ' + err.message, 'error');
+        showToast('Importen misslyckades: ' + err.message, 'error');
     }
 }
 
@@ -1275,23 +1275,23 @@ async function handleCreateWatch(e) {
         await apiPost('/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2', body);
         closeModal('modal-create-watch');
         e.target.reset();
-        showToast('Watch created');
+        showToast('Bevakning skapad');
         loadWatches();
         loadStats();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
 async function deleteWatch(id) {
-    if (!confirm('Delete this watch?')) return;
+    if (!confirm('Ta bort bevakningen?')) return;
     try {
         await apiDelete('/watches/' + id);
-        showToast('Watch deleted');
+        showToast('Bevakning borttagen');
         loadWatches();
         loadStats();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Fel: ' + err.message, 'error');
     }
 }
 
