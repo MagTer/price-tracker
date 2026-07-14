@@ -169,6 +169,49 @@
     </div>
 </div>
 
+<!-- Product Links Modal — the screen the phase exists for (D-12).
+     One row per LINK: package label, price, and the COMPUTED kr/unit, sortable. This is
+     what answers "which Lambi pack is cheapest per roll, across pack sizes and stores" —
+     a question the old one-row-per-product table structurally could not ask. -->
+<div class="modal" id="modal-product-links" style="display:none;">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3 id="product-links-title">Links</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-product-links')">&times;</button>
+        </div>
+        <div id="product-links-table"></div>
+    </div>
+</div>
+
+<!-- Edit Packaging Modal — how a "needs amount" link gets its number and how a
+     mismatch with the page gets resolved. Same chain as the link dialog. -->
+<div class="modal" id="modal-edit-packaging" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Edit packaging</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-packaging')">&times;</button>
+        </div>
+        <form id="form-edit-packaging" onsubmit="handleEditPackaging(event)">
+            <input type="hidden" id="edit-pkg-link-id">
+            <div class="form-group">
+                <label id="edit-pkg-amount-label">Amount in package</label>
+                <div class="pkg-entry-units" id="edit-pkg-entry-units"></div>
+                <input type="number" step="0.01" id="edit-pkg-amount" class="form-input"
+                       placeholder="e.g. 24" oninput="pkgFieldsChanged('edit')">
+            </div>
+            <div class="form-group">
+                <label>Quantity label</label>
+                <input type="text" name="package_size" id="edit-pkg-label" class="form-input"
+                       placeholder="auto — e.g. 24-pack, 500 ml" oninput="pkgLabelEdited('edit')">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save packaging</button>
+                <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Create Watch Modal -->
 <div class="modal" id="modal-create-watch" style="display:none;">
     <div class="modal-content">
@@ -357,6 +400,31 @@ form {
     color: #fff;
     border-color: var(--primary);
 }
+.links-table {
+    padding: 4px 0 16px;
+}
+th.sortable-col {
+    cursor: pointer;
+    user-select: none;
+}
+th.sortable-col:hover {
+    color: var(--primary);
+}
+/* The store's PRINTED unit price. Muted and NOT sortable on purpose: one store prints
+   kr/rulle and another kr/100g for the same goods, so sorting on it would confidently
+   recommend the wrong pack. It is a raw signal, not a comparison. */
+.store-says {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+.unit-price {
+    font-weight: 600;
+}
+.needs-amount {
+    border-color: var(--warning);
+    color: var(--warning);
+    font-weight: 600;
+}
 
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
@@ -445,6 +513,7 @@ function buildProductsTable(products) {
             <td>${escapeHtml(storeNames)}</td>
             <td>${priceStr}</td>
             <td>
+                <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Links</button>
                 <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Link</button>
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">History</button>
                 <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>
@@ -742,6 +811,196 @@ async function showPriceHistory(productId, productName) {
     }
 }
 
+// --- Product links panel (D-12) — the screen that answers the toilet-paper question ---
+
+let productLinks = [];
+let productLinksFor = null;              // { id, name, unit } of the product on screen
+let linkSort = { column: null, direction: 'asc' };
+
+// PURE: takes rows, returns a NEW sorted array, touches no DOM and no globals — so it can be
+// driven directly in node by the verify harness, which the rest of this file cannot be.
+//
+// Rows with no value in the sort column land LAST in BOTH directions. This is the point of
+// the function: a link with no amount has no kr/unit, and if that null compared as zero it
+// would beat every real price and the screen would recommend an un-priced link as "cheapest".
+// That is exactly the failure the "needs amount" flag (D-02) exists to prevent, so the null
+// must never be allowed to masquerade as cheap.
+function sortRows(rows, column, direction) {
+    const dir = direction === 'desc' ? -1 : 1;
+    return rows.slice().sort((a, b) => {
+        const av = a[column];
+        const bv = b[column];
+        const aMissing = av == null || av === '';
+        const bMissing = bv == null || bv === '';
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+        return String(av).localeCompare(String(bv), 'sv') * dir;
+    });
+}
+
+// The DOM handler: flip the direction latch, re-sort the rows already fetched, re-render.
+function sortLinksBy(column) {
+    linkSort = {
+        column: column,
+        direction: (linkSort.column === column && linkSort.direction === 'asc') ? 'desc' : 'asc'
+    };
+    renderProductLinks();
+}
+
+function unitPriceHeading(unit) {
+    return unit ? 'kr/' + unit : 'kr/enhet';
+}
+
+function buildLinksTable(rows, unit) {
+    if (!rows.length) {
+        return '<div class="empty-state"><div class="empty-state-icon">&#128279;</div>' +
+               '<p>No links yet. A product with no links is fine — use the <strong>Link</strong> ' +
+               'button on the product row to add a store page.</p></div>';
+    }
+    let html = `<div class="links-table"><table><thead><tr>
+        <th class="sortable-col" data-sort="store_name">Butik</th>
+        <th>F&#246;rpackning</th>
+        <th class="sortable-col" data-sort="price_sek">Pris</th>
+        <th class="sortable-col" data-sort="unit_price_sek">${escapeHtml(unitPriceHeading(unit))}</th>
+        <th>Butiken anger</th>
+        <th>Senast kollad</th>
+        <th>Actions</th>
+    </tr></thead><tbody>`;
+
+    for (const r of rows) {
+        const amountText = r.package_quantity != null
+            ? r.package_quantity + (unit ? ' ' + unit : '')
+            : null;
+        let pkg = escapeHtml(r.package_size || amountText || '—');
+
+        // D-09: the page disagrees with the stored amount. Show BOTH numbers — the app has
+        // deliberately not adopted the page's reading (the typed value is intent, the page is
+        // only evidence), so the operator decides. The flag is derived and self-clears the
+        // moment either number is corrected; there is nothing to dismiss.
+        if (r.quantity_mismatch === true) {
+            pkg += ` <span class="badge badge-warning">sidan s&#228;ger ${escapeHtml(r.scraped_package_quantity)}` +
+                   ` &#8212; du har ${escapeHtml(r.package_quantity)}</span>`;
+        }
+
+        // D-02: never a blank cell. A blank would read as "free" and sort like zero.
+        const unitCell = r.needs_amount === true
+            ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar m&#228;ngd</button>`
+            : (r.unit_price_sek != null
+                ? `<span class="unit-price">${escapeHtml(r.unit_price_sek.toFixed(2))} kr</span>`
+                : '&#8212;');
+
+        html += `<tr>
+            <td>${escapeHtml(r.store_name)}</td>
+            <td>${pkg}</td>
+            <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
+            <td>${unitCell}</td>
+            <td class="store-says">${r.store_unit_price_sek != null ? escapeHtml(r.store_unit_price_sek) + ' kr' : '&#8212;'}</td>
+            <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}</td>
+            <td>
+                <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Packaging</button>
+                <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Check now</button>
+                <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Unlink</button>
+            </td>
+        </tr>`;
+    }
+    html += '</tbody></table></div>';
+    return html;
+}
+
+// The rows arrive ALREADY ranked cheapest-per-unit (nulls last) from the service — the domain
+// owns the one unit-price definition — so the default view re-sorts nothing.
+function renderProductLinks() {
+    const unit = productLinksFor ? productLinksFor.unit : null;
+    const rows = linkSort.column
+        ? sortRows(productLinks, linkSort.column, linkSort.direction)
+        : productLinks;
+    document.getElementById('product-links-table').innerHTML = buildLinksTable(rows, unit);
+}
+
+async function showProductLinks(productId, productName, productUnit) {
+    productLinksFor = { id: productId, name: productName || '', unit: productUnit || null };
+    linkSort = { column: null, direction: 'asc' };
+    document.getElementById('product-links-title').textContent =
+        productName ? 'Links — ' + productName : 'Links';
+    document.getElementById('modal-product-links').style.display = 'flex';
+    document.getElementById('product-links-table').innerHTML = '<div class="loading">Loading links...</div>';
+    try {
+        productLinks = await apiGet('/products/' + productId + '/links');
+        renderProductLinks();
+    } catch (err) {
+        document.getElementById('product-links-table').innerHTML =
+            '<div class="empty-state"><p>Failed to load links.</p></div>';
+    }
+}
+
+async function reloadProductLinks() {
+    if (!productLinksFor) return;
+    productLinks = await apiGet('/products/' + productLinksFor.id + '/links');
+    renderProductLinks();
+}
+
+function showEditPackagingModal(productStoreId) {
+    const link = (productLinks || []).find(l => l.product_store_id === productStoreId);
+    const unit = productLinksFor ? productLinksFor.unit : null;
+    document.getElementById('edit-pkg-link-id').value = productStoreId;
+    pkgInitChain(
+        'edit',
+        unit,
+        link && link.package_quantity != null ? link.package_quantity : '',
+        link ? link.package_size : ''
+    );
+    document.getElementById('modal-edit-packaging').style.display = 'flex';
+}
+
+async function handleEditPackaging(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const id = document.getElementById('edit-pkg-link-id').value;
+    const body = {
+        package_size: fd.get('package_size') || null,
+        package_quantity: pkgQuantity('edit')
+    };
+    try {
+        await apiPut('/product-stores/' + id + '/packaging', body);
+        closeModal('modal-edit-packaging');
+        showToast('Packaging saved');
+        await reloadProductLinks();
+        loadProducts();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+// AC#4 made visible: the scrape fills an empty amount in place, or flags a page that
+// disagrees with the stored one — the operator watches it happen on this screen.
+async function checkLinkNow(productStoreId) {
+    showToast('Checking price...');
+    try {
+        const res = await apiPost('/check/' + productStoreId, {});
+        showToast(res.quantity_mismatch ? 'Checked — ' + res.quantity_mismatch : 'Checked');
+        await reloadProductLinks();
+        loadProducts();
+        loadStats();
+    } catch (err) {
+        showToast('Check failed: ' + err.message, 'error');
+    }
+}
+
+async function unlinkStore(productStoreId) {
+    if (!confirm('Remove this store link and its price history?')) return;
+    try {
+        await apiDelete('/product-stores/' + productStoreId);
+        showToast('Link removed');
+        await reloadProductLinks();
+        loadProducts();
+        loadStats();
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
 async function loadExport() {
     try {
         const r = await fetch(API_BASE + '/export?include_history=true');
@@ -845,7 +1104,10 @@ document.getElementById('products-table-container').addEventListener('click', (e
     if (!btn) return;
     const id = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
-    if (action === 'link') {
+    if (action === 'links') {
+        const product = (allProducts || []).find(p => p.id === id);
+        showProductLinks(id, product ? product.name : '', product ? product.unit : null);
+    } else if (action === 'link') {
         const product = (allProducts || []).find(p => p.id === id);
         showLinkStoreModal(id, product ? product.unit : null);
     } else if (action === 'history') {
@@ -857,10 +1119,34 @@ document.getElementById('products-table-container').addEventListener('click', (e
 });
 
 // Entry-unit helper buttons, delegated per dialog.
-document.getElementById('link-pkg-entry-units').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-entry-unit]');
+for (const pkgPrefix of ['link', 'edit']) {
+    document.getElementById(pkgPrefix + '-pkg-entry-units').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-entry-unit]');
+        if (!btn) return;
+        pkgSetEntryUnit(pkgPrefix, btn.getAttribute('data-entry-unit'));
+    });
+}
+
+// Links-panel actions and column sorting — delegated, like the product table. No inline
+// onclick carrying an interpolated id (the pattern removed in f6ec6c4 for quote-safety);
+// the store-printed column has no data-sort attribute, so it cannot be sorted on.
+document.getElementById('product-links-table').addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (th) {
+        sortLinksBy(th.getAttribute('data-sort'));
+        return;
+    }
+    const btn = e.target.closest('button[data-link-action]');
     if (!btn) return;
-    pkgSetEntryUnit('link', btn.getAttribute('data-entry-unit'));
+    const id = btn.getAttribute('data-id');
+    const action = btn.getAttribute('data-link-action');
+    if (action === 'packaging') {
+        showEditPackagingModal(id);
+    } else if (action === 'check') {
+        checkLinkNow(id);
+    } else if (action === 'unlink') {
+        unlinkStore(id);
+    }
 });
 
 // Init
