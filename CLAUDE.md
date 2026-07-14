@@ -30,6 +30,8 @@ Changing a stack component is a real decision — discuss it first. Everything b
 - **Auth (MCP):** static bearer token (`MCP_BEARER_TOKEN`)
 - **Frontend:** server-rendered HTML + vanilla JS + Chart.js (ported from source — no SPA framework)
 - **Tests:** pytest, pytest-asyncio
+- **Lint/format:** ruff 0.14.4 (config inherited from the source repo). `ruff format` replaces black — do not add black. mypy is **not** carried over yet (the source had it; typing 10,800 ported lines is its own task).
+- **CI:** `.github/workflows/ci.yml` — ruff check → ruff format --check → pytest, on every push and PR, against a Postgres 16 service so the integration tests actually run. (`release.yml` only builds the image on a version tag.)
 - **Packaging:** poetry
 - **Container:** `python:3.12-slim` Docker image; docker-compose with Traefik labels
 <!-- GSD:stack-end -->
@@ -100,7 +102,7 @@ alembic/versions/0001_initial.py   # the only migration — rewritten in place, 
 
 Traps that already cost time. Each one **passes silently** — that's why they're here.
 
-1. **`ruff` is not in this project.** Not a declared dependency, not installed, not on PATH. (It appears in `poetry.lock` only as an optional extra of unrelated packages — that does not install it.) Planning docs sometimes assume it exists. **Never invoke it.** For a syntax check use `python -m compileall`.
+1. **`ruff` exists — and `B008`/`S101` are ignored on purpose.** ruff 0.14.4 is a declared dev-dependency, with the config inherited from the source repo (`ai-agent-platform/services/agent`); Phase 1 rewrote `pyproject.toml` from scratch and dropped it, which is why the planning docs kept assuming a ruff that wasn't there. Run `poetry run ruff check src tests` and `poetry run ruff format src tests` (`ruff format` is black-compatible and **replaces** black — do not add black). **Never "fix" `B008`:** it is FastAPI's `Depends()`-in-default-argument pattern, and hoisting the call out of the default argument breaks dependency injection — and with it the auth guard. `S101` is ignored because `assert` is how tests assert. **The test suite is the truth, not the linter:** if an auto-fix turns a test red, the fix was wrong — revert it (`UP017` and `UP032` rewrite real logic, not just style).
 
 2. **`src/api/templates/admin.html` has no `<script>` tag.** It is three fragments split on `<!-- SECTION_SEPARATOR -->` and reassembled in `admin.py` at request time (`admin.py` ~L1877). A gate that extracts the `<script>` body gets **zero bytes**, and `node --check` on empty input **exits 0** — so it passes no matter what you wrote. The working incantation:
    ```bash
