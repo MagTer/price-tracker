@@ -437,6 +437,14 @@ th.sortable-col:hover {
 .unit-price {
     font-weight: 600;
 }
+/* The link the winning kr/unit came from: which store, which package, what it actually costs.
+   The bare kr/unit is comparable but unbuyable — you cannot walk into a shop and ask for
+   "1.79 kr/st". */
+.best-link {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-weight: 400;
+}
 .needs-amount {
     border-color: var(--warning);
     color: var(--warning);
@@ -514,21 +522,96 @@ async function loadStores() {
     allStores = await apiGet('/stores');
 }
 
+// The price actually paid — the offer when there is one, else the ordinary price. The JS twin of
+// _effective_price() in api/admin.py. Used ONLY for display of the winning link's pack price:
+// unit_price_sek already arrives computed from this same effective price (D-03), and this
+// function must never be used to recompute a kr/unit.
+function effectivePrice(link) {
+    if (!link) return null;
+    return link.offer_price_sek != null ? link.offer_price_sek : link.price_sek;
+}
+
+// Money, always to the öre: a raw 42.9 reads as a truncated number, not as a price.
+function formatSek(value) {
+    return typeof value === 'number' ? value.toFixed(2) : String(value);
+}
+
+// A human label for the link's package: what the store called it, else the amount we hold.
+function packageLabel(link, unit) {
+    if (link.package_size) return link.package_size;
+    if (link.package_quantity != null) return link.package_quantity + (unit ? ' ' + unit : '');
+    return null;
+}
+
+// The product row's ONE comparable number: the cheapest kr/unit across the product's links.
+//
+// It is a MINIMUM, not "whichever link the database handed back first". Post-04.1 a product can
+// have several links at one store (a 12-pack and a 24-pack), and the 24-pack is always the bigger
+// absolute number — so an arbitrary link's price answers no question anyone has. kr/unit is the
+// only figure that survives the comparison, and the cheapest one is the only one worth showing.
+//
+// Ties break on store name then link id: equal prices must not reorder between two renders.
+// store_unit_price_sek is deliberately NOT considered (D-05) — stores print in different units.
+function bestUnitPrice(product) {
+    const priced = (product.stores || []).filter(
+        s => typeof s.unit_price_sek === 'number' && isFinite(s.unit_price_sek)
+    );
+    if (!priced.length) return null;
+    priced.sort((a, b) =>
+        a.unit_price_sek - b.unit_price_sek
+        || String(a.store_name).localeCompare(String(b.store_name))
+        || String(a.product_store_id).localeCompare(String(b.product_store_id))
+    );
+    return priced[0];
+}
+
+// The product row's price cell. Three honest states, never a blank and never a 0 (D-02):
+//   1. at least one link has an amount -> cheapest kr/unit + the link it came from
+//   2. no link has an amount           -> lowest ABSOLUTE price, explicitly labelled as not
+//                                         comparable, because two pack sizes are not
+//   3. no link has a price at all      -> an em dash
+// A link with no amount cannot enter the minimum, so the row would otherwise quietly compare
+// fewer links than it lists stores. It says so instead.
+function buildBestPriceCell(product, links) {
+    const unit = product.unit;
+    const missing = links.filter(s => s.needs_amount === true).length;
+    const missingBadge = missing
+        ? ` <span class="badge badge-warning">${missing} utan mängd</span>`
+        : '';
+
+    const best = bestUnitPrice(product);
+    if (best) {
+        const parts = [best.store_name, packageLabel(best, unit), formatSek(effectivePrice(best)) + ' kr']
+            .filter(part => part != null);
+        return `<span class="unit-price">${escapeHtml(best.unit_price_sek.toFixed(2))} `
+             + `${escapeHtml(unitPriceHeading(unit))}</span>${missingBadge}`
+             + `<div class="best-link">${escapeHtml(parts.join(' · '))}</div>`;
+    }
+
+    const pricedLinks = links.filter(s => effectivePrice(s) != null);
+    if (!pricedLinks.length) return '&#8212;';
+
+    const cheapest = pricedLinks.reduce(
+        (a, b) => (effectivePrice(b) < effectivePrice(a) ? b : a)
+    );
+    return `<span class="unit-price">${escapeHtml(formatSek(effectivePrice(cheapest)))} kr</span>${missingBadge}`
+         + `<div class="best-link">${escapeHtml(cheapest.store_name)} &#183; kr/enhet saknas</div>`;
+}
+
 function buildProductsTable(products) {
     if (!products.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
-    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Senaste pris</th><th>Åtgärder</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta kr/enhet</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
-        const storeNames = (p.stores || []).map(s => s.store_name).join(', ') || '-';
-        const latest = (p.stores || []).find(s => s.price_sek != null);
-        const priceStr = latest ? latest.price_sek + ' kr' : '-';
+        const links = p.stores || [];
+        const storeNames = links.map(s => s.store_name).join(', ') || '-';
         html += `<tr>
             <td>${escapeHtml(p.name)}</td>
             <td>${escapeHtml(p.brand || '-')}</td>
             <td>${escapeHtml(p.category || '-')}</td>
             <td>${escapeHtml(storeNames)}</td>
-            <td>${priceStr}</td>
+            <td>${buildBestPriceCell(p, links)}</td>
             <td>
                 <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
                 <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>
