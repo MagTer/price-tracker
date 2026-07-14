@@ -6,9 +6,9 @@ current_phase: 04.1
 current_phase_name: Package data moves to the store link
 status: executing
 stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
-last_updated: "2026-07-14T00:49:29.777Z"
-last_activity: 2026-07-13
-last_activity_desc: Phase 04.1 execution started
+last_updated: "2026-07-14T10:03:07.686Z"
+last_activity: 2026-07-14
+last_activity_desc: "Phase 04.1 deployed to prod (v0.3.0, schema reset done). Quick task 260714-gbn fixed the price-history view (per-link series + best-available kr/unit line); required an additive API change because PricePointResponse was stripping the link identity at the wire boundary. TECH DEBT FOUND: src/api/admin.py:881 duplicates service.get_price_history — two implementations that have already drifted."
 progress:
   total_phases: 6
   completed_phases: 5
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 Phase: 04.1 (Package data moves to the store link) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 04.1
-Last activity: 2026-07-13 — Phase 04.1 execution started
+Last activity: 2026-07-14 — Phase 04.1 deployed to prod (v0.3.0, schema reset done). Quick task 260714-gbn fixed the price-history view (per-link series + best-available kr/unit line); required an additive API change because PricePointResponse was stripping the link identity at the wire boundary. TECH DEBT FOUND: src/api/admin.py:881 duplicates service.get_price_history — two implementations that have already drifted.
 
 Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
 
@@ -116,6 +116,7 @@ Recent decisions affecting current work:
 | 260706-tha | Fix 4 stale Entra OIDC references in CLAUDE.md to match the locked IAP header-trust auth model (X-Auth-Request-Email via Dokploy-managed Traefik+auth-middleware ingress, not yet built) | 2026-07-06 | d094d70 | [260706-tha-fix-4-stale-entra-oidc-references-in-cla](./quick/260706-tha-fix-4-stale-entra-oidc-references-in-cla/) |
 | 260706-w69 | Backfill retroactive GSD phase artifacts for Phases 2-4 (implemented outside the formal pipeline); discovered and corrected Phase 4's optimistic "Complete" marking to gaps_found (agent-platform registration + mcp.<domain> ingress not done) | 2026-07-06 | d1ae100 | [260706-w69-backfill-retroactive-gsd-phase-artifacts](./quick/260706-w69-backfill-retroactive-gsd-phase-artifacts/) |
 | 260706-tq5 | Reassess edge-proxy/ingress hosting (EDGE-01, D-18) across PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md: corrected from a standalone hand-built VM to Dokploy-managed ingress (architecture and IAP header-trust auth unchanged); recorded D-20 | 2026-07-06 | e8e208c | [260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac](./quick/260706-tq5-reassess-edge-proxy-plan-edge-01-d-18-ac/) |
+| 260714-gbn | Fix price-history view (post-04.1 bug found in prod): it plotted every link of a product as ONE absolute-price line, so a 16-pack followed by a 24-pack read as "the price is increasing". Now: per-link series + a bold forward-filled "cheapest kr/unit available" line + price/unit toggle + Package & kr/unit table columns. **Required an additive API change** — `PricePointResponse` was silently stripping `product_store_id`/`package_size`/`package_quantity` at the wire boundary, so the grouping key never reached the frontend (the admin route runs its own duplicate query, NOT `service.get_price_history`, which only MCP calls) | 2026-07-14 | c343862 | [260714-gbn-fix-price-history-view-per-link-series-b](./quick/260714-gbn-fix-price-history-view-per-link-series-b/) |
 
 ### Roadmap Evolution
 
