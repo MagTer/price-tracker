@@ -28,6 +28,33 @@ packages = [
 pytest = "^8.2"
 pytest-asyncio = "^0.23"
 aiosqlite = "^0.22.1"
+ruff = "0.14.4"
+
+# Ruff config inherited from the source repo (ai-agent-platform/services/agent),
+# which the Phase 1 rewrite of this pyproject.toml accidentally dropped.
+# Deviations from the source: target-version py312 (we run 3.12, source ran 3.11)
+# and first-party packages are ours. `ruff format` replaces the source's separate
+# black (it is black-compatible); mypy is deliberately not carried over yet.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "N"]
+# B008: FastAPI's `Depends()`-in-default-argument pattern. Moving the call out of
+#       the default argument breaks dependency injection (and thus the auth guard).
+# S101: assert is how tests assert.
+ignore = ["S101", "S104", "B008", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["domain", "api", "infra", "mcp_server"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 18
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S105", "S106"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
