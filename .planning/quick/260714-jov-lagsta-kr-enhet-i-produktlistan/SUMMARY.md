@@ -49,11 +49,39 @@ frontend selects a minimum, it does not compute unit prices.
   inline `<script>` body, and no surviving "Senaste pris".
 - `ruff check` + `ruff format --check`: clean. `pytest`: **214 passed** (Postgres reachable).
 
+## Follow-up, done in the same task (commit 19118e6)
+
+The missing `ORDER BY` was not left as a note — it was fixed.
+
+**Both** `admin.py` link queries (`GET /products` ~L230 and `GET /products/{id}` ~L409) lacked an
+`ORDER BY`, so every `stores` array the API emitted was in Postgres' arbitrary row order while the
+frontend read `stores[0]` as if position meant something. They now emit the same order the domain
+service already emits (`service.get_links_for_product` → `unit_price_expr(...).asc().nulls_last()`):
+cheapest kr/unit first, amount-less links last, ties broken on store name then link id.
+
+Sorted on the **unrounded** `Decimal` from `pricing.unit_price_py`, not on the rounded float in the
+payload — rounding first makes two genuinely different prices tie and swap places for nothing.
+
+Both routes also built the link dict byte-for-byte identically; that duplication collapsed into one
+`_link_payload()`. Two copies of a wire contract drift, and this one has form (Gotcha 4).
+
+**3 new tests** (`TestStoresArrayIsRanked`) feed the links in the worst possible order — dearest
+first, the amount-less one at the front — and require the response to fix it, including a case where
+a rea on the small pack must reorder it ahead of the big one. Verified they **fail against the
+pre-fix code** (3 failed) and pass after. Suite: **217 passed**.
+
+## Released
+
+`v0.3.3` — tag pushed, `release.yml` green, image `ghcr.io/magter/price-tracker:v0.3.3`
+(+ `sha-b758503`, `latest`) in GHCR. `pyproject.toml`'s version said `0.1.0` while prod ran
+`v0.3.2`; it now tracks the tag. CLAUDE.md gained a **Releasing** section making the tag the
+standing last step of any user-visible change — 12 commits had accumulated unreleased behind
+v0.3.2, including the whole ruff/CI rebuild.
+
+**Not live until Magnus bumps the pinned tag** in the home-server repo's
+`compose/dokploy-apps/price-tracker/docker-compose.yml`.
+
 ## Notes for later
 
-- The absent `ORDER BY` on `ps_stmt` (`admin.py` ~L230) is still there. It no longer affects this
-  column, but any future consumer of `product.stores` inherits the same arbitrary ordering — the
-  links list happens to sort client-side. Ordering it server-side (cheapest kr/unit, nulls last,
-  as `service.get_product_links` already does) would remove the trap.
 - The Erbjudanden table still renders absolute prices per link, which is correct there — a deal is
   about a specific package.
