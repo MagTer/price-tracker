@@ -105,11 +105,11 @@ def require_default_tenant(tenant_id: str) -> uuid.UUID:
     try:
         tenant_uuid = uuid.UUID(tenant_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid tenant_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på tenant_id") from e
     if tenant_uuid != DEFAULT_TENANT_ID:
         raise HTTPException(
             status_code=403,
-            detail="Access denied: you can only act within your own context",
+            detail="Åtkomst nekad: du kan bara agera i din egen kontext",
         )
     return tenant_uuid
 
@@ -183,13 +183,13 @@ async def list_products(
             try:
                 tenant_uuid = uuid.UUID(tenant_id)
             except ValueError as e:
-                raise HTTPException(status_code=400, detail="Invalid tenant_id format") from e
+                raise HTTPException(status_code=400, detail="Ogiltigt format på tenant_id") from e
 
             # Verify user can only query their own context
             if tenant_uuid != DEFAULT_TENANT_ID:
                 raise HTTPException(
                     status_code=403,
-                    detail="Access denied: you can only view products in your own context",
+                    detail="Åtkomst nekad: du kan bara se produkter i din egen kontext",
                 )
 
         # Build query with proper join handling
@@ -219,7 +219,7 @@ async def list_products(
                 stmt = stmt.join(ProductStore, Product.id == ProductStore.product_id)
                 stmt = stmt.where(ProductStore.store_id == store_uuid).distinct()
             except ValueError as e:
-                raise HTTPException(status_code=400, detail="Invalid store_id format") from e
+                raise HTTPException(status_code=400, detail="Ogiltigt format på store_id") from e
 
         stmt = stmt.order_by(Product.name)
         result = await session.execute(stmt)
@@ -395,7 +395,7 @@ async def get_product(
     try:
         product_uuid = uuid.UUID(product_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
 
     try:
         stmt = select(Product).where(Product.id == product_uuid)
@@ -403,7 +403,7 @@ async def get_product(
         product = result.scalar_one_or_none()
 
         if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
+            raise HTTPException(status_code=404, detail="Produkten hittades inte")
 
         # Get linked stores
         ps_stmt = (
@@ -505,7 +505,7 @@ async def get_product_links(
     try:
         uuid.UUID(product_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
 
     try:
         return await service.get_links_for_product(product_id)
@@ -540,7 +540,7 @@ async def update_product(
     try:
         product_uuid = uuid.UUID(product_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
 
     try:
         stmt = select(Product).where(Product.id == product_uuid)
@@ -548,7 +548,7 @@ async def update_product(
         product = result.scalar_one_or_none()
 
         if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
+            raise HTTPException(status_code=404, detail="Produkten hittades inte")
 
         # Update only provided fields
         if data.name is not None:
@@ -599,19 +599,19 @@ async def link_product_to_store(
     if not (72 <= data.check_frequency_hours <= 240):
         raise HTTPException(
             status_code=400,
-            detail="check_frequency_hours must be between 72 and 240 (inclusive)",
+            detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
         )
     # Validate weekday if provided (0=Monday, 6=Sunday)
     if data.check_weekday is not None and not (0 <= data.check_weekday <= 6):
         raise HTTPException(
             status_code=400,
-            detail="check_weekday must be between 0 (Monday) and 6 (Sunday)",
+            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
         )
     # Validate package_quantity if provided. This check MOVED here from create_product when
     # the package data moved onto the link; it was not dropped in the move. A zero quantity
     # would otherwise reach the unit-price divisor.
     if data.package_quantity is not None and data.package_quantity <= 0:
-        raise HTTPException(status_code=400, detail="package_quantity must be positive")
+        raise HTTPException(status_code=400, detail="package_quantity måste vara positiv")
 
     package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
 
@@ -642,7 +642,7 @@ async def link_product_to_store(
         )
         raise HTTPException(
             status_code=409,
-            detail="This store URL is already tracked — each link has its own URL",
+            detail="Den här butiks-URL:en bevakas redan — varje länk har sin egen URL",
         ) from e
     except Exception as e:
         LOGGER.exception(
@@ -681,25 +681,25 @@ async def update_check_frequency(
     try:
         ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
 
     check_frequency_hours = request.get("check_frequency_hours")
     check_weekday = request.get("check_weekday")  # 0=Monday, 6=Sunday, None=use frequency
 
     if check_frequency_hours is None:
-        raise HTTPException(status_code=400, detail="check_frequency_hours is required")
+        raise HTTPException(status_code=400, detail="check_frequency_hours krävs")
 
     # Validate frequency range (3 days to 10 days)
     if not (72 <= check_frequency_hours <= 240):
         raise HTTPException(
             status_code=400,
-            detail="check_frequency_hours must be between 72 and 240 (inclusive)",
+            detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
         )
     # Validate weekday if provided
     if check_weekday is not None and not (0 <= check_weekday <= 6):
         raise HTTPException(
             status_code=400,
-            detail="check_weekday must be between 0 (Monday) and 6 (Sunday)",
+            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
         )
 
     try:
@@ -708,7 +708,7 @@ async def update_check_frequency(
         product_store = result.scalar_one_or_none()
 
         if not product_store:
-            raise HTTPException(status_code=404, detail="Product-store link not found")
+            raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
 
         # Update frequency and weekday
         product_store.check_frequency_hours = check_frequency_hours
@@ -786,12 +786,12 @@ async def update_link_packaging(
     try:
         ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
 
     # The same >0 check the link-create path enforces — relocated from create_product when the
     # package data moved onto the link, not dropped in the move.
     if data.package_quantity is not None and data.package_quantity <= 0:
-        raise HTTPException(status_code=400, detail="package_quantity must be positive")
+        raise HTTPException(status_code=400, detail="package_quantity måste vara positiv")
 
     try:
         stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
@@ -799,7 +799,7 @@ async def update_link_packaging(
         product_store = result.scalar_one_or_none()
 
         if not product_store:
-            raise HTTPException(status_code=404, detail="Product-store link not found")
+            raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
 
         if data.package_size is not None:
             product_store.package_size = data.package_size if data.package_size else None
@@ -850,7 +850,7 @@ async def unlink_product_from_store(
     try:
         ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
 
     try:
         stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
@@ -858,7 +858,7 @@ async def unlink_product_from_store(
         product_store = result.scalar_one_or_none()
 
         if not product_store:
-            raise HTTPException(status_code=404, detail="Product-store link not found")
+            raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
 
         await session.delete(product_store)
         await session.commit()
@@ -899,7 +899,7 @@ async def get_price_history(
     try:
         product_uuid = uuid.UUID(product_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
 
     try:
         from datetime import timedelta
@@ -982,7 +982,7 @@ async def trigger_price_check(
     try:
         ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
 
     try:
         # Get ProductStore with joined Store and Product
@@ -996,7 +996,7 @@ async def trigger_price_check(
         row = result.one_or_none()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Product-store link not found")
+            raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
 
         product_store, store, product = row
 
@@ -1221,12 +1221,12 @@ async def list_watches(
                 if tenant_uuid != DEFAULT_TENANT_ID:
                     raise HTTPException(
                         status_code=403,
-                        detail="Access denied: you can only view watches in your own context",
+                        detail="Åtkomst nekad: du kan bara se bevakningar i din egen kontext",
                     )
 
                 stmt = stmt.where(PriceWatch.tenant_id == tenant_uuid)
             except ValueError as e:
-                raise HTTPException(status_code=400, detail="Invalid tenant_id format") from e
+                raise HTTPException(status_code=400, detail="Ogiltigt format på tenant_id") from e
 
         stmt = stmt.where(PriceWatch.is_active.is_(True)).order_by(PriceWatch.created_at.desc())
 
@@ -1290,7 +1290,7 @@ async def create_watch(
     """
     require_default_tenant(tenant_id)
     if not EMAIL_PATTERN.match(data.email_address):
-        raise HTTPException(status_code=400, detail="Invalid email address")
+        raise HTTPException(status_code=400, detail="Ogiltig e-postadress")
     try:
         watch = await service.create_watch(
             tenant_id=tenant_id,
@@ -1330,7 +1330,7 @@ async def update_watch(
     try:
         watch_uuid = uuid.UUID(watch_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid watch_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på watch_id") from e
 
     try:
         stmt = select(PriceWatch).where(PriceWatch.id == watch_uuid)
@@ -1338,7 +1338,7 @@ async def update_watch(
         watch = result.scalar_one_or_none()
 
         if not watch:
-            raise HTTPException(status_code=404, detail="Price watch not found")
+            raise HTTPException(status_code=404, detail="Prisbevakningen hittades inte")
 
         # Update only provided fields
         if data.target_price_sek is not None:
@@ -1353,7 +1353,7 @@ async def update_watch(
             watch.unit_price_drop_threshold_percent = data.unit_price_drop_threshold_percent
         if data.email_address is not None:
             if not EMAIL_PATTERN.match(data.email_address):
-                raise HTTPException(status_code=400, detail="Invalid email address")
+                raise HTTPException(status_code=400, detail="Ogiltig e-postadress")
             watch.email_address = data.email_address
 
         await session.commit()
@@ -1387,7 +1387,7 @@ async def delete_watch(
     try:
         watch_uuid = uuid.UUID(watch_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid watch_id format") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt format på watch_id") from e
 
     try:
         stmt = select(PriceWatch).where(PriceWatch.id == watch_uuid)
@@ -1395,7 +1395,7 @@ async def delete_watch(
         watch = result.scalar_one_or_none()
 
         if not watch:
-            raise HTTPException(status_code=404, detail="Price watch not found")
+            raise HTTPException(status_code=404, detail="Prisbevakningen hittades inte")
 
         await session.delete(watch)
         await session.commit()
@@ -1436,7 +1436,7 @@ async def delete_product(
         await service.delete_product(product_id)
         return {"message": "Product deleted successfully"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid product ID") from e
+        raise HTTPException(status_code=400, detail="Ogiltigt produkt-ID") from e
     except Exception as e:
         LOGGER.exception("Failed to delete product %s", sanitize_log(product_id))
         raise HTTPException(status_code=500, detail="Failed to delete product") from e
@@ -1646,7 +1646,7 @@ async def import_data(
         Only imports data to the user's own context.
     """
     if mode not in ("merge", "replace"):
-        raise HTTPException(status_code=400, detail="mode must be 'merge' or 'replace'")
+        raise HTTPException(status_code=400, detail="mode måste vara 'merge' eller 'replace'")
 
     try:
         # Get user's context
@@ -1657,16 +1657,16 @@ async def import_data(
         try:
             data = json.loads(content.decode("utf-8"))
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}") from e
+            raise HTTPException(status_code=400, detail=f"Ogiltig JSON: {e}") from e
 
         # Validate version
         version = data.get("version")
         if version != "1.0":
-            raise HTTPException(status_code=400, detail=f"Unsupported export version: {version}")
+            raise HTTPException(status_code=400, detail=f"Versionen av exporten stöds inte: {version}")
 
         products_data = data.get("products", [])
         if not isinstance(products_data, list):
-            raise HTTPException(status_code=400, detail="Invalid products format")
+            raise HTTPException(status_code=400, detail="Ogiltigt format på products")
 
         # Get all stores for slug lookup
         stores_stmt = select(Store)
@@ -1884,7 +1884,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
     sidebar = _get_admin_sidebar_html()
     header = _get_admin_header_html(admin_email)
     return """<!DOCTYPE html>
-<html lang="en">
+<html lang="sv">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
