@@ -82,32 +82,21 @@
                 <label>Category</label>
                 <input type="text" name="category" class="form-input">
             </div>
-            <!-- Packaging: the unit dropdown drives the other two fields.
-                 Entry units ml/g are normalized to liter/kg on submit; the
-                 label is auto-suggested from unit+amount but stays editable
-                 for odd formats ("3×90 blad"). Stored exactly as before:
-                 unit (canonical), package_quantity (numeric, normalized),
-                 package_size (display label) — no backend change. -->
+            <!-- The product is the abstract GOOD, so all it declares is the unit its
+                 variants are compared in (st / liter / kg — models.py's canonical set).
+                 The package itself belongs to the store's listing and is asked for on
+                 the LINK dialog (D-10/D-11): "Lambi 24-pack at Willys" and "Lambi 8-pack
+                 at ICA" are two links on ONE product, which is the whole point of the
+                 phase — three pack sizes used to be three unrelated products with no
+                 grouping key, so nothing could be compared per roll. -->
             <div class="form-group">
                 <label>Unit</label>
-                <select name="unit_entry" id="pkg-unit" class="form-input" onchange="pkgFieldsChanged()">
+                <select name="unit" id="product-unit" class="form-input">
                     <option value="">— none —</option>
                     <option value="st">st (styck)</option>
-                    <option value="ml">ml</option>
-                    <option value="l">liter</option>
-                    <option value="g">gram</option>
+                    <option value="liter">liter</option>
                     <option value="kg">kg</option>
                 </select>
-            </div>
-            <div class="form-group">
-                <label>Amount in package</label>
-                <input type="number" step="0.01" id="pkg-amount" class="form-input"
-                       placeholder="e.g. 16 (st) or 500 (ml)" oninput="pkgFieldsChanged()">
-            </div>
-            <div class="form-group">
-                <label>Quantity label</label>
-                <input type="text" name="package_size" id="pkg-label" class="form-input"
-                       placeholder="auto — e.g. 16-pack, 500 ml" oninput="pkgLabelDirty = true">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Create Product</button>
@@ -141,6 +130,22 @@
             <div class="form-group">
                 <label>Check Weekday (0=Mon, 6=Sun, empty=frequency)</label>
                 <input type="number" name="check_weekday" min="0" max="6" class="form-input">
+            </div>
+            <!-- Packaging (D-11). Deliberately NO unit selector: the product already
+                 declares its comparison unit, so the amount is asked for IN that unit and
+                 the buttons below only offer entry helpers that normalize INTO it (ml ->
+                 liter, g -> kg). Both fields may be left empty — a link is saveable before
+                 its pack size is known (D-02), and the first scrape autofills it. -->
+            <div class="form-group">
+                <label id="link-pkg-amount-label">Amount in package</label>
+                <div class="pkg-entry-units" id="link-pkg-entry-units"></div>
+                <input type="number" step="0.01" id="link-pkg-amount" class="form-input"
+                       placeholder="e.g. 24" oninput="pkgFieldsChanged('link')">
+            </div>
+            <div class="form-group">
+                <label>Quantity label</label>
+                <input type="text" name="package_size" id="link-pkg-label" class="form-input"
+                       placeholder="auto — e.g. 24-pack, 500 ml" oninput="pkgLabelEdited('link')">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Link Store</button>
@@ -339,6 +344,19 @@ form {
     height: 300px;
     padding: 16px;
 }
+.pkg-entry-units {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.pkg-entry-units:empty {
+    display: none;
+}
+.entry-unit-active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
 
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
@@ -366,6 +384,16 @@ async function apiGet(path) {
 async function apiPost(path, body) {
     const r = await fetch(API_BASE + path, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+}
+
+async function apiPut(path, body) {
+    const r = await fetch(API_BASE + path, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
@@ -494,15 +522,26 @@ async function loadWatches() {
 }
 
 function showCreateProductModal() {
-    pkgLabelDirty = false;
     document.getElementById('modal-create-product').style.display = 'flex';
 }
 
-// --- Packaging field chain (unit dropdown -> amount -> label suggestion) ---
-// Entry units ml/g normalize to the canonical comparison units the model
-// documents (models.py: "kg, liter, st") so unit_price math stays coherent
-// across products entered in different granularities.
-let pkgLabelDirty = false;
+// --- Packaging field chain (amount -> auto-suggested label) — D-11 ---
+// This chain used to live on the product dialog. It moved here because the package is a
+// property of the store's LISTING, not of the abstract good: one Lambi product, a 24-pack
+// link at Willys and an 8-pack link at ICA.
+//
+// There is deliberately no unit selector any more. The product already declares its
+// canonical comparison unit (st / liter / kg), so the amount is asked for IN that unit;
+// the only entry helpers offered are the ones that normalize INTO it (ml -> liter,
+// g -> kg). Offering grams for a product counted in `st` would be a category error, and
+// the API's normalizer rejects it anyway.
+//
+// PKG_UNITS is mirrored in Python by domain/pricing.py, and tests/test_static_gates.py
+// asserts the two tables agree: a g/kg slip would make one link look 1000x cheaper than
+// every other and win every comparison it entered.
+//
+// Keyed by a dialog prefix, because two dialogs run this chain — the link dialog and the
+// packaging-edit dialog on the product links panel.
 
 const PKG_UNITS = {
     st: { canonical: 'st',    factor: 1,     label: (n) => `${n}-pack`,  integer: true },
@@ -512,30 +551,82 @@ const PKG_UNITS = {
     kg: { canonical: 'kg',    factor: 1,     label: (n) => `${n} kg`,    integer: false }
 };
 
-function pkgFieldsChanged() {
-    const unit = document.getElementById('pkg-unit').value;
-    const amountEl = document.getElementById('pkg-amount');
-    const labelEl = document.getElementById('pkg-label');
-    const spec = PKG_UNITS[unit];
+// Entry units offered for each canonical product unit — the canonical one first, so a
+// dialog opened on a stored (already canonical) amount displays it unconverted.
+const PKG_ENTRY_UNITS = {
+    st:    ['st'],
+    liter: ['l', 'ml'],
+    kg:    ['kg', 'g']
+};
+
+const pkgChains = {};
+
+function pkgChain(prefix) {
+    if (!pkgChains[prefix]) pkgChains[prefix] = { entryUnit: '', labelDirty: false };
+    return pkgChains[prefix];
+}
+
+function pkgFieldsChanged(prefix) {
+    const chain = pkgChain(prefix);
+    const amountEl = document.getElementById(prefix + '-pkg-amount');
+    const labelEl = document.getElementById(prefix + '-pkg-label');
+    const spec = PKG_UNITS[chain.entryUnit];
     amountEl.step = spec && spec.integer ? '1' : '0.01';
-    if (!spec || !amountEl.value || pkgLabelDirty) return;
+    if (!spec || !amountEl.value || chain.labelDirty) return;
     labelEl.value = spec.label(amountEl.value);
+}
+
+// The latch that keeps the auto-suggested label editable: once the operator types their own
+// label ("3x90 blad"), the amount never overwrites it again.
+function pkgLabelEdited(prefix) {
+    pkgChain(prefix).labelDirty = true;
+}
+
+function pkgSetEntryUnit(prefix, unit) {
+    pkgChain(prefix).entryUnit = unit;
+    const holder = document.getElementById(prefix + '-pkg-entry-units');
+    for (const btn of holder.querySelectorAll('button[data-entry-unit]')) {
+        btn.classList.toggle('entry-unit-active', btn.getAttribute('data-entry-unit') === unit);
+    }
+    document.getElementById(prefix + '-pkg-amount-label').textContent =
+        unit ? `Amount in package (${unit})` : 'Amount in package';
+    pkgFieldsChanged(prefix);
+}
+
+// Reset a dialog's chain for a product whose canonical unit is `productUnit`. An existing
+// label counts as operator intent, so it starts latched and the amount will not rewrite it.
+function pkgInitChain(prefix, productUnit, amount, label) {
+    const chain = pkgChain(prefix);
+    chain.labelDirty = !!label;
+    document.getElementById(prefix + '-pkg-amount').value = amount != null ? amount : '';
+    document.getElementById(prefix + '-pkg-label').value = label != null ? label : '';
+    const units = PKG_ENTRY_UNITS[productUnit] || [];
+    const holder = document.getElementById(prefix + '-pkg-entry-units');
+    holder.innerHTML = units.length > 1
+        ? units.map(u => `<button type="button" class="action-btn" data-entry-unit="${escapeHtml(u)}">${escapeHtml(u)}</button>`).join('')
+        : '';
+    pkgSetEntryUnit(prefix, units.length ? units[0] : (productUnit || ''));
+}
+
+// The amount normalized into the product's canonical unit. Empty stays NULL — a link is
+// saveable before its pack size is known (D-02). The server re-validates (> 0) regardless;
+// this arithmetic is a convenience, never a source of truth.
+function pkgQuantity(prefix) {
+    const raw = document.getElementById(prefix + '-pkg-amount').value;
+    if (!raw) return null;
+    const spec = PKG_UNITS[pkgChain(prefix).entryUnit];
+    return parseFloat(raw) * (spec ? spec.factor : 1);
 }
 
 async function handleCreateProduct(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const entryUnit = fd.get('unit_entry');
-    const amount = document.getElementById('pkg-amount').value;
-    const spec = PKG_UNITS[entryUnit];
     const body = {
         tenant_id: 'f21b6620-c793-46e3-a354-dfcd9956b4a2',
         name: fd.get('name'),
         brand: fd.get('brand') || null,
         category: fd.get('category') || null,
-        unit: spec ? spec.canonical : null,
-        package_size: fd.get('package_size') || null,
-        package_quantity: (spec && amount) ? parseFloat(amount) * spec.factor : null
+        unit: fd.get('unit') || null
     };
     try {
         await apiPost('/products', body);
@@ -561,10 +652,13 @@ async function deleteProduct(id) {
     }
 }
 
-function showLinkStoreModal(productId) {
+// productUnit labels the amount field and picks the entry helpers — the link never asks for
+// a unit of its own (D-11).
+function showLinkStoreModal(productId, productUnit) {
     const select = document.getElementById('link-store-select');
-    select.innerHTML = allStores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    select.innerHTML = allStores.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
     document.getElementById('link-product-id').value = productId;
+    pkgInitChain('link', productUnit, '', '');
     document.getElementById('modal-link-store').style.display = 'flex';
 }
 
@@ -576,7 +670,9 @@ async function handleLinkStore(e) {
         store_id: fd.get('store_id'),
         store_url: fd.get('store_url'),
         check_frequency_hours: parseInt(fd.get('check_frequency_hours')),
-        check_weekday: fd.get('check_weekday') ? parseInt(fd.get('check_weekday')) : null
+        check_weekday: fd.get('check_weekday') ? parseInt(fd.get('check_weekday')) : null,
+        package_size: fd.get('package_size') || null,
+        package_quantity: pkgQuantity('link')
     };
     try {
         await apiPost('/products/' + productId + '/stores', body);
@@ -750,13 +846,21 @@ document.getElementById('products-table-container').addEventListener('click', (e
     const id = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
     if (action === 'link') {
-        showLinkStoreModal(id);
+        const product = (allProducts || []).find(p => p.id === id);
+        showLinkStoreModal(id, product ? product.unit : null);
     } else if (action === 'history') {
         const product = (allProducts || []).find(p => p.id === id);
         showPriceHistory(id, product ? product.name : '');
     } else if (action === 'delete') {
         deleteProduct(id);
     }
+});
+
+// Entry-unit helper buttons, delegated per dialog.
+document.getElementById('link-pkg-entry-units').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-entry-unit]');
+    if (!btn) return;
+    pkgSetEntryUnit('link', btn.getAttribute('data-entry-unit'));
 });
 
 // Init
