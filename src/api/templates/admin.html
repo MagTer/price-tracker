@@ -3,62 +3,62 @@
 <div class="stats-grid">
     <div class="stat-box">
         <div class="stat-value" id="stat-products">-</div>
-        <div class="stat-label">Products</div>
+        <div class="stat-label">Produkter</div>
     </div>
     <div class="stat-box">
         <div class="stat-value" id="stat-watches">-</div>
-        <div class="stat-label">Active Watches</div>
+        <div class="stat-label">Aktiva bevakningar</div>
     </div>
     <div class="stat-box">
         <div class="stat-value" id="stat-deals">-</div>
-        <div class="stat-label">Deals Today</div>
+        <div class="stat-label">Erbjudanden idag</div>
     </div>
     <div class="stat-box">
         <div class="stat-value" id="stat-scheduler">-</div>
-        <div class="stat-label">Scheduler</div>
+        <div class="stat-label">Schemaläggare</div>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <div class="card-title">Products</div>
+        <div class="card-title">Produkter</div>
         <div class="header-actions">
-            <input type="text" id="product-search" placeholder="Search products..." class="search-input">
-            <button class="btn btn-primary" onclick="showCreateProductModal()">+ Add Product</button>
-            <button class="btn" onclick="loadExport()">Export</button>
-            <button class="btn" onclick="showImportModal()">Import</button>
+            <input type="text" id="product-search" placeholder="Sök produkter…" class="search-input">
+            <button class="btn btn-primary" onclick="showCreateProductModal()">+ Ny produkt</button>
+            <button class="btn" onclick="loadExport()">Exportera</button>
+            <button class="btn" onclick="showImportModal()">Importera</button>
         </div>
     </div>
     <div id="products-table-container">
-        <div class="loading">Loading products...</div>
+        <div class="loading">Laddar produkter…</div>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <div class="card-title">Current Deals</div>
+        <div class="card-title">Aktuella erbjudanden</div>
         <div class="header-actions">
             <select id="deal-filter" class="search-input" onchange="loadDeals()">
-                <option value="">All stores</option>
-                <option value="grocery">Grocery</option>
-                <option value="pharmacy">Pharmacy</option>
+                <option value="">Alla butiker</option>
+                <option value="grocery">Livsmedel</option>
+                <option value="pharmacy">Apotek</option>
             </select>
         </div>
     </div>
     <div id="deals-table-container">
-        <div class="loading">Loading deals...</div>
+        <div class="loading">Laddar erbjudanden…</div>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <div class="card-title">Price Watches</div>
+        <div class="card-title">Prisbevakningar</div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="showCreateWatchModal()">+ Add Watch</button>
+            <button class="btn btn-primary" onclick="showCreateWatchModal()">+ Ny bevakning</button>
         </div>
     </div>
     <div id="watches-table-container">
-        <div class="loading">Loading watches...</div>
+        <div class="loading">Laddar bevakningar…</div>
     </div>
 </div>
 
@@ -66,20 +66,20 @@
 <div class="modal" id="modal-create-product" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Add Product</h3>
+            <h3>Ny produkt</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-create-product')">&times;</button>
         </div>
         <form id="form-create-product" onsubmit="handleCreateProduct(event)">
             <div class="form-group">
-                <label>Name *</label>
+                <label>Namn *</label>
                 <input type="text" name="name" required class="form-input">
             </div>
             <div class="form-group">
-                <label>Brand</label>
+                <label>Varumärke</label>
                 <input type="text" name="brand" class="form-input">
             </div>
             <div class="form-group">
-                <label>Category</label>
+                <label>Kategori</label>
                 <input type="text" name="category" class="form-input">
             </div>
             <!-- The product is the abstract GOOD, so all it declares is the unit its
@@ -90,17 +90,17 @@
                  phase — three pack sizes used to be three unrelated products with no
                  grouping key, so nothing could be compared per roll. -->
             <div class="form-group">
-                <label>Unit</label>
+                <label>Enhet</label>
                 <select name="unit" id="product-unit" class="form-input">
-                    <option value="">— none —</option>
+                    <option value="">— ingen —</option>
                     <option value="st">st (styck)</option>
                     <option value="liter">liter</option>
                     <option value="kg">kg</option>
                 </select>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Create Product</button>
-                <button type="button" class="btn" onclick="closeModal('modal-create-product')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Skapa produkt</button>
+                <button type="button" class="btn" onclick="closeModal('modal-create-product')">Avbryt</button>
             </div>
         </form>
     </div>
@@ -110,25 +110,25 @@
 <div class="modal" id="modal-link-store" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Link to Store</h3>
+            <h3>Länka till butik</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-link-store')">&times;</button>
         </div>
         <form id="form-link-store" onsubmit="handleLinkStore(event)">
             <input type="hidden" name="product_id" id="link-product-id">
             <div class="form-group">
-                <label>Store *</label>
+                <label>Butik *</label>
                 <select name="store_id" id="link-store-select" required class="form-input"></select>
             </div>
             <div class="form-group">
-                <label>Product URL *</label>
+                <label>Produkt-URL *</label>
                 <input type="url" name="store_url" required class="form-input" placeholder="https://...">
             </div>
             <div class="form-group">
-                <label>Check Frequency (hours)</label>
+                <label>Kontrollfrekvens (timmar)</label>
                 <input type="number" name="check_frequency_hours" value="72" min="72" max="240" class="form-input">
             </div>
             <div class="form-group">
-                <label>Check Weekday (0=Mon, 6=Sun, empty=frequency)</label>
+                <label>Kontrollveckodag (0=mån, 6=sön, tomt=frekvens)</label>
                 <input type="number" name="check_weekday" min="0" max="6" class="form-input">
             </div>
             <!-- Packaging (D-11). Deliberately NO unit selector: the product already
@@ -137,19 +137,19 @@
                  liter, g -> kg). Both fields may be left empty — a link is saveable before
                  its pack size is known (D-02), and the first scrape autofills it. -->
             <div class="form-group">
-                <label id="link-pkg-amount-label">Amount in package</label>
+                <label id="link-pkg-amount-label">Mängd i förpackningen</label>
                 <div class="pkg-entry-units" id="link-pkg-entry-units"></div>
                 <input type="number" step="0.01" id="link-pkg-amount" class="form-input"
-                       placeholder="e.g. 24" oninput="pkgFieldsChanged('link')">
+                       placeholder="t.ex. 24" oninput="pkgFieldsChanged('link')">
             </div>
             <div class="form-group">
-                <label>Quantity label</label>
+                <label>Mängdetikett</label>
                 <input type="text" name="package_size" id="link-pkg-label" class="form-input"
-                       placeholder="auto — e.g. 24-pack, 500 ml" oninput="pkgLabelEdited('link')">
+                       placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('link')">
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Link Store</button>
-                <button type="button" class="btn" onclick="closeModal('modal-link-store')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Länka butik</button>
+                <button type="button" class="btn" onclick="closeModal('modal-link-store')">Avbryt</button>
             </div>
         </form>
     </div>
@@ -159,7 +159,7 @@
 <div class="modal" id="modal-price-history" style="display:none;">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3>Price History</h3>
+            <h3>Prishistorik</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-price-history')">&times;</button>
         </div>
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
@@ -183,7 +183,7 @@
 <div class="modal" id="modal-product-links" style="display:none;">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3 id="product-links-title">Links</h3>
+            <h3 id="product-links-title">Länkar</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-product-links')">&times;</button>
         </div>
         <div id="product-links-table"></div>
@@ -195,25 +195,25 @@
 <div class="modal" id="modal-edit-packaging" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Edit packaging</h3>
+            <h3>Redigera förpackning</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-edit-packaging')">&times;</button>
         </div>
         <form id="form-edit-packaging" onsubmit="handleEditPackaging(event)">
             <input type="hidden" id="edit-pkg-link-id">
             <div class="form-group">
-                <label id="edit-pkg-amount-label">Amount in package</label>
+                <label id="edit-pkg-amount-label">Mängd i förpackningen</label>
                 <div class="pkg-entry-units" id="edit-pkg-entry-units"></div>
                 <input type="number" step="0.01" id="edit-pkg-amount" class="form-input"
-                       placeholder="e.g. 24" oninput="pkgFieldsChanged('edit')">
+                       placeholder="t.ex. 24" oninput="pkgFieldsChanged('edit')">
             </div>
             <div class="form-group">
-                <label>Quantity label</label>
+                <label>Mängdetikett</label>
                 <input type="text" name="package_size" id="edit-pkg-label" class="form-input"
-                       placeholder="auto — e.g. 24-pack, 500 ml" oninput="pkgLabelEdited('edit')">
+                       placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('edit')">
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Save packaging</button>
-                <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Spara förpackning</button>
+                <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Avbryt</button>
             </div>
         </form>
     </div>
@@ -223,38 +223,38 @@
 <div class="modal" id="modal-create-watch" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Add Price Watch</h3>
+            <h3>Ny prisbevakning</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-create-watch')">&times;</button>
         </div>
         <form id="form-create-watch" onsubmit="handleCreateWatch(event)">
             <div class="form-group">
-                <label>Product *</label>
+                <label>Produkt *</label>
                 <select name="product_id" id="watch-product-select" required class="form-input"></select>
             </div>
             <div class="form-group">
-                <label>Email *</label>
+                <label>E-post *</label>
                 <input type="email" name="email_address" required class="form-input">
             </div>
             <div class="form-group">
-                <label>Target Price (SEK)</label>
+                <label>Målpris (kr)</label>
                 <input type="number" step="0.01" name="target_price_sek" class="form-input">
             </div>
             <div class="form-group">
                 <label>
-                    <input type="checkbox" name="alert_on_any_offer"> Alert on any offer
+                    <input type="checkbox" name="alert_on_any_offer"> Larma vid varje erbjudande
                 </label>
             </div>
             <div class="form-group">
-                <label>Price Drop Threshold (%)</label>
+                <label>Prisfallströskel (%)</label>
                 <input type="number" name="price_drop_threshold_percent" class="form-input">
             </div>
             <div class="form-group">
-                <label>Unit Price Target (SEK)</label>
+                <label>Mål för jämförpris (kr)</label>
                 <input type="number" step="0.01" name="unit_price_target_sek" class="form-input">
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Create Watch</button>
-                <button type="button" class="btn" onclick="closeModal('modal-create-watch')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Skapa bevakning</button>
+                <button type="button" class="btn" onclick="closeModal('modal-create-watch')">Avbryt</button>
             </div>
         </form>
     </div>
@@ -264,24 +264,24 @@
 <div class="modal" id="modal-import" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Import Data</h3>
+            <h3>Importera data</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-import')">&times;</button>
         </div>
         <form id="form-import" onsubmit="handleImport(event)">
             <div class="form-group">
-                <label>Mode</label>
+                <label>Läge</label>
                 <select name="mode" class="form-input">
-                    <option value="merge">Merge</option>
-                    <option value="replace">Replace</option>
+                    <option value="merge">Sammanfoga</option>
+                    <option value="replace">Ersätt</option>
                 </select>
             </div>
             <div class="form-group">
-                <label>JSON File *</label>
+                <label>JSON-fil *</label>
                 <input type="file" name="file" accept="application/json" required class="form-input">
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Import</button>
-                <button type="button" class="btn" onclick="closeModal('modal-import')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Importera</button>
+                <button type="button" class="btn" onclick="closeModal('modal-import')">Avbryt</button>
             </div>
         </form>
     </div>
