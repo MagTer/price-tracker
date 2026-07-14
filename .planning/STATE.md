@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v7.15.2
 milestone_name: milestone
-current_phase: 4
-current_phase_name: MCP Server + Agent Wiring
-status: verifying
-stopped_at: Phase 04.1 context gathered
-last_updated: "2026-07-13T22:39:39.543Z"
+current_phase: 04.1
+current_phase_name: Package data moves to the store link
+status: executing
+stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
+last_updated: "2026-07-14T00:49:29.777Z"
 last_activity: 2026-07-13
-last_activity_desc: "Djupanalys av hela kodbasen + autonom åtgärdssession (utan formell GSD-pipeline på Magnus begäran, med gating + state-loggning): JSON-LD-extractor (D-22), confidence-golv (D-23), MCP fail-closed (D-24). Faktakorrigering: Entra-ingressen är live sedan 2026-07-09 (se Decisions). Pågående: MCP-route-förberedelse i home-server-repot (egen branch, Magnus granskar)."
+last_activity_desc: Phase 04.1 execution started
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 67
+  completed_phases: 5
+  total_plans: 16
+  completed_plans: 16
+  percent: 83
 ---
 
 # Project State
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 
 **Project code:** PT
 **Core value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
-**Current focus:** Phase 04.1 — Package data moves to the store link (INSERTED, urgent): package_size + package_quantity move Product -> ProductStore. Runs before Phase 5.
+**Current focus:** Phase 04.1 (package data -> store link) is BUILT and verified: 214 tests green, no code gaps. Status human_needed — 4 operator items await Magnus (see 04.1-VERIFICATION.md + 04.1-08-SUMMARY.md § Operator checkpoint). MOST IMPORTANT: the deployed DB is still stamped at the OLD 0001, so `alembic upgrade head` silently applies NOTHING until the volume is dropped — see README.md § Schema reset (Phase 04.1).
 
 ## Current Position
 
-Phase: 4 of 5 (MCP Server + Agent Wiring) — gaps found, blocking Phase 5
-Plan: 1 of 1 in current phase (retroactively documented 2026-07-06)
-Status: Phases 1-3 complete and verified (Phase 2/3 retroactively backfilled 2026-07-06 with 1 flagged live-check caveat each — see below). Phase 4's MCP server itself is built and tested (4 tools + bearer auth), but its `mcp.<domain>` ingress and agent-platform registration are NOT done — retroactive verification 2026-07-06 found `gaps_found` status. Phase 5 (Source-repo Cleanup) should not start until this is resolved, per ROADMAP.md's own stated Phase 5 dependency ("MCP must be live and `priser` verified end-to-end before deleting source paths").
-Last activity: 2026-07-13 — Djupanalys av hela kodbasen + autonom åtgärdssession (utan formell GSD-pipeline på Magnus begäran, med gating + state-loggning): JSON-LD-extractor (D-22), confidence-golv (D-23), MCP fail-closed (D-24). Faktakorrigering: Entra-ingressen är live sedan 2026-07-09 (se Decisions). Pågående: MCP-route-förberedelse i home-server-repot (egen branch, Magnus granskar).
+Phase: 04.1 (Package data moves to the store link) — EXECUTING
+Plan: 1 of 8
+Status: Executing Phase 04.1
+Last activity: 2026-07-13 — Phase 04.1 execution started
 
 Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
 
@@ -136,8 +136,8 @@ Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIR
 
 ## Session Continuity
 
-**Resume file:** .planning/phases/04.1-package-data-moves-to-the-store-link/04.1-CONTEXT.md
+**Resume file:** .planning/phases/04.1-package-data-moves-to-the-store-link/04.1-08-SUMMARY.md
 
-Last session: 2026-07-13T22:39:39.533Z
-Stopped at: Phase 04.1 context gathered
+Last session: 2026-07-14T00:49:29.769Z
+Stopped at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
 Resume command: `/gsd-discuss-phase 2` (or continue `/gsd-autonomous` from current main thread)

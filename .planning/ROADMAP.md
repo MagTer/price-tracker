@@ -191,5 +191,5 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 | 2. Service Infrastructure | 1/1 | Complete | 2026-05-22 |
 | 3. Admin UI + Entra Auth | 1/1 | Complete | 2026-05-22 |
 | 4. MCP Server + Agent Wiring | 1/1 | Gaps Found | 2026-07-06 (retroactive verification) |
-| 04.1. Package data moves to the store link (INSERTED) | 0/8 | Planned | - |
+| 04.1. Package data moves to the store link (INSERTED) | 8/8 | Executed — awaiting human verification | 2026-07-14 (code complete; 4 operator items) |
 | 5. Source-repo Cleanup | 0/TBD | Not started | - |
