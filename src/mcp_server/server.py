@@ -39,16 +39,20 @@ def _fmt_price(val: Decimal | float | None) -> str:
 
 @mcp.tool()
 async def check_price(product_name: str) -> str:
-    """Check the latest observed price for a product on every tracked store listing.
+    """Report the last OBSERVED price for a product on every tracked store listing.
 
-    A quick "what does it cost where" summary. For "which package is cheapest per
-    unit", use compare_stores instead.
+    Reads stored price history only — it does NOT trigger a live fetch or scrape,
+    so the data is as fresh as each listing's most recent scheduled or manual
+    check, which may be days old. A quick "what did it cost where, last we
+    looked" summary. For "which package is cheapest per unit", use
+    compare_stores instead.
 
     Args:
         product_name: Name of the product to look up (e.g. "Apotea omega-3").
 
     Returns:
-        Markdown summary of the latest price and stock status per store listing.
+        Markdown summary of the last observed price and stock status per store
+        listing, from history.
     """
     service = _get_service()
     products = await service.get_products(search=product_name)
@@ -210,19 +214,19 @@ async def list_products() -> str:
     """
     service = _get_service()
     products = await service.get_products()
-    stores = await service.get_stores()
-    store_map = {s["id"]: s["name"] for s in stores}
 
     if not products:
         return "Inga produkter är registrerade än."
 
+    # One batched query for every product's linked store names. The old code read
+    # product["stores"] — a key get_products never emitted — so every product
+    # printed "Ej länkad" regardless of its links.
+    store_names_by_product = await service.get_store_names_by_product()
+
     lines: list[str] = ["## Bevakade produkter", ""]
 
     for product in products:
-        store_names = [
-            store_map.get(s.get("store_id"), s.get("store_name", "?"))
-            for s in (product.get("stores") or [])
-        ]
+        store_names = store_names_by_product.get(product["id"], [])
         stores_str = ", ".join(store_names) if store_names else "Ej länkad"
         lines.append(
             f"- **{product['name']}** ({product['brand'] or 'okänt märke'}) — "

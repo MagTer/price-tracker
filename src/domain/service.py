@@ -581,6 +581,34 @@ class PriceTrackerService:
                 logger.exception("Failed to get products")
                 return []
 
+    async def get_store_names_by_product(self) -> dict[str, list[str]]:
+        """Store names per product, in ONE query (no N+1).
+
+        A product may hold several links at one store post-04.1 (different pack
+        sizes), so names are deduped per product. Built for MCP list_products,
+        whose "linked stores" column had read a key get_products never emitted —
+        printing "Ej länkad" for every product since extraction.
+
+        Returns:
+            Mapping of str(product_id) -> sorted, deduped store names.
+        """
+        async with self.session_factory() as session:
+            try:
+                stmt = select(ProductStore.product_id, Store.name).join(
+                    Store, ProductStore.store_id == Store.id
+                )
+                result = await session.execute(stmt)
+
+                names: dict[str, set[str]] = {}
+                for product_id, store_name in result.all():
+                    names.setdefault(str(product_id), set()).add(store_name)
+
+                return {product_id: sorted(n) for product_id, n in names.items()}
+
+            except SQLAlchemyError:
+                logger.exception("Failed to get store names by product")
+                return {}
+
     async def get_stores(self) -> list[dict[str, str]]:
         """Get all active stores.
 

@@ -86,7 +86,7 @@ class TestPriceNotifier:
         assert "29.90 kr" in html
 
         # Should NOT have optional fields
-        assert "Ditt malpris:" not in html
+        assert "Ditt målpris:" not in html
         assert "Erbjudande:" not in html
         assert "Se produkten" not in html
 
@@ -118,8 +118,8 @@ class TestPriceNotifier:
 
         # Should have basic structure
         assert "<!DOCTYPE html>" in html
-        assert "Veckans prisoversikt" in html
-        assert "Har ar en sammanfattning" in html
+        assert "Veckans prisöversikt" in html
+        assert "Här är en sammanfattning" in html
 
         # Should NOT have tables or sections for empty data
         assert "Aktuella erbjudanden" not in html
@@ -190,6 +190,32 @@ class TestPriceNotifier:
 
         # Should NOT have deals section
         assert "Aktuella erbjudanden" not in html
+
+    def test_build_summary_html_renders_per_row_price_label(self) -> None:
+        """A kr/enhet row shows its unit label; the absolute fallback stays plain kr."""
+        mock_service = MockEmailService()
+        notifier = PriceNotifier(email_service=mock_service)
+
+        watched: list[dict[str, str | Decimal | None]] = [
+            {
+                "name": "Lambi Toalettpapper",
+                "lowest_price": Decimal("5.83"),
+                "store_name": "Willys",
+                "price_label": "kr/st",
+            },
+            {
+                "name": "Sukrin",
+                "lowest_price": Decimal("129.00"),
+                "store_name": "Apotea",
+                "price_label": "kr",
+            },
+        ]
+
+        html = notifier._build_summary_html(deals=[], watched_products=watched)
+
+        assert "5.83 kr/st" in html
+        assert "129.00 kr" in html
+        assert "Lägsta pris" in html
 
     def test_build_summary_html_limits_deals_to_top_10(self) -> None:
         """Test _build_summary_html limits deals to top 10."""
@@ -288,7 +314,7 @@ class TestPriceNotifier:
 
         sent_msg = mock_service.sent_messages[0]
         assert sent_msg.to == ["user@example.com"]
-        assert "Veckans prisoversikt" in sent_msg.subject
+        assert "Veckans prisöversikt" in sent_msg.subject
         assert "Mjolk" in sent_msg.html_body
         assert "Smor" in sent_msg.html_body
 

@@ -367,7 +367,9 @@ class TestMcpTools:
         assert "Inga produkter" in result
 
     @patch("mcp_server.server._get_service")
-    async def test_list_products(self, mock_get_svc):
+    async def test_list_products_shows_linked_store_names(self, mock_get_svc):
+        """Store names come from the batched helper — the old product["stores"] key never
+        existed, so every product printed "Ej länkad"."""
         mock_service = MagicMock()
         mock_service.get_products = AsyncMock(
             return_value=[
@@ -376,16 +378,44 @@ class TestMcpTools:
                     "name": "Toalettpapper",
                     "brand": "Lambi",
                     "category": "Hushall",
-                    "stores": [{"store_id": "s1", "store_name": "ICA"}],
                 }
             ]
         )
-        mock_service.get_stores = AsyncMock(return_value=[{"id": "s1", "name": "ICA"}])
+        mock_service.get_store_names_by_product = AsyncMock(return_value={"p1": ["ICA", "Willys"]})
         mock_get_svc.return_value = mock_service
 
         result = await list_products.fn()
         assert "Toalettpapper" in result
-        assert "ICA" in result
+        assert "ICA, Willys" in result
+        assert "Ej länkad" not in result
+        mock_service.get_store_names_by_product.assert_awaited_once()
+
+    @patch("mcp_server.server._get_service")
+    async def test_list_products_marks_only_unlinked_products(self, mock_get_svc):
+        """ "Ej länkad" appears only for products that genuinely have no links."""
+        mock_service = MagicMock()
+        mock_service.get_products = AsyncMock(
+            return_value=[
+                {"id": "p1", "name": "Toalettpapper", "brand": "Lambi", "category": "Hushall"},
+                {"id": "p2", "name": "Omega-3", "brand": "", "category": ""},
+            ]
+        )
+        mock_service.get_store_names_by_product = AsyncMock(return_value={"p1": ["Willys"]})
+        mock_get_svc.return_value = mock_service
+
+        result = await list_products.fn()
+        lines = {ln.split("**")[1]: ln for ln in result.splitlines() if ln.startswith("- **")}
+        assert "Willys" in lines["Toalettpapper"]
+        assert "Ej länkad" not in lines["Toalettpapper"]
+        assert "Ej länkad" in lines["Omega-3"]
+
+    async def test_check_price_docstring_says_history_only(self):
+        """The docstring IS the tool description agents read — it must not imply a live
+        fetch happens."""
+        doc = check_price.fn.__doc__ or ""
+        assert "OBSERVED" in doc
+        assert "history" in doc
+        assert "does NOT trigger a live fetch" in doc
 
 
 class TestFailClosed:
