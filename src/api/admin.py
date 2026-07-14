@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.db import async_session_factory
@@ -28,6 +29,7 @@ from api.schemas import (
     ProductCreate,
     ProductResponse,
     ProductStoreLink,
+    ProductStoreUpdate,
     ProductUpdate,
     StoreResponse
 )
@@ -290,8 +292,11 @@ async def create_product(
 ) -> dict[str, str]:
     """Create a new product to track.
 
+    A product is the abstract good (name, brand, category, and its canonical comparison
+    `unit`). Its package listings — the 24-pack, the 500 ml bottle — live on the STORE LINKS,
+    so the same good may be tracked at several sizes in the same store.
+
     Products are scoped to the authenticated user's context for multi-tenancy.
-    Different package sizes should be created as separate products.
 
     Args:
         data: Product creation data.
@@ -305,14 +310,7 @@ async def create_product(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
-        from decimal import Decimal
-
-        # Validate package_quantity if provided
-        if data.package_quantity is not None and data.package_quantity <= 0:
-            raise HTTPException(status_code=400, detail="package_quantity must be positive")
-
         tenant_uuid = require_default_tenant(data.tenant_id)
-        package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
 
         product = await service.create_product(
             tenant_id=tenant_uuid,
@@ -320,8 +318,6 @@ async def create_product(
             brand=data.brand,
             category=data.category,
             unit=data.unit,
-            package_size=data.package_size,
-            package_quantity=package_qty,
         )
         return {"product_id": str(product.id), "message": "Product created successfully"}
     except HTTPException:
@@ -470,14 +466,7 @@ async def update_product(
             product.category = data.category if data.category else None
         if data.unit is not None:
             product.unit = data.unit if data.unit else None
-        if data.package_size is not None:
-            product.package_size = data.package_size if data.package_size else None
-        if data.package_quantity is not None:
-            from decimal import Decimal
-
-            if data.package_quantity <= 0:
-                raise HTTPException(status_code=400, detail="package_quantity must be positive")
-            product.package_quantity = Decimal(str(data.package_quantity))
+        # Package data is edited on the LINK — see PUT /product-stores/{id}/packaging.
 
         await session.commit()
         return {"message": "Product updated successfully"}
@@ -497,11 +486,14 @@ async def link_product_to_store(
     data: ProductStoreLink,
     service: PriceTrackerService = Depends(get_price_tracker_service),
 ) -> dict[str, str]:
-    """Link a product to a store with URL.
+    """Link a product to a store with URL — the concrete package listing at one store page.
+
+    A product may hold SEVERAL links at one store (a 24-pack and an 8-pack): the link, not the
+    product, owns the packaging. The store URL is the link's natural key and is globally unique.
 
     Args:
         product_id: Product UUID.
-        data: Store link data.
+        data: Store link data, including the link's package_size / package_quantity.
         service: Price tracker service.
 
     Returns:
@@ -522,6 +514,13 @@ async def link_product_to_store(
             status_code=400,
             detail="check_weekday must be between 0 (Monday) and 6 (Sunday)",
         )
+    # Validate package_quantity if provided. This check MOVED here from create_product when
+    # the package data moved onto the link; it was not dropped in the move. A zero quantity
+    # would otherwise reach the unit-price divisor.
+    if data.package_quantity is not None and data.package_quantity <= 0:
+        raise HTTPException(status_code=400, detail="package_quantity must be positive")
+
+    package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
 
     try:
         product_store = await service.link_product_store(
@@ -530,11 +529,28 @@ async def link_product_to_store(
             store_url=data.store_url,
             check_frequency_hours=data.check_frequency_hours,
             check_weekday=data.check_weekday,
+            package_size=data.package_size,
+            package_quantity=package_qty,
         )
         return {
             "product_store_id": str(product_store.id),
             "message": "Product linked to store successfully",
         }
+    except HTTPException:
+        raise
+    except IntegrityError as e:
+        # store_url is globally unique, so pasting an already-tracked URL is a normal user
+        # action, not a fault. Without this arm it falls into the blanket handler below and
+        # comes back as a 500 carrying a driver message.
+        LOGGER.warning(
+            "Duplicate store_url on link attempt for product %s: %s",
+            sanitize_log(product_id),
+            sanitize_log(data.store_url),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This store URL is already tracked — each link has its own URL",
+        ) from e
     except Exception as e:
         LOGGER.exception(
             "Failed to link product %s to store %s",
@@ -545,19 +561,21 @@ async def link_product_to_store(
 
 
 @router.put(
-    "/products/{product_id}/stores/{store_id}/frequency",
+    "/product-stores/{product_store_id}/frequency",
 )
 async def update_check_frequency(
-    product_id: str,
-    store_id: str,
+    product_store_id: str,
     request: dict[str, Any],
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str | None]:
     """Update check frequency for a product-store link.
 
+    Keyed on the LINK's own id, never on the (product_id, store_id) pair: a product may hold
+    several links at one store, so the pair is no longer single-valued and resolving on it
+    raises MultipleResultsFound.
+
     Args:
-        product_id: Product UUID.
-        store_id: Store UUID.
+        product_store_id: ProductStore UUID.
         request: Dictionary containing check_frequency_hours.
         session: Database session.
 
@@ -568,10 +586,9 @@ async def update_check_frequency(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
-        product_uuid = uuid.UUID(product_id)
-        store_uuid = uuid.UUID(store_id)
+        ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid UUID format") from e
+        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
 
     check_frequency_hours = request.get("check_frequency_hours")
     check_weekday = request.get("check_weekday")  # 0=Monday, 6=Sunday, None=use frequency
@@ -593,9 +610,7 @@ async def update_check_frequency(
         )
 
     try:
-        stmt = select(ProductStore).where(
-            ProductStore.product_id == product_uuid, ProductStore.store_id == store_uuid
-        )
+        stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
         result = await session.execute(stmt)
         product_store = result.scalar_one_or_none()
 
@@ -645,26 +660,92 @@ async def update_check_frequency(
         raise
     except Exception as e:
         LOGGER.exception(
-            "Failed to update frequency for product %s, store %s",
-            sanitize_log(product_id),
-            sanitize_log(store_id),
+            "Failed to update frequency for link %s",
+            sanitize_log(product_store_id),
         )
         raise HTTPException(status_code=500, detail="Failed to update frequency") from e
 
 
-@router.delete(
-    "/products/{product_id}/stores/{store_id}",
+@router.put(
+    "/product-stores/{product_store_id}/packaging",
 )
-async def unlink_product_from_store(
-    product_id: str,
-    store_id: str,
+async def update_link_packaging(
+    product_store_id: str,
+    data: ProductStoreUpdate,
     session: AsyncSession = Depends(get_db),
-):
-    """Remove product-store link.
+) -> dict[str, str | float | None]:
+    """Edit a link's packaging — its amount and its human-readable label (D-11).
+
+    Deliberately cannot change store_url: the URL is the link's identity, and re-pointing it at
+    a different page would rewrite the meaning of the link's entire price history.
 
     Args:
-        product_id: Product UUID.
-        store_id: Store UUID.
+        product_store_id: ProductStore UUID.
+        data: package_size and/or package_quantity.
+        session: Database session.
+
+    Returns:
+        The updated packaging values.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    try:
+        ps_uuid = uuid.UUID(product_store_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
+
+    # The same >0 check the link-create path enforces — relocated from create_product when the
+    # package data moved onto the link, not dropped in the move.
+    if data.package_quantity is not None and data.package_quantity <= 0:
+        raise HTTPException(status_code=400, detail="package_quantity must be positive")
+
+    try:
+        stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
+        result = await session.execute(stmt)
+        product_store = result.scalar_one_or_none()
+
+        if not product_store:
+            raise HTTPException(status_code=404, detail="Product-store link not found")
+
+        if data.package_size is not None:
+            product_store.package_size = data.package_size if data.package_size else None
+        if data.package_quantity is not None:
+            product_store.package_quantity = Decimal(str(data.package_quantity))
+
+        await session.commit()
+        await session.refresh(product_store)
+
+        return {
+            "message": "Packaging updated",
+            "package_size": product_store.package_size,
+            "package_quantity": (
+                float(product_store.package_quantity)
+                if product_store.package_quantity is not None
+                else None
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.exception(
+            "Failed to update packaging for link %s",
+            sanitize_log(product_store_id),
+        )
+        raise HTTPException(status_code=500, detail="Failed to update packaging") from e
+
+
+@router.delete(
+    "/product-stores/{product_store_id}",
+)
+async def unlink_product_from_store(
+    product_store_id: str,
+    session: AsyncSession = Depends(get_db),
+):
+    """Remove a product-store link, addressed by its own id.
+
+    Args:
+        product_store_id: ProductStore UUID.
         session: Database session.
 
     Returns:
@@ -674,15 +755,12 @@ async def unlink_product_from_store(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
-        product_uuid = uuid.UUID(product_id)
-        store_uuid = uuid.UUID(store_id)
+        ps_uuid = uuid.UUID(product_store_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid UUID format") from e
+        raise HTTPException(status_code=400, detail="Invalid product_store_id format") from e
 
     try:
-        stmt = select(ProductStore).where(
-            ProductStore.product_id == product_uuid, ProductStore.store_id == store_uuid
-        )
+        stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
         result = await session.execute(stmt)
         product_store = result.scalar_one_or_none()
 
@@ -697,9 +775,8 @@ async def unlink_product_from_store(
         raise
     except Exception as e:
         LOGGER.exception(
-            "Failed to unlink product %s from store %s",
-            sanitize_log(product_id),
-            sanitize_log(store_id),
+            "Failed to unlink link %s",
+            sanitize_log(product_store_id),
         )
         raise HTTPException(status_code=500, detail="Failed to unlink product from store") from e
 
@@ -1493,27 +1570,19 @@ async def import_data(
             product = product_result.scalar_one_or_none()
 
             if product:
-                # Update existing product
+                # Update existing product. Package data is NOT a product attribute any more —
+                # an import entry carries it on each store link instead.
                 product.category = prod_data.get("category") or product.category
                 product.unit = prod_data.get("unit") or product.unit
-                product.package_size = prod_data.get("package_size") or product.package_size
-                if prod_data.get("package_quantity"):
-                    product.package_quantity = Decimal(str(prod_data["package_quantity"]))
                 products_updated += 1
             else:
                 # Create new product
-                package_qty = None
-                if prod_data.get("package_quantity"):
-                    package_qty = Decimal(str(prod_data["package_quantity"]))
-
                 product = Product(
                     tenant_id=tenant_id,
                     name=name,
                     brand=brand,
                     category=prod_data.get("category"),
                     unit=prod_data.get("unit"),
-                    package_size=prod_data.get("package_size"),
-                    package_quantity=package_qty,
                 )
                 session.add(product)
                 await session.flush()  # Get product ID
@@ -1535,16 +1604,20 @@ async def import_data(
                     store_links_skipped += 1
                     continue
 
-                # Check if link already exists
-                ps_stmt = select(ProductStore).where(
-                    ProductStore.product_id == product.id,
-                    ProductStore.store_id == store.id,
-                )
+                # Check if link already exists. Dedupe on store_url — the link's natural key.
+                # The old (product_id, store_id) pair is no longer single-valued: a product may
+                # hold several links at one store (a 24-pack and an 8-pack), and resolving on
+                # the pair raises MultipleResultsFound.
+                ps_stmt = select(ProductStore).where(ProductStore.store_url == store_url)
                 ps_result = await session.execute(ps_stmt)
                 existing_ps = ps_result.scalar_one_or_none()
 
                 if not existing_ps:
-                    # Create new link
+                    link_package_qty = None
+                    if link_data.get("package_quantity"):
+                        link_package_qty = Decimal(str(link_data["package_quantity"]))
+
+                    # Create new link — the link owns the packaging.
                     ps = ProductStore(
                         product_id=product.id,
                         store_id=store.id,
@@ -1552,6 +1625,8 @@ async def import_data(
                         check_frequency_hours=link_data.get("check_frequency_hours", 168),
                         check_weekday=link_data.get("check_weekday"),
                         is_active=link_data.get("is_active", True),
+                        package_size=link_data.get("package_size"),
+                        package_quantity=link_package_qty,
                     )
                     session.add(ps)
                     store_links_created += 1
