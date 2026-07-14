@@ -5,6 +5,7 @@ a g/kg factor slip makes one link look 1000x cheaper than every other and win ev
 and an Alembic revision rewritten under a stale id applies nothing at all.
 """
 
+import ast
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 from domain.pricing import PKG_UNITS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
 ADMIN_HTML = REPO_ROOT / "src" / "api" / "templates" / "admin.html"
 INITIAL_MIGRATION = REPO_ROOT / "alembic" / "versions" / "0001_initial.py"
 
@@ -74,3 +76,130 @@ def test_initial_migration_declares_reshaped_columns() -> None:
     # and an app running against the old schema.
     assert "D-15" in source
     assert "docker compose down -v" in source
+
+
+# --- MODEL-02: no link may be resolved by the (product_id, store_id) pair -------------------
+#
+# Dropping uq_product_store makes "two pack sizes at one store" legal — and makes every query
+# that resolves a link on that pair latently multi-valued. `.scalar_one_or_none()` on such a
+# query raises MultipleResultsFound, which surfaces as HTTP 500 on the exact scenario this
+# phase exists to enable. This gate fails the build if that shape ever comes back.
+#
+# The detector is AST-based, not a regex: comments and strings are invisible to it by
+# construction, so prose mentioning the bug cannot fail the build, and — critically — a JOIN
+# condition (`ProductStore.store_id == Store.id`) is not confused with a FILTER
+# (`ProductStore.store_id == store_uuid`). Both identifiers appear legitimately in joins all
+# over the codebase; a gate that flagged either one alone would be permanently red and would
+# be switched off within a week.
+
+# The pre-phase lookup, verbatim (admin.py:596-600 before this phase). The detector MUST flag
+# it — a gate that cannot detect the bug it exists to prevent is a false assurance, not a gate.
+_BAD_SAMPLE = """
+stmt = select(ProductStore).where(
+    ProductStore.product_id == product_uuid, ProductStore.store_id == store_uuid
+)
+"""
+
+# The join shape that must NOT be flagged: both columns appear, but each is bound to its
+# parent table's primary key. This is `POST /check/{product_store_id}` (the correct pattern).
+_GOOD_SAMPLE = """
+stmt = (
+    select(ProductStore, Store, Product)
+    .join(Store, ProductStore.store_id == Store.id)
+    .join(Product, ProductStore.product_id == Product.id)
+    .where(ProductStore.id == ps_uuid)
+)
+"""
+
+_JOIN_TARGETS = {("Store", "id"), ("Product", "id"), ("ProductStore", "id")}
+
+
+def _is_ps_column(node: ast.expr, column: str) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == column
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "ProductStore"
+    )
+
+
+def _is_join_target(node: ast.expr) -> bool:
+    """True for `Store.id` / `Product.id` / `ProductStore.id` — i.e. a join condition, not a filter."""
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and (node.value.id, node.attr) in _JOIN_TARGETS
+    )
+
+
+def _filters_on(node: ast.AST, column: str) -> bool:
+    """Does this subtree constrain ProductStore.<column> against a scalar (not a join target)?"""
+    for cmp_node in ast.walk(node):
+        if not isinstance(cmp_node, ast.Compare) or not isinstance(cmp_node.ops[0], ast.Eq):
+            continue
+        left, right = cmp_node.left, cmp_node.comparators[0]
+        for a, b in ((left, right), (right, left)):
+            if _is_ps_column(a, column) and not _is_join_target(b):
+                return True
+    return False
+
+
+def _selects_product_store(node: ast.AST) -> bool:
+    for call in ast.walk(node):
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "select"
+            and any(isinstance(a, ast.Name) and a.id == "ProductStore" for a in call.args)
+        ):
+            return True
+    return False
+
+
+def _find_pair_keyed_lookups(source: str, label: str) -> list[str]:
+    """Return a finding per statement that resolves a ProductStore by (product_id, store_id)."""
+    tree = ast.parse(source)
+    findings: list[str] = []
+
+    # Only leaf statements — a compound statement (`with`, `try`) would swallow its whole body
+    # and merge unrelated queries into one subtree.
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.Assign | ast.AnnAssign | ast.Expr | ast.Return):
+            continue
+        if not _selects_product_store(stmt):
+            continue
+        if _filters_on(stmt, "product_id") and _filters_on(stmt, "store_id"):
+            findings.append(f"{label}:{stmt.lineno}")
+
+    return findings
+
+
+def test_pair_keyed_lookup_detector_flags_the_pre_phase_shape() -> None:
+    """Self-check: the gate below is only worth anything if it can actually fail."""
+    assert _find_pair_keyed_lookups(_BAD_SAMPLE, "<bad-sample>"), (
+        "The detector did not flag the pre-phase (product_id, store_id) lookup. "
+        "The gate is a false assurance — fix the detector before trusting it."
+    )
+    assert not _find_pair_keyed_lookups(_GOOD_SAMPLE, "<good-sample>"), (
+        "The detector flagged a JOIN condition as a pair-keyed filter. It would be permanently "
+        "red against the real codebase and would get disabled."
+    )
+
+
+def test_no_link_lookup_by_product_store_pair() -> None:
+    """MODEL-02: no query in src/ may resolve a ProductStore by the (product_id, store_id) pair.
+
+    That pair stopped being unique when D-01 dropped uq_product_store. Links are addressed by
+    their own id (`/product-stores/{product_store_id}`) or, in the import path, by store_url.
+    """
+    findings: list[str] = []
+    for path in sorted(SRC_ROOT.rglob("*.py")):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        findings.extend(_find_pair_keyed_lookups(path.read_text(encoding="utf-8"), rel))
+
+    assert not findings, (
+        "A ProductStore is resolved by the (product_id, store_id) pair at: "
+        + ", ".join(findings)
+        + ". That pair is no longer unique — the query raises MultipleResultsFound (HTTP 500) "
+        "as soon as a product has two pack sizes at one store. Key on ProductStore.id."
+    )
