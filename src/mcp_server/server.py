@@ -40,13 +40,16 @@ def _fmt_price(val: Decimal | float | None) -> str:
 
 @mcp.tool()
 async def check_price(product_name: str) -> str:
-    """Check current prices for a product across all tracked stores.
+    """Check the latest observed price for a product on every tracked store listing.
+
+    A quick "what does it cost where" summary. For "which package is cheapest per
+    unit", use compare_stores instead.
 
     Args:
         product_name: Name of the product to look up (e.g. "Apotea omega-3").
 
     Returns:
-        Markdown summary of prices and stock status per store.
+        Markdown summary of the latest price and stock status per store listing.
     """
     service = _get_service()
     products = await service.get_products(search=product_name)
@@ -62,19 +65,26 @@ async def check_price(product_name: str) -> str:
         if not history:
             lines.append("- Inga priser registrerade än.")
         else:
-            latest_by_store: dict[str, dict] = {}
+            # Deduped per LINK, not per store name: a product may now hold several
+            # listings at one store (different pack sizes), and keying on the store
+            # name would collapse them into an arbitrary winner. History is ordered
+            # checked_at DESC, so the first row seen per link is the latest.
+            latest_by_link: dict[str, dict] = {}
             for row in history:
+                key = str(row.get("product_store_id") or row["store_name"])
+                if key not in latest_by_link:
+                    latest_by_link[key] = row
+            for row in latest_by_link.values():
                 store = row["store_name"]
-                if store not in latest_by_store:
-                    latest_by_store[store] = row
-            for store, row in latest_by_store.items():
+                package = row.get("package_size")
+                label = f"{store} ({package})" if package else store
                 price = _fmt_price(row.get("price_sek"))
                 offer = _fmt_price(row.get("offer_price_sek"))
                 stock = "i lager" if row.get("in_stock") else "slut i lager"
                 if row.get("offer_price_sek"):
-                    lines.append(f"- **{store}**: ~~{price}~~ → {offer} ({stock})")
+                    lines.append(f"- **{label}**: ~~{price}~~ → {offer} ({stock})")
                 else:
-                    lines.append(f"- **{store}**: {price} ({stock})")
+                    lines.append(f"- **{label}**: {price} ({stock})")
         lines.append("")
 
     return "\n".join(lines)
@@ -113,13 +123,25 @@ async def find_deals(store_type: str | None = None) -> str:
 
 @mcp.tool()
 async def compare_stores(product_name: str) -> str:
-    """Compare prices for a product side-by-side across stores.
+    """Compare every tracked package of a product, ranked cheapest per unit.
+
+    One row per store listing — so two pack sizes at the same store are two rows,
+    which is the whole point: the cheapest package is not always the cheapest one
+    per roll/liter/kg. Rows come back already ranked by the COMPUTED comparison
+    price (price ÷ the package's amount), cheapest first; listings whose amount is
+    not yet known sort last and say so.
+
+    "Jämförspris" is that computed value and is the only comparable one. "Butiken
+    anger" is what the store itself printed — stores use different definitions
+    (kr/rulle at one, kr/100g at another), so it is shown as a raw signal and must
+    never be used to rank.
 
     Args:
         product_name: Name of the product to compare.
 
     Returns:
-        Markdown table with store, price, offer, and unit price.
+        Markdown table per product: store, package, price, offer, computed
+        comparison price, the store's printed comparison price, and stock.
     """
     service = _get_service()
     products = await service.get_products(search=product_name)
@@ -132,21 +154,46 @@ async def compare_stores(product_name: str) -> str:
     for product in products:
         lines.append(f"### {product['name']}")
         lines.append("")
-        lines.append("| Butik | Pris | Erbjudande | Jämförspris | Lager |")
-        lines.append("|-------|------|------------|-------------|-------|")
 
-        history = await service.get_price_history(product["id"], days=7)
-        seen_stores: set[str] = set()
-        for row in history:
-            store = row["store_name"]
-            if store in seen_stores:
-                continue
-            seen_stores.add(store)
-            price = _fmt_price(row.get("price_sek"))
-            offer = _fmt_price(row.get("offer_price_sek"))
-            unit = _fmt_price(row.get("unit_price_sek"))
-            stock = "Ja" if row.get("in_stock") else "Nej"
-            lines.append(f"| {store} | {price} | {offer} | {unit} | {stock} |")
+        # Already one row per link and already ranked cheapest-per-unit with NULL
+        # quantities last (D-13). This tool is a render: no sorting and no unit-price
+        # arithmetic happens here — the domain owns the one definition (D-03).
+        links = await service.get_links_for_product(product["id"])
+
+        if not links:
+            lines.append("Inga butikslänkar registrerade än.")
+            lines.append("")
+            continue
+
+        unit = product.get("unit") or "enhet"
+        lines.append(
+            f"| Butik | Förpackning | Pris | Erbjudande | Jämförspris (kr/{unit}) "
+            f"| Butiken anger | Lager |"
+        )
+        lines.append(
+            "|-------|-------------|------|------------|--------------|---------------|-------|"
+        )
+
+        for link in links:
+            store = link.get("store_name") or "?"
+            package = link.get("package_size") or "—"
+            price = _fmt_price(link.get("price_sek"))
+            offer = _fmt_price(link.get("offer_price_sek"))
+            # D-02: a link may legitimately have no amount yet (the first scrape autofills
+            # it). Say so explicitly — a bare "N/A" reads as broken, "saknar mängd" tells
+            # the operator exactly what to fix. These rows already sort last.
+            if link.get("package_quantity") is None:
+                unit_price = "saknar mängd"
+            else:
+                unit_price = _fmt_price(link.get("unit_price_sek"))
+            # D-05: the store's PRINTED value, its own column, never the sort key.
+            store_says = _fmt_price(link.get("store_unit_price_sek"))
+            in_stock = link.get("in_stock")
+            stock = "?" if in_stock is None else ("Ja" if in_stock else "Nej")
+            lines.append(
+                f"| {store} | {package} | {price} | {offer} | {unit_price} "
+                f"| {store_says} | {stock} |"
+            )
         lines.append("")
 
     return "\n".join(lines)
