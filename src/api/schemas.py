@@ -138,14 +138,23 @@ class PricePointResponse(BaseModel):
 
 
 class DealResponse(BaseModel):
-    """Schema for current deals/offers."""
+    """Schema for current deals/offers — one row per LINK.
+
+    A deal is an offer on a store LISTING, not on a product-at-a-store: a 24-pack and an
+    8-pack of one product at one store are two links and may each be on offer.
+
+    `unit_price_sek` is the COMPUTED kr/unit (D-03), exposed so a consumer can compare packs.
+    Deals themselves are still ordered by RECENCY — the number is data here, not the ranking.
+    """
 
     product_id: str
     product_name: str
     store_name: str
     store_slug: str
+    package_size: str | None  # The link's label: "24-pack", "500 ml"
     price_sek: float | None
     offer_price_sek: float
+    unit_price_sek: float | None  # COMPUTED — None when the link has no amount yet (D-02)
     offer_type: str
     offer_details: str | None
     checked_at: str

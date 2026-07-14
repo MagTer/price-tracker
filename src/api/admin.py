@@ -957,7 +957,7 @@ async def trigger_price_check(
     product_store_id: str,
     service: PriceTrackerService = Depends(get_price_tracker_service),
     session: AsyncSession = Depends(get_db),
-) -> dict[str, str | float | None]:
+) -> dict[str, str | float | bool | None]:
     """Manually trigger a price check for a product-store combination.
 
     This endpoint:
@@ -1023,9 +1023,28 @@ async def trigger_price_check(
                 "offer_price_sek": None,
             }
 
-        # Record price
-        unit_price = (
-            float(extraction_result.unit_price_sek) if extraction_result.unit_price_sek else None
+        # Scrape write-path #3 of 3 (the scheduler and service.check_price are the others).
+        # This endpoint re-implements their fetch/parse/record flow inline instead of calling
+        # it, so D-07 does NOT reach it for free: without this call, "Check now" records a
+        # price and leaves the link's quantity blank forever. `product_store` is attached to
+        # the session record_price commits, so the autofilled quantity and the page's reading
+        # persist alongside the price point — no second commit.
+        mismatch_message = apply_scrape_to_link(
+            product_store, extraction_result, product.unit
+        )
+        if mismatch_message:
+            LOGGER.warning(
+                "Package quantity mismatch on link %s: %s",
+                sanitize_log(product_store_id),
+                mismatch_message,
+            )
+
+        # Record price. store_unit_price_sek is what the STORE printed (D-05); the comparable
+        # kr/unit is never persisted — it is computed on read from the link's quantity (D-04).
+        store_unit_price = (
+            float(extraction_result.store_unit_price_sek)
+            if extraction_result.store_unit_price_sek
+            else None
         )
         offer_price = (
             float(extraction_result.offer_price_sek) if extraction_result.offer_price_sek else None
@@ -1033,7 +1052,7 @@ async def trigger_price_check(
 
         price_data: dict[str, Any] = {
             "price_sek": float(extraction_result.price_sek),
-            "unit_price_sek": unit_price,
+            "store_unit_price_sek": store_unit_price,
             "offer_price_sek": offer_price,
             "offer_type": extraction_result.offer_type,
             "offer_details": extraction_result.offer_details,
@@ -1046,9 +1065,6 @@ async def trigger_price_check(
         if not price_point:
             raise HTTPException(status_code=500, detail="Failed to record price")
 
-        unit_price_result = (
-            float(price_point.unit_price_sek) if price_point.unit_price_sek else None
-        )
         offer_price_result = (
             float(price_point.offer_price_sek) if price_point.offer_price_sek else None
         )
@@ -1056,7 +1072,16 @@ async def trigger_price_check(
         return {
             "message": "Price check completed successfully",
             "price_sek": float(price_point.price_sek),
-            "unit_price_sek": unit_price_result,
+            # COMPUTED from the link's (possibly just-autofilled) quantity — the comparable one.
+            "unit_price_sek": _computed_unit_price(
+                _effective_price(price_point), product_store.package_quantity
+            ),
+            # What the store printed — display only, never sorted on (D-05).
+            "store_unit_price_sek": _as_float(price_point.store_unit_price_sek),
+            "package_quantity": _as_float(product_store.package_quantity),
+            # The page disagreed with the operator's typed amount; the stored value is
+            # untouched (D-07) and the flag self-clears when either number is corrected.
+            "quantity_mismatch": mismatch_message,
             "offer_price_sek": offer_price_result,
             "offer_type": price_point.offer_type,
             "in_stock": price_point.in_stock,
@@ -1108,12 +1133,16 @@ async def get_current_deals(
         result = await session.execute(stmt)
         rows = result.all()
 
-        # Deduplicate by product-store (keep latest)
-        seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
+        # Deduplicate by LINK (keep latest). The old key was the (product, store) pair, which
+        # was single-valued only because of the constraint this phase dropped: a 24-pack and an
+        # 8-pack of one product at one store are now legitimate, and the pair key collapsed
+        # them into ONE arbitrary deal row — silently, with no error, one pack size simply
+        # vanishing from the list.
+        seen: set[uuid.UUID] = set()
         deals: list[DealResponse] = []
 
         for price_point, product, store, product_store in rows:
-            key = (product.id, store.id)
+            key = product_store.id
             if key in seen:
                 continue
             seen.add(key)
@@ -1133,8 +1162,15 @@ async def get_current_deals(
                     product_name=product.name,
                     store_name=store.name,
                     store_slug=store.slug,
+                    package_size=product_store.package_size,
                     price_sek=float(price_point.price_sek) if price_point.price_sek else None,
                     offer_price_sek=float(price_point.offer_price_sek),
+                    # Exposed, not ranked on: the ordering below stays by RECENCY. Re-ranking
+                    # deals by kr/unit is a behavior change to an unrelated feature; a consumer
+                    # that wants to sort on this number now has it.
+                    unit_price_sek=_computed_unit_price(
+                        _effective_price(price_point), product_store.package_quantity
+                    ),
                     offer_type=price_point.offer_type or "unknown",
                     offer_details=price_point.offer_details,
                     checked_at=price_point.checked_at.isoformat(),
@@ -1463,6 +1499,10 @@ async def export_data(
                     "check_frequency_hours": ps.check_frequency_hours,
                     "check_weekday": ps.check_weekday,
                     "is_active": ps.is_active,
+                    # The package data follows the LINK it describes.
+                    "package_size": ps.package_size,
+                    "package_quantity": _as_float(ps.package_quantity),
+                    "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
                 }
                 for ps, store in ps_rows
             ]
@@ -1492,16 +1532,14 @@ async def export_data(
                 for watch in watches
             ]
 
+            # No package fields here: a product is the abstract good. Its packages are listed
+            # on the store links above.
             product_dict: dict[str, Any] = {
                 "id": str(product.id),
                 "name": product.name,
                 "brand": product.brand,
                 "category": product.category,
                 "unit": product.unit,
-                "package_size": product.package_size,
-                "package_quantity": (
-                    float(product.package_quantity) if product.package_quantity else None
-                ),
                 "store_links": store_links,
                 "watches": watches_data,
             }
@@ -1547,9 +1585,11 @@ async def export_data(
                                 "store_slug": store.slug,
                                 "checked_at": pp.checked_at.isoformat(),
                                 "price_sek": float(pp.price_sek) if pp.price_sek else None,
-                                "unit_price_sek": (
-                                    float(pp.unit_price_sek) if pp.unit_price_sek else None
-                                ),
+                                # The only unit price worth persisting in an export is the one
+                                # actually OBSERVED on the page. The comparable kr/unit is
+                                # derived from the link's quantity, so re-deriving it on import
+                                # is correct behavior, not data loss (D-04).
+                                "store_unit_price_sek": _as_float(pp.store_unit_price_sek),
                                 "offer_price_sek": (
                                     float(pp.offer_price_sek) if pp.offer_price_sek else None
                                 ),
