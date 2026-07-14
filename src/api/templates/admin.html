@@ -162,6 +162,13 @@
             <h3>Price History</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-price-history')">&times;</button>
         </div>
+        <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
+             that has no honest answer: a smaller box always looks cheaper. In absolute mode
+             the best-available line is not drawn at all. -->
+        <div id="price-history-modes" class="history-modes">
+            <button type="button" class="btn btn-sm active" data-history-mode="unit">kr/enhet</button>
+            <button type="button" class="btn btn-sm" data-history-mode="absolute">Absolut pris</button>
+        </div>
         <div id="price-history-chart-container">
             <canvas id="price-history-chart"></canvas>
         </div>
@@ -396,6 +403,16 @@ form {
     display: none;
 }
 .entry-unit-active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
+.history-modes {
+    display: flex;
+    gap: 6px;
+    padding: 4px 0 12px;
+}
+.history-modes .btn.active {
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
@@ -891,60 +908,122 @@ function buildChartData(rows, mode) {
 }
 
 let priceChart = null;
+let historyRows = [];
+let historyFor = null;                   // { id, name, unit } of the product on screen
+let historyMode = 'unit';                // kr/unit is the default (QD-3)
 
-async function showPriceHistory(productId, productName) {
+async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('modal-price-history').style.display = 'flex';
+    historyFor = { id: productId, name: productName, unit: productUnit };
+    historyMode = 'unit';
+    setHistoryModeButtons();
     try {
-        const history = await apiGet('/products/' + productId + '/prices?days=90');
-        const tableDiv = document.getElementById('price-history-table');
-        if (!history.length) {
-            tableDiv.innerHTML = '<p class="empty-state">No price history yet.</p>';
-            return;
-        }
-        let html = '<table><thead><tr><th>Date</th><th>Store</th><th>Price</th><th>Offer</th><th>In Stock</th></tr></thead><tbody>';
-        for (const h of history.slice(0, 50)) {
-            html += `<tr>
-                <td>${h.checked_at ? h.checked_at.slice(0,10) : '-'}</td>
-                <td>${escapeHtml(h.store_name)}</td>
-                <td>${h.price_sek != null ? h.price_sek + ' kr' : '-'}</td>
-                <td>${h.offer_price_sek != null ? h.offer_price_sek + ' kr' : '-'}</td>
-                <td>${h.in_stock ? 'Yes' : 'No'}</td>
-            </tr>`;
-        }
-        html += '</tbody></table>';
-        tableDiv.innerHTML = html;
-
-        // Chart.js line chart
-        if (window.Chart && history.length > 1) {
-            const ctx = document.getElementById('price-history-chart').getContext('2d');
-            if (priceChart) priceChart.destroy();
-            const labels = history.map(h => h.checked_at ? h.checked_at.slice(0,10) : '').reverse();
-            const data = history.map(h => h.price_sek).reverse();
-            priceChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Price (SEK)',
-                        data: data,
-                        borderColor: '#2563eb',
-                        backgroundColor: 'rgba(37,99,235,0.1)',
-                        fill: true,
-                        tension: 0.2,
-                        pointRadius: 3
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { title: { display: true, text: productName } },
-                    scales: { y: { beginAtZero: false } }
-                }
-            });
-        }
+        // Fetched ONCE and cached. Toggling the mode re-renders from this cache — the two modes
+        // are two readings of the same rows, not two questions for the server.
+        historyRows = await apiGet('/products/' + productId + '/prices?days=90');
+        renderPriceHistory();
     } catch (err) {
-        document.getElementById('price-history-table').innerHTML = '<p class="empty-state">Failed to load history.</p>';
+        historyRows = [];
+        document.getElementById('price-history-table').innerHTML =
+            '<p class="empty-state">Failed to load history.</p>';
     }
+}
+
+function setHistoryModeButtons() {
+    const buttons = document.querySelectorAll('#price-history-modes button[data-history-mode]');
+    for (const btn of buttons) {
+        btn.classList.toggle('active', btn.getAttribute('data-history-mode') === historyMode);
+    }
+}
+
+function setHistoryMode(mode) {
+    if (mode !== 'unit' && mode !== 'absolute') return;
+    historyMode = mode;
+    setHistoryModeButtons();
+    renderPriceHistory();                // from cache — no refetch
+}
+
+function renderPriceHistory() {
+    const tableDiv = document.getElementById('price-history-table');
+    if (!historyRows.length) {
+        tableDiv.innerHTML = '<p class="empty-state">No price history yet.</p>';
+        if (priceChart) { priceChart.destroy(); priceChart = null; }
+        return;
+    }
+    const unit = historyFor ? historyFor.unit : null;
+    tableDiv.innerHTML = buildHistoryTable(historyRows, unit);
+
+    if (window.Chart) {
+        const chart = buildChartData(historyRows, historyMode);
+        const ctx = document.getElementById('price-history-chart').getContext('2d');
+        if (priceChart) priceChart.destroy();
+        priceChart = new Chart(ctx, {
+            type: 'line',
+            data: chart,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: (historyFor ? historyFor.name : '')
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        title: {
+                            display: true,
+                            text: historyMode === 'unit' ? unitPriceHeading(unit) : 'Pris (kr)'
+                        }
+                    }
+                },
+                // A missing observation is a GAP, not a line drawn straight through it: a link
+                // that was not checked has no value, and connecting across it would invent one.
+                spanGaps: false
+            }
+        });
+    }
+}
+
+function buildHistoryTable(rows, unit) {
+    let html = `<table><thead><tr>
+        <th>Datum</th>
+        <th>Butik</th>
+        <th>F&#246;rpackning</th>
+        <th>Pris</th>
+        <th>${escapeHtml(unitPriceHeading(unit))}</th>
+        <th>Erbjudande</th>
+        <th>I lager</th>
+    </tr></thead><tbody>`;
+    for (const h of rows.slice(0, 50)) {
+        // Never a blank cell in either package column: a blank reads as "free" (04.1-07).
+        let pkg = '&mdash;';
+        if (h.package_size) {
+            pkg = escapeHtml(h.package_size);
+        } else if (h.package_quantity != null) {
+            pkg = escapeHtml(h.package_quantity + (unit ? ' ' + unit : ''));
+        }
+        // An em dash, never a 0 and never a blank — this link simply HAS no kr/unit (QD-4).
+        const unitPrice = (typeof h.unit_price_sek === 'number')
+            ? escapeHtml(h.unit_price_sek.toFixed(2)) + ' kr'
+            : '&mdash;';
+        // '?' for null (QD-6). in_stock is currently non-nullable server-side, so this is
+        // defensive rather than a live fix — but answering "Nej" to "we never checked" is the
+        // same confidently-wrong answer this whole task exists to remove.
+        const stock = h.in_stock == null ? '?' : (h.in_stock ? 'Ja' : 'Nej');
+        html += `<tr>
+            <td>${escapeHtml(h.checked_at ? String(h.checked_at).slice(0, 10) : '-')}</td>
+            <td>${escapeHtml(h.store_name)}</td>
+            <td>${pkg}</td>
+            <td>${h.price_sek != null ? escapeHtml(h.price_sek + ' kr') : '&mdash;'}</td>
+            <td class="unit-price">${unitPrice}</td>
+            <td>${h.offer_price_sek != null ? escapeHtml(h.offer_price_sek + ' kr') : '&mdash;'}</td>
+            <td>${stock}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
 }
 
 // --- Product links panel (D-12) — the screen that answers the toilet-paper question ---
@@ -1248,7 +1327,7 @@ document.getElementById('products-table-container').addEventListener('click', (e
         showLinkStoreModal(id, product ? product.unit : null);
     } else if (action === 'history') {
         const product = (allProducts || []).find(p => p.id === id);
-        showPriceHistory(id, product ? product.name : '');
+        showPriceHistory(id, product ? product.name : '', product ? product.unit : null);
     } else if (action === 'delete') {
         deleteProduct(id);
     }
@@ -1262,6 +1341,14 @@ for (const pkgPrefix of ['link', 'edit']) {
         pkgSetEntryUnit(pkgPrefix, btn.getAttribute('data-entry-unit'));
     });
 }
+
+// Price-history mode toggle — delegated, like every other handler in this file. No inline
+// onclick (the pattern removed in f6ec6c4). Re-renders from the cached rows; no refetch.
+document.getElementById('price-history-modes').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-history-mode]');
+    if (!btn) return;
+    setHistoryMode(btn.getAttribute('data-history-mode'));
+});
 
 // Links-panel actions and column sorting — delegated, like the product table. No inline
 // onclick carrying an interpolated id (the pattern removed in f6ec6c4 for quote-safety);
