@@ -385,7 +385,11 @@ class TestProductStoreLinkEndpoints:
             },
         )
         assert r.status_code == 400
-        assert "positive" in r.json()["detail"]
+        detail = r.json()["detail"]
+        # The rejection must name the offending field (the field name is the wire contract and
+        # stays verbatim in the Swedish copy) and say why.
+        assert "package_quantity" in detail
+        assert "positiv" in detail
         mock_service.link_product_store.assert_not_awaited()
 
     def test_link_store_duplicate_url_returns_409_not_500(self, client, mock_service):
@@ -412,7 +416,7 @@ class TestProductStoreLinkEndpoints:
         )
         assert r.status_code == 409
         detail = r.json()["detail"]
-        assert "already tracked" in detail
+        assert "bevakas redan" in detail
         # The driver's message must not reach the client.
         assert "duplicate key" not in detail
         assert "uq_product_stores_store_url" not in detail
@@ -504,7 +508,9 @@ class TestLinkPackagingEndpoint:
             json={"package_quantity": bad_quantity},
         )
         assert r.status_code == 400
-        assert "positive" in r.json()["detail"]
+        detail = r.json()["detail"]
+        assert "package_quantity" in detail
+        assert "positiv" in detail
 
     def test_packaging_body_cannot_repoint_the_link(self, client, mock_session):
         """store_url is the link's identity — re-pointing it would rewrite the meaning of its
