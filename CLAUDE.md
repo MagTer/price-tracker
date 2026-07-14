@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.2`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **214 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `202 passed, 12 skipped`).
+**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **217 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `205 passed, 12 skipped`).
 
 Remaining from the original extraction plan:
 - **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.
@@ -97,6 +97,38 @@ alembic/versions/0001_initial.py   # the only migration — rewritten in place, 
 
 **Auth:** The portal + API are served at the app root (`price.<domain>/`); the `/admin` prefix was dropped (old `/admin` URLs 308-redirect to `/`) — D-28. The UI trusts the `X-Auth-Request-Email` header forwarded by the upstream ingress and validates it against `ALLOWED_ENTRA_EMAIL` (which must match the Entra **UPN**, not necessarily the gmail address). Entra ID enforcement itself is **live in production since 2026-07-09**: oauth2-proxy v7.15.2 + Traefik `forwardAuth` (`entra-auth@file`), email claim = `preferred_username`/UPN, managed in the home-server repo — not in this app. The MCP server is served at `price.<domain>/mcp/` (no `mcp.` subdomain — a path-scoped, un-gated Traefik router with explicit priority bypasses the Entra gate for `/mcp` only) and is protected by its own static bearer token; without `MCP_BEARER_TOKEN` the endpoint fails closed (503). See EXTRACTION.md §6 for background, though its original in-app-OIDC description was superseded by this IAP header-trust model, and D-18's `mcp.<domain>` subdomain plan was superseded by the `/mcp` path (D-29 in .planning/STATE.md).
 <!-- GSD:architecture-end -->
+
+## Releasing — shipping is part of the task, not a separate errand
+
+**A fix that is not released is not delivered.** Prod runs a *pinned image tag*, so work that only reaches `main` changes nothing for the person using the app. Unreleased commits used to pile up for days (12 of them by v0.3.2 — a whole ruff/CI rebuild plus the price-history fix, all sitting on `main` doing nothing).
+
+**Standing rule: when a change is user-visible or fixes a real problem, cut a release as the last step of the task — without being asked.** Do it in the same session as the fix.
+
+Release = push a `v*` tag. That is the only trigger; `.github/workflows/release.yml` then builds and pushes `ghcr.io/magter/price-tracker:vX.Y.Z` (+ `:sha-<commit>`) for amd64. Nothing else in this repo deploys anything.
+
+```bash
+# 1. main is green and pushed. Never tag a dirty tree or an un-pushed commit —
+#    the tag would point at something no one else can fetch.
+poetry run ruff check src tests && poetry run ruff format --check src tests && poetry run pytest -q
+git push origin main
+
+# 2. The version in pyproject.toml IS the tag. Bump it, commit it, then tag that commit —
+#    a tag whose code says a different version is a lie you will read back later.
+#    (It said 0.1.0 while prod ran v0.3.2. Don't let that happen again.)
+git tag vX.Y.Z && git push origin vX.Y.Z
+
+# 3. Watch the build. A tag that fails to build is not a release.
+gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')"
+```
+
+**Version choice** (single-user app, so this is deliberately simple):
+- **patch** (`v0.3.2` → `v0.3.3`) — a bug fix, a corrected display, an internal cleanup.
+- **minor** (`v0.3.x` → `v0.4.0`) — a new capability, a schema change, or anything that alters how the app is operated or deployed.
+- A schema change also means **the deployed DB is stamped on the old `0001`** — see Gotcha 3 before you ship it, or the container will boot quietly against the wrong schema.
+
+**Then tell Magnus the tag is built and needs the deploy bump.** Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml` (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
+
+Docs-only, planning-only, or test-only commits do **not** earn a tag; they ride along with the next real one.
 
 ## Gotchas
 
