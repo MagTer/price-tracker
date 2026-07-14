@@ -1,0 +1,94 @@
+name: CI
+
+# Lint + test on every push and PR.
+#
+# This is deliberately NOT release.yml's job: release.yml builds and pushes the
+# container image on a version tag. This workflow is the correctness gate that
+# runs on ordinary commits — until it existed, the test suite was green only
+# because someone happened to run it locally.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  POETRY_VERSION: "2.3.2" # keep in sync with Dockerfile
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+
+    services:
+      # tests/conftest.py drops and recreates a throwaway `price_tracker_test`
+      # database, connecting via the `postgres` admin database first. The
+      # POSTGRES_USER of the official image is a superuser, so it may CREATE
+      # DATABASE. Without this service the 12 integration tests skip themselves
+      # cleanly — green, but not actually verified.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: price_tracker
+          POSTGRES_PASSWORD: price_tracker
+          POSTGRES_DB: price_tracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U price_tracker"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://price_tracker:price_tracker@localhost:5432/price_tracker
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py312-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev --no-interaction --no-ansi
+
+      - name: Lint (ruff check)
+        run: poetry run ruff check src tests
+
+      - name: Format check (ruff format)
+        run: poetry run ruff format --check src tests
+
+      - name: Tests
+        run: poetry run pytest -q
+
+      - name: Assert integration tests actually ran
+        # A skipped integration test is a gap, not a pass. When Postgres is
+        # unreachable, conftest skips the 12 integration tests *cleanly* and the
+        # suite still exits 0 — so `pytest -m integration` alone would assert
+        # nothing. Fail explicitly on any skip.
+        shell: bash
+        run: |
+          set -o pipefail
+          poetry run pytest -m integration -q -rs 2>&1 | tee integration.log
+          if grep -qE '[0-9]+ skipped' integration.log; then
+            echo "::error::Integration tests were skipped — Postgres was not reachable in CI."
+            exit 1
+          fi
