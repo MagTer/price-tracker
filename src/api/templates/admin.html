@@ -754,6 +754,142 @@ async function handleLinkStore(e) {
     }
 }
 
+// --- Price history: per-LINK series (QD-1..QD-4) ---
+//
+// A product is not one SKU. It is a set of LINKS, and a link is a pack size at a store: a
+// 16-pack and a 24-pack of the same toilet paper, possibly at the SAME store. The old chart
+// mapped every observation into ONE absolute-price series, so plotting a big box after a small
+// box read as "the price is rising". It was confidently wrong, which is the worst kind.
+//
+// These three are PURE and top-level with their closing brace at column 0: they take plain data
+// and return plain data, touch no DOM, no Chart.js and no globals — which is the only reason the
+// verify harness can drive them in node at all (the rest of this file calls getElementById() at
+// top level and cannot be evaluated). They also carry no top-level dependencies: the palette and
+// the day-key helper live INSIDE, because the harness extracts these functions and nothing else.
+
+// One link object per distinct product_store_id. Grouping on product_store_id IS the fix — it is
+// the single line standing between "one line per link" and the bug. Grouping on store_slug (the
+// only other key the API used to expose) would merge two pack sizes at one store back into one
+// series and re-commit it.
+function groupHistoryByLink(rows) {
+    const dayKey = (row) => (row && row.checked_at ? String(row.checked_at).slice(0, 10) : null);
+    const links = [];
+    const byId = new Map();
+    // The service returns checked_at DESC. Sort ascending here rather than assume input order;
+    // walking ascending also means a later observation on the same date overwrites an earlier
+    // one, so "several observations on one date" resolves to the latest.
+    const ordered = (rows || []).slice().sort((a, b) =>
+        String(a && a.checked_at || '').localeCompare(String(b && b.checked_at || ''))
+    );
+    for (const row of ordered) {
+        const id = row.product_store_id;
+        const date = dayKey(row);
+        if (id == null || date == null) continue;
+        let link = byId.get(id);
+        if (!link) {
+            link = { product_store_id: id, byDate: {} };
+            byId.set(id, link);
+            links.push(link);
+        }
+        link.store_name = row.store_name;
+        link.package_size = row.package_size;
+        link.package_quantity = row.package_quantity;
+        link.label = row.package_size
+            ? row.store_name + ' ' + row.package_size
+            : row.store_name + ' (utan förpackningsmängd)';
+        link.byDate[date] = { price_sek: row.price_sek, unit_price_sek: row.unit_price_sek };
+    }
+    return links;
+}
+
+// The cheapest kr/unit across links on each date, FORWARD-FILLED, aligned 1:1 with `dates`.
+//
+// Forward-fill is not cosmetic. Links are checked on independent schedules
+// (check_frequency_hours, optional check_weekday), so on any given date only SOME were sampled.
+// Without the carry, the best line would spike and dip purely because a store was not checked
+// that day — reintroducing the exact phantom movement this whole fix removes, one level up.
+//
+// A link's carried value updates ONLY from a finite number. A link with no package_quantity has
+// no unit_price_sek at all, so it never enters the carry and is structurally absent from this
+// line (QD-4). There is deliberately NO `|| 0` anywhere below: a missing kr/unit coerced to zero
+// plots as FREE and wins "cheapest" on the very screen whose entire job is to name the cheapest
+// thing. That is not hypothetical — 04.1-07's sort gate exists because exactly that coercion made
+// an amount-less link look like the best buy, and it looks completely fine on inspection.
+function buildBestAvailableSeries(rows, dates) {
+    const links = groupHistoryByLink(rows);
+    const carried = new Map();   // product_store_id -> last known kr/unit
+    const series = [];
+    for (const date of (dates || [])) {
+        for (const link of links) {
+            const obs = link.byDate[date];
+            if (obs && typeof obs.unit_price_sek === 'number' && isFinite(obs.unit_price_sek)) {
+                carried.set(link.product_store_id, obs.unit_price_sek);
+            }
+        }
+        let best = null;
+        for (const value of carried.values()) {
+            if (best === null || value < best) best = value;
+        }
+        // Before ANY link has a known kr/unit this stays null — never 0.
+        series.push(best);
+    }
+    return series;
+}
+
+// Composes the two above into { labels, datasets } for Chart.js. `role` is an extra property
+// Chart.js ignores; it exists so the harness can assert on dataset identity instead of on brittle
+// label strings.
+function buildChartData(rows, mode) {
+    const palette = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2'];
+    const links = groupHistoryByLink(rows);
+    const dateSet = {};
+    for (const link of links) {
+        for (const date of Object.keys(link.byDate)) dateSet[date] = true;
+    }
+    const labels = Object.keys(dateSet).sort();
+    const field = mode === 'absolute' ? 'price_sek' : 'unit_price_sek';
+
+    const datasets = links.map((link, index) => ({
+        role: 'link',
+        product_store_id: link.product_store_id,
+        label: link.label,
+        // null on a date this link was not checked, AND null wherever the value itself is
+        // missing — so a NULL-quantity link is a GAP in kr/unit mode (QD-4), never a zero.
+        data: labels.map((date) => {
+            const obs = link.byDate[date];
+            if (!obs) return null;
+            const value = obs[field];
+            return (typeof value === 'number' && isFinite(value)) ? value : null;
+        }),
+        borderColor: palette[index % palette.length],
+        borderWidth: 1.5,
+        spanGaps: false,
+        fill: false,
+        tension: 0.2,
+        pointRadius: 3
+    }));
+
+    // kr/unit mode ONLY (QD-3). The cheapest ABSOLUTE price across pack sizes is meaningless —
+    // a smaller box always wins — so rendering a "best" line in absolute mode would restate the
+    // bug as a recommendation. The suppression lives here, where the harness can see it, rather
+    // than in the render path where it could not.
+    if (mode === 'unit') {
+        datasets.push({
+            role: 'best',
+            label: 'Billigast tillgänglig',
+            data: buildBestAvailableSeries(rows, labels),
+            borderColor: '#111827',
+            borderWidth: 4,
+            spanGaps: false,
+            fill: false,
+            tension: 0.2,
+            pointRadius: 0
+        });
+    }
+
+    return { labels: labels, datasets: datasets };
+}
+
 let priceChart = null;
 
 async function showPriceHistory(productId, productName) {
