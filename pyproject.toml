@@ -32,6 +32,9 @@ aiosqlite = "^0.22.1"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: needs a real Postgres (see tests/conftest.py). Skips cleanly when none is reachable; select with -m integration, exclude with -m 'not integration'.",
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
