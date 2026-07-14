@@ -765,6 +765,98 @@ class TestProductLinksEndpoint:
         assert r.status_code == 400
 
 
+class TestStoresArrayIsRanked:
+    """`stores` comes back cheapest-per-unit first, amount-less links last — on BOTH routes.
+
+    Neither route had an ORDER BY: the array arrived in Postgres' arbitrary row order, and the
+    frontend read it as if position meant something. These tests feed the links in the WORST
+    order (dearest first, the amount-less one at the front) and require the response to fix it,
+    so a regression to "whatever the DB handed back" fails here.
+    """
+
+    def _three_links(self):
+        """A 24-pack (cheap/unit), an 8-pack (dear/unit) and a link with no amount at all."""
+        product = _product()
+        willys, ica, coop = (
+            _store("Willys", "willys"),
+            _store("ICA", "ica"),
+            _store("Coop", "coop"),
+        )
+        cheap = _ps(product, willys, package_size="24-pack", package_quantity="24")
+        dear = _ps(product, ica, package_size="8-pack", package_quantity="8")
+        amountless = _ps(product, coop, package_size=None, package_quantity=None)
+        return (
+            product,
+            # 139.90/24 = 5.83   |   59.90/8 = 7.49   |   no amount -> no kr/unit
+            [
+                (amountless, coop, _pp(amountless, price="19.90")),
+                (dear, ica, _pp(dear, price="59.90")),
+                (cheap, willys, _pp(cheap, price="139.90")),
+            ],
+        )
+
+    def test_list_products_ranks_the_links(self, client, mock_session):
+        product, rows = self._three_links()
+        mock_session.execute.side_effect = [
+            _scalars([product]),
+            _rows([(ps, store) for ps, store, _ in rows]),
+            _scalars([pp for _, _, pp in rows]),
+        ]
+
+        r = client.get("/products")
+        assert r.status_code == 200
+        links = r.json()[0]["stores"]
+
+        assert [link["store_name"] for link in links] == ["Willys", "ICA", "Coop"]
+        assert links[0]["unit_price_sek"] == pytest.approx(5.83)
+        assert links[1]["unit_price_sek"] == pytest.approx(7.49)
+        # Last, despite being the cheapest ABSOLUTE price (19.90) — it has no kr/unit at all.
+        assert links[-1]["needs_amount"] is True
+        assert links[-1]["unit_price_sek"] is None
+
+    def test_get_product_ranks_the_links(self, client, mock_session):
+        product, rows = self._three_links()
+        # The detail route fetches the latest price point per link, one query each.
+        mock_session.execute.side_effect = [
+            _scalar(product),
+            _rows([(ps, store) for ps, store, _ in rows]),
+            *[_scalar(pp) for _, _, pp in rows],
+        ]
+
+        r = client.get(f"/products/{product.id}")
+        assert r.status_code == 200
+        links = r.json()["stores"]
+
+        assert [link["store_name"] for link in links] == ["Willys", "ICA", "Coop"]
+        assert links[-1]["needs_amount"] is True
+
+    def test_the_offer_price_decides_the_rank(self, client, mock_session):
+        """Ranking runs on the EFFECTIVE price. A rea that undercuts a rival must reorder them,
+        or the list recommends the wrong pack for as long as the offer lasts.
+        """
+        product = _product()
+        willys, ica = _store("Willys", "willys"), _store("ICA", "ica")
+        big = _ps(product, willys, package_size="24-pack", package_quantity="24")
+        small = _ps(product, ica, package_size="8-pack", package_quantity="8")
+        rows = [
+            # 24-pack at full price: 139.90/24 = 5.83/st
+            (big, willys, _pp(big, price="139.90")),
+            # 8-pack on rea: 39.90/8 = 4.99/st — cheaper per unit than the big pack
+            (small, ica, _pp(small, price="59.90", offer="39.90")),
+        ]
+        mock_session.execute.side_effect = [
+            _scalars([product]),
+            _rows([(ps, store) for ps, store, _ in rows]),
+            _scalars([pp for _, _, pp in rows]),
+        ]
+
+        r = client.get("/products")
+        links = r.json()[0]["stores"]
+
+        assert [link["store_name"] for link in links] == ["ICA", "Willys"]
+        assert links[0]["unit_price_sek"] == pytest.approx(4.99)
+
+
 class TestDealsEndpoints:
     def test_get_deals(self, client, mock_session):
         # Empty deals — just verify endpoint responds

@@ -75,6 +75,76 @@ def _as_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
 
 
+def _link_payload(
+    ps: ProductStore, store: Store, latest_price: PricePoint | None
+) -> dict[str, str | int | None | float | bool]:
+    """One link's wire shape — the ONE builder behind every `stores` array we emit.
+
+    It was written twice (the list route and the detail route), byte for byte. Two copies of a
+    wire contract drift, and this one already has form: the price-history route's own duplicate
+    query is what silently dropped the package fields (see CLAUDE.md, Gotcha 4).
+    """
+    return {
+        "product_store_id": str(ps.id),
+        "store_id": str(ps.store_id),
+        "store_name": store.name,
+        "store_slug": store.slug,
+        "store_url": ps.store_url,
+        "check_frequency_hours": ps.check_frequency_hours,
+        "check_weekday": ps.check_weekday,
+        "last_checked_at": ps.last_checked_at.isoformat() if ps.last_checked_at else None,
+        # The package is the LINK's, not the product's.
+        "package_size": ps.package_size,
+        "package_quantity": _as_float(ps.package_quantity),
+        "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
+        "price_sek": (
+            float(latest_price.price_sek) if latest_price and latest_price.price_sek else None
+        ),
+        "offer_price_sek": (_as_float(latest_price.offer_price_sek) if latest_price else None),
+        # COMPUTED from the link's own quantity (D-03) — the comparable number.
+        "unit_price_sek": _computed_unit_price(_effective_price(latest_price), ps.package_quantity),
+        # What the STORE printed (D-05) — display only, never sorted on.
+        "store_unit_price_sek": (
+            _as_float(latest_price.store_unit_price_sek) if latest_price else None
+        ),
+        "in_stock": latest_price.in_stock if latest_price else None,
+        # D-02's visible flag: a link may be saved without an amount, but it is never
+        # SILENTLY blank.
+        "needs_amount": ps.package_quantity is None,
+        # D-09's derived, self-clearing flag — never persisted as a boolean.
+        "quantity_mismatch": quantity_mismatch(ps),
+    }
+
+
+def _sorted_links(
+    rows: list[tuple[ProductStore, Store, PricePoint | None]],
+) -> list[dict[str, str | int | None | float | bool]]:
+    """Links, cheapest kr/unit first, links with no amount last — the same order the domain
+    service already emits (`unit_price_expr(...).asc().nulls_last()`).
+
+    Both routes used to return whatever order Postgres happened to hand back: no ORDER BY at
+    all. That is not "unsorted", it is *arbitrary and unstable* — it can change under the same
+    data — and the frontend was reading `stores[0]` as if it meant something.
+
+    Sorted on the UNROUNDED Decimal (pricing.unit_price_py), not on the rounded float in the
+    payload: round first and two genuinely different prices tie, then fall through to the
+    tiebreak and swap places for no reason. Ties break on store name, then link id, so equal
+    prices hold still between renders.
+    """
+    return [
+        _link_payload(ps, store, pp)
+        for ps, store, pp in sorted(
+            rows,
+            key=lambda row: (
+                unit_price_py(_effective_price(row[2]), row[0].package_quantity) is None,
+                unit_price_py(_effective_price(row[2]), row[0].package_quantity) or Decimal(0),
+                row[1].name,
+                str(row[0].id),
+            ),
+        )
+    ]
+
+
 # No path prefix: the /admin prefix was a holdover from the source platform
 # where OpenWebUI owned "/" — standalone, this UI+API is the whole app.
 router = APIRouter(
@@ -263,49 +333,12 @@ async def list_products(
 
         product_responses: list[ProductResponse] = []
         for product in products:
-            stores_data: list[dict[str, str | int | None | float]] = []
-            for ps, store in ps_by_product.get(product.id, []):
-                latest_price = latest_by_ps.get(ps.id)
-
-                store_data: dict[str, str | int | None | float | bool] = {
-                    "product_store_id": str(ps.id),
-                    "store_id": str(ps.store_id),
-                    "store_name": store.name,
-                    "store_slug": store.slug,
-                    "store_url": ps.store_url,
-                    "check_frequency_hours": ps.check_frequency_hours,
-                    "check_weekday": ps.check_weekday,
-                    "last_checked_at": (
-                        ps.last_checked_at.isoformat() if ps.last_checked_at else None
-                    ),
-                    # The package is the LINK's, not the product's.
-                    "package_size": ps.package_size,
-                    "package_quantity": _as_float(ps.package_quantity),
-                    "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
-                    "price_sek": (
-                        float(latest_price.price_sek)
-                        if latest_price and latest_price.price_sek
-                        else None
-                    ),
-                    "offer_price_sek": (
-                        _as_float(latest_price.offer_price_sek) if latest_price else None
-                    ),
-                    # COMPUTED from the link's own quantity (D-03) — the comparable number.
-                    "unit_price_sek": _computed_unit_price(
-                        _effective_price(latest_price), ps.package_quantity
-                    ),
-                    # What the STORE printed (D-05) — display only, never sorted on.
-                    "store_unit_price_sek": (
-                        _as_float(latest_price.store_unit_price_sek) if latest_price else None
-                    ),
-                    "in_stock": latest_price.in_stock if latest_price else None,
-                    # D-02's visible flag: a link may be saved without an amount, but it is
-                    # never SILENTLY blank.
-                    "needs_amount": ps.package_quantity is None,
-                    # D-09's derived, self-clearing flag — never persisted as a boolean.
-                    "quantity_mismatch": quantity_mismatch(ps),
-                }
-                stores_data.append(store_data)
+            stores_data = _sorted_links(
+                [
+                    (ps, store, latest_by_ps.get(ps.id))
+                    for ps, store in ps_by_product.get(product.id, [])
+                ]
+            )
 
             product_responses.append(
                 ProductResponse(
@@ -414,7 +447,7 @@ async def get_product(
         ps_result = await session.execute(ps_stmt)
         ps_rows = ps_result.all()
 
-        stores_data: list[dict[str, str | int | None | float | bool]] = []
+        rows: list[tuple[ProductStore, Store, PricePoint | None]] = []
         for ps, store in ps_rows:
             # Get latest price point for this product-store
             price_stmt = (
@@ -424,42 +457,9 @@ async def get_product(
                 .limit(1)
             )
             price_result = await session.execute(price_stmt)
-            latest_price = price_result.scalar_one_or_none()
+            rows.append((ps, store, price_result.scalar_one_or_none()))
 
-            store_data: dict[str, str | int | None | float | bool] = {
-                "product_store_id": str(ps.id),
-                "store_id": str(ps.store_id),
-                "store_name": store.name,
-                "store_slug": store.slug,
-                "store_url": ps.store_url,
-                "check_frequency_hours": ps.check_frequency_hours,
-                "check_weekday": ps.check_weekday,
-                "last_checked_at": ps.last_checked_at.isoformat() if ps.last_checked_at else None,
-                # The package is the LINK's, not the product's.
-                "package_size": ps.package_size,
-                "package_quantity": _as_float(ps.package_quantity),
-                "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
-                "price_sek": (
-                    float(latest_price.price_sek)
-                    if latest_price and latest_price.price_sek
-                    else None
-                ),
-                "offer_price_sek": (
-                    _as_float(latest_price.offer_price_sek) if latest_price else None
-                ),
-                # COMPUTED from the link's own quantity (D-03) — the comparable number.
-                "unit_price_sek": _computed_unit_price(
-                    _effective_price(latest_price), ps.package_quantity
-                ),
-                # What the STORE printed (D-05) — display only, never sorted on.
-                "store_unit_price_sek": (
-                    _as_float(latest_price.store_unit_price_sek) if latest_price else None
-                ),
-                "in_stock": latest_price.in_stock if latest_price else None,
-                "needs_amount": ps.package_quantity is None,
-                "quantity_mismatch": quantity_mismatch(ps),
-            }
-            stores_data.append(store_data)
+        stores_data = _sorted_links(rows)
 
         return ProductResponse(
             id=str(product.id),
