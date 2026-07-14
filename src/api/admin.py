@@ -33,8 +33,8 @@ from api.schemas import (
 )
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
-from domain.pricing import apply_scrape_to_link, quantity_mismatch, unit_price_py
-from domain.service import PriceTrackerService
+from domain.pricing import quantity_mismatch, unit_price_py
+from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
 from infra.providers import get_fetcher
@@ -954,20 +954,17 @@ async def get_price_history(
 @router.post("/check/{product_store_id}")
 async def trigger_price_check(
     product_store_id: str,
-    service: PriceTrackerService = Depends(get_price_tracker_service),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str | float | bool | None]:
     """Manually trigger a price check for a product-store combination.
 
-    This endpoint:
-    1. Fetches the product page using WebFetcher
-    2. Extracts price using PriceParser
-    3. Records price using PriceTrackerService
+    Delegates to domain.service.perform_price_check — the single fetch → extract →
+    enrich → apply-scrape → record flow the scheduler also uses — then commits the
+    request session and renders the HTTP contract.
 
     Args:
         product_store_id: ProductStore UUID.
         session: Database session.
-        service: Price tracker service.
 
     Returns:
         Dictionary with extracted price data.
@@ -996,77 +993,40 @@ async def trigger_price_check(
 
         product_store, store, product = row
 
-        # Fetch page content
-        fetcher = get_fetcher()
-        fetch_result = await fetcher.fetch(product_store.store_url)
-
-        if not fetch_result.get("ok") or not fetch_result.get("text"):
-            error_msg = fetch_result.get("error", "Unknown fetch error")
-            raise HTTPException(status_code=502, detail=f"Failed to fetch page: {error_msg}")
-
-        # Parse price data
-        parser = PriceParser()
-        extraction_result = await parser.extract_price(
-            text_content=fetch_result["text"],
-            store_slug=store.slug,
-            product_name=product.name,
-            store_url=product_store.store_url,
-            html_content=fetch_result.get("html"),
+        outcome = await perform_price_check(
+            product_store=product_store,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=get_fetcher(),
+            parser=PriceParser(),
         )
 
-        if not extraction_result.price_sek:
+        if outcome.failure_reason == "fetch_failed":
+            raise HTTPException(
+                status_code=502, detail=f"Failed to fetch page: {outcome.fetch_error}"
+            )
+
+        if outcome.failure_reason == "no_price":
             return {
                 "message": "Price extraction failed - no price found",
-                "confidence": extraction_result.confidence,
+                "confidence": outcome.extraction.confidence,
                 "price_sek": None,
                 "offer_price_sek": None,
             }
 
-        # Scrape write-path #3 of 3 (the scheduler and service.check_price are the others).
-        # This endpoint re-implements their fetch/parse/record flow inline instead of calling
-        # it, so D-07 does NOT reach it for free: without this call, "Check now" records a
-        # price and leaves the link's quantity blank forever. `product_store` is attached to
-        # the session record_price commits, so the autofilled quantity and the page's reading
-        # persist alongside the price point — no second commit.
-        mismatch_message = apply_scrape_to_link(product_store, extraction_result, product.unit)
-        if mismatch_message:
+        if outcome.mismatch:
             LOGGER.warning(
                 "Package quantity mismatch on link %s: %s",
                 sanitize_log(product_store_id),
-                mismatch_message,
+                outcome.mismatch,
             )
 
-        # Record price. store_unit_price_sek is what the STORE printed (D-05); the comparable
-        # kr/unit is never persisted — it is computed on read from the link's quantity (D-04).
-        store_unit_price = (
-            float(extraction_result.store_unit_price_sek)
-            if extraction_result.store_unit_price_sek
-            else None
-        )
-        offer_price = (
-            float(extraction_result.offer_price_sek) if extraction_result.offer_price_sek else None
-        )
+        price_point = outcome.price_point
 
-        price_data: dict[str, Any] = {
-            "price_sek": float(extraction_result.price_sek),
-            "store_unit_price_sek": store_unit_price,
-            "offer_price_sek": offer_price,
-            "offer_type": extraction_result.offer_type,
-            "offer_details": extraction_result.offer_details,
-            "in_stock": extraction_result.in_stock,
-            "raw_data": extraction_result.raw_response,
-        }
-
-        price_point = await service.record_price(product_store_id, price_data, session)
-
-        if not price_point:
-            raise HTTPException(status_code=500, detail="Failed to record price")
-
-        offer_price_result = (
-            float(price_point.offer_price_sek) if price_point.offer_price_sek else None
-        )
-
-        return {
+        # Build the response BEFORE commit: commit expires the instances, and touching
+        # an expired attribute afterwards lazy-loads outside a greenlet (MissingGreenlet).
+        response: dict[str, str | float | bool | None] = {
             "message": "Price check completed successfully",
             "price_sek": float(price_point.price_sek),
             # COMPUTED from the link's (possibly just-autofilled) quantity — the comparable one.
@@ -1078,12 +1038,17 @@ async def trigger_price_check(
             "package_quantity": _as_float(product_store.package_quantity),
             # The page disagreed with the operator's typed amount; the stored value is
             # untouched (D-07) and the flag self-clears when either number is corrected.
-            "quantity_mismatch": mismatch_message,
-            "offer_price_sek": offer_price_result,
+            "quantity_mismatch": outcome.mismatch,
+            "offer_price_sek": _as_float(price_point.offer_price_sek),
             "offer_type": price_point.offer_type,
             "in_stock": price_point.in_stock,
-            "confidence": extraction_result.confidence,
+            "confidence": outcome.extraction.confidence,
         }
+
+        # perform_price_check does not commit — the caller owns the transaction.
+        await session.commit()
+
+        return response
     except HTTPException:
         raise
     except Exception as e:

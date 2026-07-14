@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -20,7 +21,8 @@ from domain.pricing import (
     unit_price_expr,
     unit_price_py,
 )
-from infra.providers import get_fetcher
+from domain.protocols import IFetcher
+from domain.result import PriceExtractionResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,143 @@ def _effective_price(price_point: PricePoint) -> Decimal | None:
     if price_point.offer_price_sek is not None:
         return price_point.offer_price_sek
     return price_point.price_sek
+
+
+@dataclass
+class PriceCheckOutcome:
+    """What one price check produced — the scheduler and the admin endpoint both read this."""
+
+    success: bool
+    failure_reason: str | None  # "fetch_failed" | "no_price" | None
+    fetch_error: str | None
+    extraction: PriceExtractionResult | None
+    price_point: PricePoint | None
+    mismatch: str | None
+
+
+async def perform_price_check(
+    *,
+    product_store: ProductStore,
+    product: Product,
+    store: Store,
+    session: AsyncSession,
+    fetcher: IFetcher,
+    parser: PriceParser,
+) -> PriceCheckOutcome:
+    """THE fetch → extract → enrich → apply-scrape → record flow, exactly once.
+
+    The scheduler and the admin "Check now" endpoint both call this — the third inline
+    copy (service.check_price) is deleted. Does NOT commit: the caller owns the
+    transaction (the scheduler batches per-item sessions, the endpoint uses the request
+    session).
+    """
+    fetch_result = await fetcher.fetch(product_store.store_url)
+    if not fetch_result.get("ok") or not fetch_result.get("text"):
+        return PriceCheckOutcome(
+            success=False,
+            failure_reason="fetch_failed",
+            fetch_error=str(fetch_result.get("error", "Unknown fetch error")),
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+        )
+
+    extraction = await parser.extract_price(
+        text_content=fetch_result["text"],
+        store_slug=store.slug,
+        product_name=product.name,
+        store_url=product_store.store_url,
+        html_content=fetch_result.get("html"),
+    )
+
+    # LLM enrichment for the JSON-LD path (locked decision). JSON-LD carries only
+    # price + stock, so offer-based watches and package autofill never see data for
+    # the four JSON-LD stores without this. Two precise triggers keep the LLM cost
+    # near zero; the API and LLM paths already carry all fields, and a discarded
+    # extraction has no price.
+    raw = extraction.raw_response if isinstance(extraction.raw_response, dict) else {}
+    if extraction.price_sek is not None and raw.get("source") == "jsonld":
+        # The link's latest prior point — keyed on product_store_id, never on the
+        # (product_id, store_id) pair (no longer unique; the AST gate enforces this).
+        prior_stmt = (
+            select(PricePoint)
+            .where(PricePoint.product_store_id == product_store.id)
+            .order_by(PricePoint.checked_at.desc())
+            .limit(1)
+        )
+        prior = (await session.execute(prior_stmt)).scalars().first()
+
+        # Trigger (a): first successful check — no history yet, or the link still
+        # has no quantity from any source (harvest the package fields once).
+        first_success = prior is None or (
+            product_store.package_quantity is None
+            and product_store.scraped_package_quantity is None
+        )
+        # Trigger (b): the effective price dropped — an offer may have started
+        # (harvest the offer fields so watches and find_deals can see it).
+        price_drop = False
+        if prior is not None:
+            prior_effective = (
+                prior.offer_price_sek if prior.offer_price_sek is not None else prior.price_sek
+            )
+            current_effective = (
+                extraction.offer_price_sek
+                if extraction.offer_price_sek is not None
+                else extraction.price_sek
+            )
+            price_drop = prior_effective is not None and current_effective < prior_effective
+
+        if first_success or price_drop:
+            # Reuses the already-fetched page and never raises (parser guard):
+            # the JSON-LD price is recorded whether or not enrichment succeeds.
+            extraction = await parser.enrich_with_llm(
+                extraction,
+                text_content=fetch_result["text"],
+                store_slug=store.slug,
+                product_name=product.name,
+            )
+
+    if extraction.price_sek is None:
+        return PriceCheckOutcome(
+            success=False,
+            failure_reason="no_price",
+            fetch_error=None,
+            extraction=extraction,
+            price_point=None,
+            mismatch=None,
+        )
+
+    # Runs AFTER enrichment so harvested package fields feed the D-07 autofill.
+    # This is the ONLY scrape write path now: autofill when empty, flag on
+    # conflict, never overwrite the operator's typed value.
+    mismatch = apply_scrape_to_link(product_store, extraction, product.unit)
+    if mismatch:
+        logger.warning(f"Package quantity mismatch for {product.name} at {store.name}: {mismatch}")
+
+    # store_unit_price_sek is what the STORE printed (D-05) — the computed kr/unit
+    # is derived on read from the link's quantity and never persisted (D-04).
+    price_point = PricePoint(
+        product_store_id=product_store.id,
+        price_sek=extraction.price_sek,
+        store_unit_price_sek=extraction.store_unit_price_sek,
+        offer_price_sek=extraction.offer_price_sek,
+        offer_type=extraction.offer_type,
+        offer_details=extraction.offer_details,
+        in_stock=extraction.in_stock,
+        raw_data=extraction.raw_response,
+        checked_at=_utc_now(),
+    )
+    session.add(price_point)
+    product_store.last_checked_at = _utc_now()
+
+    return PriceCheckOutcome(
+        success=True,
+        failure_reason=None,
+        fetch_error=None,
+        extraction=extraction,
+        price_point=price_point,
+        mismatch=mismatch,
+    )
 
 
 class PriceTrackerService:
@@ -308,7 +447,13 @@ class PriceTrackerService:
     async def get_current_deals(
         self, store_type: str | None = None
     ) -> list[dict[str, str | float | None]]:
-        """Get links currently on offer.
+        """Get links whose LATEST price point is an offer, at most 7 days old.
+
+        Latest-per-link is the join, not a Python dedupe: a superseded offer (a newer
+        point on the same link without one) can never appear, because that newer point
+        IS the link's latest row and has no offer. The 7-day bound is a staleness
+        cutoff — the old fixed 24h window showed nothing between checks, since most
+        links are checked weekly.
 
         Ordering stays RECENCY-based, deliberately. Now that kr/unit is computed it could rank
         these rows, but re-ranking find_deals is a behavior change to an unrelated feature; the
@@ -323,11 +468,24 @@ class PriceTrackerService:
         """
         async with self.session_factory() as session:
             try:
-                # Subquery to get latest price point for each product-store
-                cutoff = _utc_now() - timedelta(days=1)
+                cutoff = _utc_now() - timedelta(days=7)
+
+                latest = (
+                    select(
+                        PricePoint.product_store_id.label("ps_id"),
+                        func.max(PricePoint.checked_at).label("checked_at"),
+                    )
+                    .group_by(PricePoint.product_store_id)
+                    .subquery()
+                )
 
                 stmt = (
                     select(PricePoint, ProductStore, Product, Store)
+                    .join(
+                        latest,
+                        (PricePoint.product_store_id == latest.c.ps_id)
+                        & (PricePoint.checked_at == latest.c.checked_at),
+                    )
                     .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
                     .join(Product, ProductStore.product_id == Product.id)
                     .join(Store, ProductStore.store_id == Store.id)
@@ -342,18 +500,9 @@ class PriceTrackerService:
                 result = await session.execute(stmt)
                 rows = result.all()
 
-                # Deduplicate by LINK (keep latest). NOT by (product, store): under D-01 a
-                # product may hold several links at one store (a 24-pack and an 8-pack), and
-                # the old pair key silently collapsed them into a single arbitrary deal row.
-                seen: set[uuid.UUID] = set()
                 deals: list[dict[str, str | float | None]] = []
 
                 for price_point, product_store, product, store in rows:
-                    key = product_store.id
-                    if key in seen:
-                        continue
-                    seen.add(key)
-
                     deals.append(
                         {
                             "product_id": str(product.id),
@@ -607,135 +756,6 @@ class PriceTrackerService:
             logger.info(f"Created price watch for product {product_id} (Watch ID: {watch.id})")
             return watch
 
-    async def check_price(self, product_store_id: str) -> dict[str, Any]:
-        """Fetch and store current price for a product-store combination.
-
-        Implements the IPriceTracker protocol. This method:
-        1. Fetches the product page using WebFetcher
-        2. Extracts price using PriceParser
-        3. Records price in the database
-
-        Args:
-            product_store_id: UUID string of the ProductStore to check.
-
-        Returns:
-            Dictionary containing:
-                - product_store_id: UUID string
-                - price_sek: Current price
-                - offer_price_sek: Offer price if applicable
-                - in_stock: Stock status
-                - checked_at: Timestamp of check
-                - error: Error message if failed (optional)
-        """
-        async with self.session_factory() as session:
-            try:
-                ps_uuid = uuid.UUID(product_store_id)
-
-                # Get ProductStore with joined Store and Product
-                stmt = (
-                    select(ProductStore, Store, Product)
-                    .join(Store, ProductStore.store_id == Store.id)
-                    .join(Product, ProductStore.product_id == Product.id)
-                    .where(ProductStore.id == ps_uuid)
-                )
-                result = await session.execute(stmt)
-                row = result.one_or_none()
-
-                if not row:
-                    return {
-                        "product_store_id": product_store_id,
-                        "error": "Product-store link not found",
-                    }
-
-                product_store, store, product = row
-
-                # Fetch page content
-                fetcher = get_fetcher()
-                fetch_result = await fetcher.fetch(product_store.store_url)
-
-                if not fetch_result.get("ok") or not fetch_result.get("text"):
-                    error_msg = fetch_result.get("error", "Unknown fetch error")
-                    return {
-                        "product_store_id": product_store_id,
-                        "error": f"Failed to fetch page: {error_msg}",
-                    }
-
-                # Parse price data
-                parser = PriceParser()
-                extraction_result = await parser.extract_price(
-                    text_content=fetch_result["text"],
-                    store_slug=store.slug,
-                    product_name=product.name,
-                    store_url=product_store.store_url,
-                    html_content=fetch_result.get("html"),
-                )
-
-                if not extraction_result.price_sek:
-                    return {
-                        "product_store_id": product_store_id,
-                        "error": "Price extraction failed - no price found",
-                        "confidence": extraction_result.confidence,
-                        "price_sek": None,
-                        "offer_price_sek": None,
-                    }
-
-                # Scrape write-path #2 of three (D-07/D-09): autofill when the link has no
-                # amount, flag on conflict, NEVER overwrite the operator's typed value. The
-                # link is attached to the session record_price() commits below, so the
-                # autofilled quantity and the page's reading persist with the price point —
-                # no second commit.
-                mismatch = apply_scrape_to_link(product_store, extraction_result, product.unit)
-                if mismatch:
-                    logger.warning(
-                        f"Package quantity mismatch on ProductStore {product_store_id}: {mismatch}"
-                    )
-
-                # Record price
-                price_data: dict[str, Any] = {
-                    "price_sek": float(extraction_result.price_sek),
-                    "store_unit_price_sek": (
-                        float(extraction_result.store_unit_price_sek)
-                        if extraction_result.store_unit_price_sek
-                        else None
-                    ),
-                    "offer_price_sek": (
-                        float(extraction_result.offer_price_sek)
-                        if extraction_result.offer_price_sek
-                        else None
-                    ),
-                    "offer_type": extraction_result.offer_type,
-                    "offer_details": extraction_result.offer_details,
-                    "in_stock": extraction_result.in_stock,
-                    "raw_data": extraction_result.raw_response,
-                }
-
-                price_point = await self.record_price(product_store_id, price_data, session)
-
-                if not price_point:
-                    return {
-                        "product_store_id": product_store_id,
-                        "error": "Failed to record price",
-                    }
-
-                return {
-                    "product_store_id": product_store_id,
-                    "price_sek": float(price_point.price_sek),
-                    "offer_price_sek": (
-                        float(price_point.offer_price_sek) if price_point.offer_price_sek else None
-                    ),
-                    "in_stock": price_point.in_stock,
-                    "checked_at": price_point.checked_at,
-                    "package_quantity": _as_float(product_store.package_quantity),
-                    "quantity_mismatch": mismatch,
-                }
-
-            except Exception:  # Intentional: catches fetcher, parser, and DB errors
-                logger.exception(f"Failed to check price for ProductStore {product_store_id}")
-                return {
-                    "product_store_id": product_store_id,
-                    "error": "Internal error during price check",
-                }
-
     async def delete_product(self, product_id: str) -> None:
         """Delete a product and all associated data.
 
@@ -770,4 +790,4 @@ class PriceTrackerService:
             logger.info(f"Deleted product {product_id} ({product.name})")
 
 
-__all__ = ["PriceTrackerService"]
+__all__ = ["PriceCheckOutcome", "PriceTrackerService", "perform_price_check"]

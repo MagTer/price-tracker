@@ -928,22 +928,18 @@ class TestDealsEndpoints:
 
 
 class TestManualCheckAppliesTheScrapeRule:
-    """POST /check/{id} is scrape write-path #3 of three (D-07, AC#4).
+    """POST /check/{id} routes through domain.service.perform_price_check (D-07, AC#4).
 
-    It duplicates service.check_price's fetch/parse/record flow inline instead of calling it,
-    so the autofill/flag/never-overwrite rule does not reach it for free. Without it the
-    operator clicks "Check now", a price appears, and the link's quantity stays empty forever.
+    The endpoint used to duplicate the fetch/parse/record flow inline; it now delegates
+    to the single shared flow, and these tests pin the D-07 rule still reaching it:
+    without the scrape write path, the operator clicks "Check now", a price appears,
+    and the link's quantity stays empty forever.
     """
 
     def _run_check(self, client, mock_session, mock_service, link, product, store, extraction):
         row = MagicMock()
         row.one_or_none.return_value = (link, store, product)
         mock_session.execute.return_value = row
-
-        recorded = _pp(
-            link, price=str(extraction.price_sek), store_unit=str(extraction.store_unit_price_sek)
-        )
-        mock_service.record_price = AsyncMock(return_value=recorded)
 
         fetcher = MagicMock()
         fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page", "html": "<html>"})
@@ -989,6 +985,83 @@ class TestManualCheckAppliesTheScrapeRule:
         assert body["quantity_mismatch"], "the page/operator conflict was not surfaced"
         assert "12" in body["quantity_mismatch"] and "24" in body["quantity_mismatch"]
         assert body["package_quantity"] == pytest.approx(24.0)
+
+    def test_check_success_keeps_the_exact_wire_keys(self, client, mock_session, mock_service):
+        """Behavior parity: the consolidation must not change the success JSON's key set."""
+        product, store = _product(unit="st"), _store()
+        link = _ps(product, store, package_quantity="24")
+        extraction = _extraction()
+
+        r = self._run_check(client, mock_session, mock_service, link, product, store, extraction)
+
+        assert r.status_code == 200
+        assert set(r.json().keys()) == {
+            "message",
+            "price_sek",
+            "unit_price_sek",
+            "store_unit_price_sek",
+            "package_quantity",
+            "quantity_mismatch",
+            "offer_price_sek",
+            "offer_type",
+            "in_stock",
+            "confidence",
+        }
+
+    def test_check_no_price_keeps_the_exact_wire_keys(self, client, mock_session, mock_service):
+        """The no-price shape keeps message/confidence/price_sek/offer_price_sek."""
+        product, store = _product(unit="st"), _store()
+        link = _ps(product, store)
+        extraction = PriceExtractionResult(
+            price_sek=None,
+            store_unit_price_sek=None,
+            offer_price_sek=None,
+            offer_type=None,
+            offer_details=None,
+            in_stock=True,
+            confidence=0.3,
+            pack_size=None,
+            package_amount=None,
+            package_unit=None,
+            raw_response={"source": "discarded_low_confidence"},
+        )
+
+        r = self._run_check(client, mock_session, mock_service, link, product, store, extraction)
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body.keys()) == {"message", "confidence", "price_sek", "offer_price_sek"}
+        assert body["price_sek"] is None
+        assert body["confidence"] == pytest.approx(0.3)
+
+    def test_check_fetch_failure_returns_502_with_error(self, client, mock_session, mock_service):
+        product, store = _product(), _store()
+        link = _ps(product, store)
+
+        row = MagicMock()
+        row.one_or_none.return_value = (link, store, product)
+        mock_session.execute.return_value = row
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(return_value={"ok": False, "error": "connection refused"})
+
+        with patch("api.admin.get_fetcher", return_value=fetcher):
+            r = client.post(f"/check/{link.id}")
+
+        assert r.status_code == 502
+        assert "connection refused" in r.json()["detail"]
+
+    def test_check_missing_link_returns_404(self, client, mock_session, mock_service):
+        row = MagicMock()
+        row.one_or_none.return_value = None
+        mock_session.execute.return_value = row
+
+        r = client.post(f"/check/{LINK_ID}")
+        assert r.status_code == 404
+
+    def test_check_invalid_uuid_returns_400(self, client, mock_session, mock_service):
+        r = client.post("/check/not-a-uuid")
+        assert r.status_code == 400
 
 
 class TestSchedulerEndpoints:

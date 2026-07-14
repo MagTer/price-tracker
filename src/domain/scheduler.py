@@ -4,9 +4,9 @@ import asyncio
 import logging
 import random
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -19,8 +19,9 @@ from domain.models import (
 )
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
-from domain.pricing import apply_scrape_to_link, unit_price_py
+from domain.pricing import unit_price_py
 from domain.protocols import IEmailService, IFetcher
+from domain.service import PriceCheckOutcome, perform_price_check
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +141,22 @@ class PriceCheckScheduler:
                     await asyncio.sleep(self.RATE_LIMIT_DELAY)
 
                 async with self.session_factory() as session:
-                    await self._check_single_product(product_store, session)
+                    outcome = await self._check_single_product(product_store, session)
 
-                    # Update timestamps with jittered next check time via an
-                    # explicit UPDATE — product_store is detached here.
+                    # Update timestamps with the next check time via an explicit
+                    # UPDATE — product_store is detached here. A FAILED check on a
+                    # weekday-scheduled link retries in 24h instead of waiting a
+                    # full week; frequency-based links keep their jittered
+                    # schedule, and success keeps current behavior exactly.
                     now_utc = datetime.now(UTC).replace(tzinfo=None)
-                    next_check = self._compute_next_check(product_store, now_utc)
+                    if (
+                        outcome is not None
+                        and not outcome.success
+                        and product_store.check_weekday is not None
+                    ):
+                        next_check = now_utc + timedelta(hours=24)
+                    else:
+                        next_check = self._compute_next_check(product_store, now_utc)
                     await session.execute(
                         update(ProductStore)
                         .where(ProductStore.id == product_store.id)
@@ -159,6 +170,25 @@ class PriceCheckScheduler:
             except Exception as e:
                 logger.error(f"Failed to check product {product_store.id}: {e}")
                 self._stats["checks_failed"] += 1
+                # Without a backoff the link keeps next_check_at in the past,
+                # stays FIRST in the ASC-ordered due queue, and gets hammered
+                # every 5-minute cycle. Own short session + own try/except so a
+                # dead DB cannot kill the loop.
+                try:
+                    async with self.session_factory() as backoff_session:
+                        await backoff_session.execute(
+                            update(ProductStore)
+                            .where(ProductStore.id == product_store.id)
+                            .values(
+                                next_check_at=datetime.now(UTC).replace(tzinfo=None)
+                                + timedelta(hours=1)
+                            )
+                        )
+                        await backoff_session.commit()
+                except Exception as backoff_error:
+                    logger.error(
+                        f"Failed to back off schedule for {product_store.id}: {backoff_error}"
+                    )
 
     def _compute_next_check(self, product_store: ProductStore, now_utc: datetime) -> datetime:
         """Next check time: weekly on a weekday (morning spread) or jittered frequency."""
@@ -190,36 +220,40 @@ class PriceCheckScheduler:
         self,
         product_store: ProductStore,
         session: AsyncSession,
-    ) -> None:
-        """Check price for a single product-store combination."""
+    ) -> PriceCheckOutcome:
+        """Check price for a single product-store combination.
+
+        Thin wrapper around domain.service.perform_price_check — the single
+        fetch → extract → enrich → apply-scrape → record flow. This method owns
+        only the scheduler's bookkeeping (stats, alerts) and returns the outcome
+        so the loop can reschedule failures.
+        """
         self._stats["checks_total"] += 1
         logger.info(f"Checking price: {product_store.product.name} at {product_store.store.name}")
 
-        # Fetch page content
-        fetch_result = await self.fetcher.fetch(product_store.store_url)
-        if not fetch_result.get("ok"):
-            logger.warning(f"Failed to fetch {product_store.store_url}")
-            return
-
-        # Extract price (store API -> JSON-LD -> LLM cascade)
-        text_content = fetch_result.get("text", "")
-        extraction = await self.parser.extract_price(
-            text_content=text_content,
-            store_slug=product_store.store.slug,
-            product_name=product_store.product.name,
-            store_url=product_store.store_url,
-            html_content=fetch_result.get("html"),
+        outcome = await perform_price_check(
+            product_store=product_store,
+            product=product_store.product,
+            store=product_store.store,
+            session=session,
+            fetcher=self.fetcher,
+            parser=self.parser,
         )
 
-        # Skip recording if no price was extracted (required field)
-        if extraction.price_sek is None:
+        if outcome.failure_reason == "fetch_failed":
+            logger.warning(f"Failed to fetch {product_store.store_url}")
+            return outcome
+
+        if outcome.failure_reason == "no_price":
             logger.warning(
                 f"Could not extract price for {product_store.product.name} "
                 f"at {product_store.store.name} - skipping"
             )
-            return
+            return outcome
 
-        # Track extraction source (API/JSON-LD vs LLM)
+        # Track extraction source (API/JSON-LD vs LLM). An ENRICHED jsonld check
+        # still counts as jsonld — enrichment keeps raw_response["source"] intact.
+        extraction = outcome.extraction
         raw = extraction.raw_response or {}
         source = raw.get("source") if isinstance(raw, dict) else None
         if source == "willys_api":
@@ -229,38 +263,12 @@ class PriceCheckScheduler:
         else:
             self._stats["checks_llm"] += 1
 
-        # Record price point. store_unit_price_sek is what the STORE printed (D-05) — the
-        # computed kr/unit is derived on read from the link's quantity and never persisted (D-04).
-        price_point = PricePoint(
-            product_store_id=product_store.id,
-            price_sek=extraction.price_sek,
-            store_unit_price_sek=extraction.store_unit_price_sek,
-            offer_price_sek=extraction.offer_price_sek,
-            offer_type=extraction.offer_type,
-            offer_details=extraction.offer_details,
-            in_stock=extraction.in_stock,
-            raw_data=extraction.raw_response,
-            checked_at=datetime.now(UTC).replace(tzinfo=None),
-        )
-        session.add(price_point)
-
-        # Scrape write-path #1 of three (D-07/D-09): autofill the link's quantity when it has
-        # none, flag on conflict, NEVER overwrite the operator's typed value. product_store is
-        # this function's own parameter and _check_due_products joinedloads .product, so the
-        # link and the product's canonical unit are both in hand — no extra query, no lazy load.
-        # The link is attached to the session the caller commits, so the reading persists with
-        # the price point.
-        mismatch = apply_scrape_to_link(product_store, extraction, product_store.product.unit)
-        if mismatch:
-            logger.warning(
-                f"Package quantity mismatch for {product_store.product.name} "
-                f"at {product_store.store.name}: {mismatch}"
-            )
-
         self._stats["checks_success"] += 1
 
-        # Check for alerts
+        # Check for alerts — only when a point was actually recorded
         await self._check_alerts(product_store, extraction, session)
+
+        return outcome
 
     async def _check_alerts(
         self,
@@ -400,28 +408,14 @@ class PriceCheckScheduler:
         if now.weekday() != 0 or now.hour < 14:
             return
 
-        # Don't re-send if already sent today
+        # Don't re-send if already sent today. This in-memory dedup is the ONLY
+        # guard: the old "recent alert within 10h" restart heuristic silently
+        # suppressed legitimate summaries (any Monday-morning alert killed that
+        # afternoon's summary). A rare duplicate after a Monday-afternoon
+        # restart is the accepted cost (locked decision).
         today = now.date()
         if self._last_summary_date == today:
             return
-
-        # Heuristic guard: check if any watch was alerted recently (within 10h)
-        # This prevents duplicate summaries after restart
-        async with self.session_factory() as session:
-            recent_cutoff = now - timedelta(hours=10)
-            recent_alert_stmt = (
-                select(PriceWatch.id)
-                .where(
-                    PriceWatch.is_active.is_(True),
-                    PriceWatch.last_alerted_at >= recent_cutoff,
-                )
-                .limit(1)
-            )
-            recent_result = await session.execute(recent_alert_stmt)
-            if recent_result.scalar_one_or_none() is not None:
-                logger.debug("Skipping weekly summary - recent alert found (restart guard)")
-                self._last_summary_date = today
-                return
 
         logger.info("Sending weekly summary emails")
 
@@ -473,7 +467,9 @@ class PriceCheckScheduler:
                 self._last_summary_date = today
                 return
 
-            # Build watched products with latest prices
+            # Build watched products: the LOWEST kr/enhet across the product's links
+            # (latest point per link), not "the latest point on the most-recently
+            # checked link" the old ORDER BY checked_at DESC LIMIT 1 produced.
             watched_products: list[dict[str, str | Decimal | None]] = []
             product_ids_seen: set[str] = set()
             for watch in watches:
@@ -482,31 +478,73 @@ class PriceCheckScheduler:
                     continue
                 product_ids_seen.add(pid)
 
-                # Get latest price for this product
-                latest_stmt = (
-                    select(PricePoint, Store)
+                # Latest point PER LINK (same shape as service.get_links_for_product).
+                latest = (
+                    select(
+                        PricePoint.product_store_id.label("ps_id"),
+                        func.max(PricePoint.checked_at).label("checked_at"),
+                    )
+                    .group_by(PricePoint.product_store_id)
+                    .subquery()
+                )
+                links_stmt = (
+                    select(PricePoint, ProductStore, Store)
+                    .join(
+                        latest,
+                        (PricePoint.product_store_id == latest.c.ps_id)
+                        & (PricePoint.checked_at == latest.c.checked_at),
+                    )
                     .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
                     .join(Store, ProductStore.store_id == Store.id)
                     .where(ProductStore.product_id == watch.product_id)
-                    .order_by(PricePoint.checked_at.desc())
-                    .limit(1)
                 )
-                latest_result = await session.execute(latest_stmt)
-                latest_row = latest_result.first()
+                links_result = await session.execute(links_stmt)
+                link_rows = links_result.all()
 
-                lowest_price: Decimal | None = None
-                store_name = ""
-                if latest_row:
-                    pp, st = latest_row
-                    price_val = pp.offer_price_sek or pp.price_sek
-                    lowest_price = Decimal(str(price_val)) if price_val else None
-                    store_name = st.name
+                # kr/enhet from domain.pricing — THE single definition. The effective
+                # price is what you actually pay: the offer when there is one.
+                best_unit: Decimal | None = None
+                best_unit_store = ""
+                best_abs: Decimal | None = None
+                best_abs_store = ""
+                for pp, ps, st in link_rows:
+                    effective = (
+                        pp.offer_price_sek if pp.offer_price_sek is not None else pp.price_sek
+                    )
+                    if effective is None:
+                        continue
+                    if best_abs is None or effective < best_abs:
+                        best_abs = effective
+                        best_abs_store = st.name
+                    unit_price = unit_price_py(effective, ps.package_quantity)
+                    if unit_price is not None and (best_unit is None or unit_price < best_unit):
+                        best_unit = unit_price
+                        best_unit_store = st.name
+
+                cent = Decimal("0.01")
+                if best_unit is not None:
+                    lowest_price: Decimal | None = best_unit.quantize(cent, rounding=ROUND_HALF_UP)
+                    store_name = best_unit_store
+                    # The label carries the product's canonical unit ("kr/st").
+                    unit = watch.product.unit or "enhet"
+                    price_label = f"kr/{unit}"
+                elif best_abs is not None:
+                    # No link has a quantity yet: fall back to the lowest absolute
+                    # effective price — labeled as such, never passed off as kr/enhet.
+                    lowest_price = best_abs.quantize(cent, rounding=ROUND_HALF_UP)
+                    store_name = best_abs_store
+                    price_label = "kr"
+                else:
+                    lowest_price = None
+                    store_name = ""
+                    price_label = "kr"
 
                 watched_products.append(
                     {
                         "name": watch.product.name,
                         "lowest_price": lowest_price,
                         "store_name": store_name,
+                        "price_label": price_label,
                     }
                 )
 

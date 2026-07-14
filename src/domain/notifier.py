@@ -285,17 +285,21 @@ class PriceNotifier:
                 name = product.get("name", "")
                 lowest_price = product.get("lowest_price", "N/A")
                 store_name = product.get("store_name", "")
+                # "kr/st"-style when the row carries a computed kr/enhet, plain "kr"
+                # for the absolute-price fallback (and for rows without a label).
+                price_label = product.get("price_label") or "kr"
 
                 # Escape all user-controlled data
                 safe_name = html.escape(str(name))
                 safe_store_name = html.escape(str(store_name))
+                safe_price_label = html.escape(str(price_label))
 
                 watched_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_name}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {lowest_price} kr</td>
+                        {lowest_price} {safe_price_label}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_store_name}</td>
                 </tr>"""
