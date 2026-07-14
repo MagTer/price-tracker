@@ -6,23 +6,22 @@ from pydantic import BaseModel
 
 
 class ProductCreate(BaseModel):
-    """Schema for creating a new product.
+    """Schema for creating a new product — the abstract good, not a package.
 
-    For products with package sizes (e.g., toilet paper, beverages),
-    create separate products for each size variant:
-    - "Toalettpapper 24-pack" (package_size="24-pack", package_quantity=24)
-    - "Toalettpapper 16-pack" (package_size="16-pack", package_quantity=16)
+    A product is "Lambi toalettpapper", not "Lambi toalettpapper 24-pack". It carries only
+    name, brand, category, and `unit` — the canonical comparison unit (st / liter / kg) that
+    makes its per-store package listings comparable with one another.
 
-    This enables unit price comparison across package sizes.
+    Package data (the 24-pack, the 500 ml bottle) belongs to the STORE LINK: the same good is
+    sold in different package sizes at different stores, and at more than one size in the same
+    store. See ProductStoreLink / ProductStoreUpdate.
     """
 
     tenant_id: str
     name: str
     brand: str | None = None
     category: str | None = None
-    unit: str | None = None
-    package_size: str | None = None  # Human-readable: "24-pack", "500ml", "1kg"
-    package_quantity: float | None = None  # Numeric value for calculations: 24, 0.5, 1.0
+    unit: str | None = None  # Canonical comparison unit: "st", "liter", "kg"
 
 
 class ProductUpdate(BaseModel):
@@ -32,17 +31,34 @@ class ProductUpdate(BaseModel):
     brand: str | None = None
     category: str | None = None
     unit: str | None = None
-    package_size: str | None = None
-    package_quantity: float | None = None
 
 
 class ProductStoreLink(BaseModel):
-    """Schema for linking a product to a store."""
+    """Schema for linking a product to a store.
+
+    The link owns the packaging: a 24-pack at Willys and an 8-pack at Willys are two links
+    to one product. `package_quantity` is expressed in the product's canonical unit and may
+    be None — the first scrape autofills it (D-02).
+    """
 
     store_id: str
     store_url: str
     check_frequency_hours: int = 72
     check_weekday: int | None = None  # 0=Monday, 6=Sunday, None=use frequency
+    package_size: str | None = None  # Human-readable label: "24-pack", "500 ml", "1 kg"
+    package_quantity: float | None = None  # In the product's canonical unit: 24, 0.5, 1.0
+
+
+class ProductStoreUpdate(BaseModel):
+    """Schema for editing a link's packaging (D-11).
+
+    Deliberately exposes NEITHER store_id NOR store_url. The URL is the link's identity now;
+    re-pointing a link at a different page would silently rewrite the meaning of its entire
+    price history. Delete the link and create a new one instead.
+    """
+
+    package_size: str | None = None
+    package_quantity: float | None = None
 
 
 class PriceWatchCreate(BaseModel):
@@ -80,26 +96,36 @@ class StoreResponse(BaseModel):
 
 
 class ProductResponse(BaseModel):
-    """Schema for product data response with linked stores."""
+    """Schema for product data response with linked stores.
+
+    Package data is NOT here — each dict in `stores` carries its own link's package_size and
+    package_quantity.
+    """
 
     id: str
     name: str
     brand: str | None
     category: str | None
     unit: str | None
-    package_size: str | None
-    package_quantity: float | None
     stores: list[dict[str, str | int | float | None]]
 
 
 class PricePointResponse(BaseModel):
-    """Schema for a single price point in history."""
+    """Schema for a single price point in history.
+
+    Two different numbers with two different definitions:
+    - `unit_price_sek` is the COMPUTED value (effective price / the link's package_quantity).
+      This is the comparable one — the only one that may be sorted or ranked on.
+    - `store_unit_price_sek` is what the STORE PRINTED (its jämförpris), verbatim and possibly
+      in a different unit than ours. Display only; NEVER sort on it (D-05).
+    """
 
     checked_at: str
     store_name: str
     store_slug: str
     price_sek: float | None
-    unit_price_sek: float | None
+    unit_price_sek: float | None  # COMPUTED — the sortable one
+    store_unit_price_sek: float | None  # What the store printed — display only
     offer_price_sek: float | None
     offer_type: str | None
     offer_details: str | None
@@ -126,6 +152,7 @@ __all__ = [
     "ProductCreate",
     "ProductUpdate",
     "ProductStoreLink",
+    "ProductStoreUpdate",
     "PriceWatchCreate",
     "PriceWatchUpdate",
     "StoreResponse",
