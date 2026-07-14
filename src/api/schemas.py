@@ -123,11 +123,19 @@ class PricePointResponse(BaseModel):
       This is the comparable one — the only one that may be sorted or ranked on.
     - `store_unit_price_sek` is what the STORE PRINTED (its jämförpris), verbatim and possibly
       in a different unit than ours. Display only; NEVER sort on it (D-05).
+
+    A history row is an observation on one LINK, not on a product: a product may carry a
+    16-pack and a 24-pack at the SAME store. `product_store_id` is what makes the rows
+    separable — without it the client can only group by store, which merges those two into one
+    series and reports a bigger box as a price rise. That is the whole bug (D-12, QD-1).
     """
 
     checked_at: str
+    product_store_id: str  # The LINK this observation belongs to — the grouping key
     store_name: str
     store_slug: str
+    package_size: str | None  # The link's printed label, e.g. "24-pack"
+    package_quantity: float | None  # None => this link HAS no kr/unit; never coerce it to 0
     price_sek: float | None
     unit_price_sek: float | None  # COMPUTED — the sortable one
     store_unit_price_sek: float | None  # What the store printed — display only

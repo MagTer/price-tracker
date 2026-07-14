@@ -927,8 +927,11 @@ async def get_price_history(
         return [
             PricePointResponse(
                 checked_at=price_point.checked_at.isoformat(),
+                product_store_id=str(product_store.id),
                 store_name=store.name,
                 store_slug=store.slug,
+                package_size=product_store.package_size,
+                package_quantity=_as_float(product_store.package_quantity),
                 price_sek=float(price_point.price_sek) if price_point.price_sek else None,
                 unit_price_sek=_computed_unit_price(
                     _effective_price(price_point), product_store.package_quantity
