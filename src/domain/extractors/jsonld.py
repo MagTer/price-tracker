@@ -34,6 +34,10 @@ _LDJSON_RE = re.compile(
 
 _OUT_OF_STOCK_MARKERS = ("OutOfStock", "SoldOut", "Discontinued")
 
+# Tokens of 3+ alphanumerics (Swedish letters included). Shorter fragments ("3",
+# "p", "st") appear in virtually every product title and would fake an overlap.
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9åäö]{3,}")
+
 
 class JsonLdExtractor:
     """Extract price data from schema.org Product JSON-LD in raw HTML."""
@@ -47,6 +51,24 @@ class JsonLdExtractor:
         product = self._find_product(html)
         if product is None:
             return None
+
+        # Name sanity: a recommendation carousel can put ITS Product node first in the
+        # markup, and recording that price with 0.95 confidence poisons the history.
+        # Zero token overlap between the tracked name and the node's name means the
+        # node is (almost certainly) some other product — fall through to the LLM
+        # rather than trying subsequent Product nodes (locked decision).
+        name = unescape(str(product.get("name", "")))
+        if product_name:
+            expected = set(_NAME_TOKEN_RE.findall(product_name.lower()))
+            found = set(_NAME_TOKEN_RE.findall(name.lower()))
+            if expected and found and not (expected & found):
+                logger.warning(
+                    "JSON-LD Product name %r shares no token with tracked product %r "
+                    "- ignoring the node, falling back to LLM",
+                    name,
+                    product_name,
+                )
+                return None
 
         offer = self._first_offer(product.get("offers"))
         if offer is None:
@@ -62,7 +84,6 @@ class JsonLdExtractor:
         if price is None:
             return None
 
-        name = unescape(str(product.get("name", "")))
         in_stock = self._parse_availability(offer.get("availability"))
 
         return PriceExtractionResult(

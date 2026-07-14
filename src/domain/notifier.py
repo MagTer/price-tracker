@@ -79,7 +79,7 @@ class PriceNotifier:
         Returns:
             True if email was sent successfully.
         """
-        subject = "Veckans prisoversikt - Prisspaning"
+        subject = "Veckans prisöversikt – Prisspaning"
         html_body = self._build_summary_html(deals, watched_products)
 
         message = EmailMessage(
@@ -126,7 +126,7 @@ class PriceNotifier:
         if target_price:
             target_row = f"""
             <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">Ditt malpris:</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Ditt målpris:</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">{target_price} kr</td>
             </tr>"""
 
@@ -146,7 +146,7 @@ class PriceNotifier:
         if unit_price_sek is not None:
             unit_price_row = f"""
             <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jamforelsepris:</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jämförelsepris:</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
                     <strong>{unit_price_sek} kr/enhet</strong>
                 </td>
@@ -156,10 +156,10 @@ class PriceNotifier:
         if unit_price_drop_percent is not None:
             unit_price_drop_row = f"""
             <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jamforelsepris-fall:</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jämförelsepris-fall:</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
                     <strong style="color: #22c55e;">
-                        {unit_price_drop_percent:.1f}% under ordinarie jamforelsepris
+                        {unit_price_drop_percent:.1f}% under ordinarie jämförelsepris
                     </strong>
                 </td>
             </tr>"""
@@ -217,7 +217,7 @@ class PriceNotifier:
 
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;">
             <p style="color: #666; font-size: 0.9em;">
-                Detta mail skickades av Prisspaning. Du far detta for att du bevakar produkten.
+                Detta mail skickades av Prisspaning. Du får detta för att du bevakar produkten.
             </p>
         </body>
         </html>
@@ -285,17 +285,21 @@ class PriceNotifier:
                 name = product.get("name", "")
                 lowest_price = product.get("lowest_price", "N/A")
                 store_name = product.get("store_name", "")
+                # "kr/st"-style when the row carries a computed kr/enhet, plain "kr"
+                # for the absolute-price fallback (and for rows without a label).
+                price_label = product.get("price_label") or "kr"
 
                 # Escape all user-controlled data
                 safe_name = html.escape(str(name))
                 safe_store_name = html.escape(str(store_name))
+                safe_price_label = html.escape(str(price_label))
 
                 watched_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_name}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {lowest_price} kr</td>
+                        {lowest_price} {safe_price_label}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_store_name}</td>
                 </tr>"""
@@ -306,7 +310,7 @@ class PriceNotifier:
                 <thead>
                     <tr style="background: #f3f4f6;">
                         <th style="padding: 8px; text-align: left;">Produkt</th>
-                        <th style="padding: 8px; text-align: left;">Lagsta pris</th>
+                        <th style="padding: 8px; text-align: left;">Lägsta pris</th>
                         <th style="padding: 8px; text-align: left;">Butik</th>
                     </tr>
                 </thead>
@@ -319,8 +323,8 @@ class PriceNotifier:
         <head><meta charset="UTF-8"></head>
         <body style="font-family: Arial, sans-serif; max-width: 600px;
                      margin: 0 auto; padding: 20px;">
-            <h2 style="color: #1e3a5f;">Veckans prisoversikt</h2>
-            <p>Har ar en sammanfattning av priser och erbjudanden denna vecka.</p>
+            <h2 style="color: #1e3a5f;">Veckans prisöversikt</h2>
+            <p>Här är en sammanfattning av priser och erbjudanden denna vecka.</p>
             {deals_html}
             {watched_html}
 

@@ -236,10 +236,6 @@
                 <input type="email" name="email_address" required class="form-input">
             </div>
             <div class="form-group">
-                <label>Målpris (kr)</label>
-                <input type="number" step="0.01" name="target_price_sek" class="form-input">
-            </div>
-            <div class="form-group">
                 <label>
                     <input type="checkbox" name="alert_on_any_offer"> Larma vid varje erbjudande
                 </label>
@@ -1349,7 +1345,9 @@ async function handleCreateWatch(e) {
     const body = {
         product_id: fd.get('product_id'),
         email_address: fd.get('email_address'),
-        target_price_sek: fd.get('target_price_sek') ? parseFloat(fd.get('target_price_sek')) : null,
+        // Absolute target prices are phased out for NEW watches — the kr/enhet target
+        // below is the comparable one. The API key stays; existing watches keep theirs.
+        target_price_sek: null,
         alert_on_any_offer: !!fd.get('alert_on_any_offer'),
         price_drop_threshold_percent: fd.get('price_drop_threshold_percent') ? parseInt(fd.get('price_drop_threshold_percent')) : null,
         unit_price_target_sek: fd.get('unit_price_target_sek') ? parseFloat(fd.get('unit_price_target_sek')) : null

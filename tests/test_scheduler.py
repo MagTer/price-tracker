@@ -573,41 +573,179 @@ class TestWeeklySummary:
 
         session_factory.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_weekly_summary_restart_guard_skips_recent_alert(self) -> None:
-        """Recent alert within 10h prevents duplicate summary after restart."""
-        email_service = MagicMock()
-        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+    def _summary_session(
+        self,
+        session_factory: MagicMock,
+        deals_rows: list,
+        watches: list,
+        link_rows_per_watch: list[list],
+    ) -> AsyncMock:
+        """Wire ONE session whose execute yields deals, then watches, then per-watch links.
 
-        # Monday at 15:00
-        monday = datetime(2026, 2, 16, 15, 0, 0)
-        assert monday.weekday() == 0
+        The strict side_effect order doubles as the restart-guard-deletion assertion:
+        if the old "recent alert within 10h" query ever comes back, it consumes the
+        deals result and the flow derails immediately.
+        """
+        deals_result = MagicMock()
+        deals_result.all.return_value = deals_rows
 
-        # Session returns a recent alert ID (restart guard fires)
+        watches_result = MagicMock()
+        watches_result.unique.return_value.scalars.return_value.all.return_value = watches
+
+        results = [deals_result, watches_result]
+        for link_rows in link_rows_per_watch:
+            links_result = MagicMock()
+            links_result.all.return_value = link_rows
+            results.append(links_result)
+
         mock_session = AsyncMock()
-        recent_alert_scalar = MagicMock()
-        recent_alert_scalar.scalar_one_or_none.return_value = uuid.uuid4()
-        mock_session.execute = AsyncMock(return_value=recent_alert_scalar)
+        mock_session.execute = AsyncMock(side_effect=results)
 
         session_cm = AsyncMock()
         session_cm.__aenter__ = AsyncMock(return_value=mock_session)
         session_cm.__aexit__ = AsyncMock(return_value=None)
         session_factory.return_value = session_cm
+        return mock_session
+
+    @staticmethod
+    def _watch(product_name: str = "Lambi Toalettpapper", unit: str | None = "st") -> MagicMock:
+        watch = MagicMock()
+        watch.product_id = uuid.uuid4()
+        watch.email_address = "user@example.com"
+        product = MagicMock()
+        product.name = product_name
+        product.unit = unit
+        watch.product = product
+        return watch
+
+    @staticmethod
+    def _link_row(
+        price: str,
+        quantity: str | None,
+        store_name: str,
+        offer: str | None = None,
+    ) -> tuple[MagicMock, MagicMock, MagicMock]:
+        pp = MagicMock()
+        pp.price_sek = Decimal(price)
+        pp.offer_price_sek = Decimal(offer) if offer is not None else None
+        pp.offer_type = None
+        ps = MagicMock()
+        ps.package_quantity = Decimal(quantity) if quantity is not None else None
+        store = MagicMock()
+        store.name = store_name
+        return pp, ps, store
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_reports_lowest_unit_price_across_links(self) -> None:
+        """Lowest kr/enhet over the latest point per link — not the most recent link's price.
+
+        24-pack at 139.90 = 5.83 kr/st beats 8-pack at 59.90 = 7.49 kr/st even though the
+        8-pack is far cheaper in absolute kronor.
+        """
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        watch = self._watch()
+        self._summary_session(
+            session_factory,
+            deals_rows=[],
+            watches=[watch],
+            link_rows_per_watch=[
+                [
+                    self._link_row("139.90", "24", "Willys"),
+                    self._link_row("59.90", "8", "ICA"),
+                ]
+            ],
+        )
 
         assert scheduler.notifier is not None
-        mock_send_summary = AsyncMock(return_value=True)
-
+        mock_send = AsyncMock(return_value=True)
         with (
             patch("domain.scheduler.datetime") as mock_dt,
-            patch.object(scheduler.notifier, "send_weekly_summary", mock_send_summary),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
         ):
             mock_dt.now.return_value = monday
-
             await scheduler._check_weekly_summary()
 
-        # Guard set the date so we don't re-send, but send_weekly_summary was not called
+        mock_send.assert_called_once()
+        watched = mock_send.call_args.kwargs["watched_products"]
+        assert watched == [
+            {
+                "name": "Lambi Toalettpapper",
+                "lowest_price": Decimal("5.83"),
+                "store_name": "Willys",
+                "price_label": "kr/st",
+            }
+        ]
         assert scheduler._last_summary_date == monday.date()
-        mock_send_summary.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_uses_offer_as_effective_price(self) -> None:
+        """The effective price (offer when present) feeds the kr/enhet comparison."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        watch = self._watch()
+        # Offer makes the 24-pack 119.90 -> 5.00 kr/st (link's regular would be 6.66).
+        self._summary_session(
+            session_factory,
+            deals_rows=[],
+            watches=[watch],
+            link_rows_per_watch=[[self._link_row("159.90", "24", "Willys", offer="119.90")]],
+        )
+
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        watched = mock_send.call_args.kwargs["watched_products"]
+        assert watched[0]["lowest_price"] == Decimal("5.00")
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_absolute_fallback_when_no_link_has_quantity(self) -> None:
+        """No quantity anywhere -> lowest absolute effective price, labeled plain "kr"."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        watch = self._watch()
+        self._summary_session(
+            session_factory,
+            deals_rows=[],
+            watches=[watch],
+            link_rows_per_watch=[
+                [
+                    self._link_row("139.90", None, "Willys"),
+                    self._link_row("129.00", None, "Coop"),
+                ]
+            ],
+        )
+
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        watched = mock_send.call_args.kwargs["watched_products"]
+        assert watched == [
+            {
+                "name": "Lambi Toalettpapper",
+                "lowest_price": Decimal("129.00"),
+                "store_name": "Coop",
+                "price_label": "kr",
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -681,3 +819,158 @@ class TestCheckDueProducts:
 
         assert mock_check.call_count == 2
         assert scheduler._stats["checks_failed"] == 1
+
+    @staticmethod
+    def _update_params(execute_call) -> dict:
+        """Compile the UPDATE statement an execute() received and return its params."""
+        return execute_call.args[0].compile().params
+
+    @pytest.mark.asyncio
+    async def test_exception_advances_next_check_one_hour_via_own_session(self) -> None:
+        """An exception-throwing link is backed off +1h so it stops hammering every 5 min."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store()
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        before = datetime.now(UTC).replace(tzinfo=None)
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
+            mock_check.side_effect = RuntimeError("boom")
+            await scheduler._check_due_products()
+        after = datetime.now(UTC).replace(tzinfo=None)
+
+        # load session + per-item session + the backoff's OWN session
+        assert len(sessions) == 3
+        backoff = sessions[2]
+        backoff.execute.assert_awaited_once()
+        backoff.commit.assert_awaited_once()
+        params = self._update_params(backoff.execute.call_args)
+        assert before + timedelta(hours=1) <= params["next_check_at"] <= after + timedelta(hours=1)
+        # The backoff leaves last_checked_at alone — the check never happened.
+        assert "last_checked_at" not in params
+        # The per-item session never got to its schedule UPDATE.
+        sessions[1].commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_weekday_check_retries_in_24h(self) -> None:
+        """fetch_failed/no_price on a weekday link -> +24h, not next week."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekday=0)
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        failed_outcome = MagicMock()
+        failed_outcome.success = False
+
+        before = datetime.now(UTC).replace(tzinfo=None)
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = failed_outcome
+            await scheduler._check_due_products()
+        after = datetime.now(UTC).replace(tzinfo=None)
+
+        params = self._update_params(sessions[1].execute.call_args)
+        next_check = params["next_check_at"]
+        assert before + timedelta(hours=24) <= next_check <= after + timedelta(hours=24)
+        sessions[1].commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_failed_frequency_check_keeps_jittered_schedule(self) -> None:
+        """Frequency-based links keep the jittered rescheduling on failure."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekday=None, check_frequency_hours=72)
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        failed_outcome = MagicMock()
+        failed_outcome.success = False
+
+        sentinel = datetime(2026, 3, 2, 8, 0, 0)
+        with (
+            patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
+            patch.object(scheduler, "_compute_next_check", return_value=sentinel) as mock_compute,
+        ):
+            mock_check.return_value = failed_outcome
+            await scheduler._check_due_products()
+
+        mock_compute.assert_called_once()
+        params = self._update_params(sessions[1].execute.call_args)
+        assert params["next_check_at"] == sentinel
+
+    @pytest.mark.asyncio
+    async def test_successful_weekday_check_keeps_weekday_schedule(self) -> None:
+        """Success on a weekday link keeps the next-weekday morning-spread behavior."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekday=0)
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        ok_outcome = MagicMock()
+        ok_outcome.success = True
+
+        sentinel = datetime(2026, 3, 9, 7, 30, 0)
+        with (
+            patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
+            patch.object(scheduler, "_compute_next_check", return_value=sentinel) as mock_compute,
+        ):
+            mock_check.return_value = ok_outcome
+            await scheduler._check_due_products()
+
+        mock_compute.assert_called_once()
+        params = self._update_params(sessions[1].execute.call_args)
+        assert params["next_check_at"] == sentinel

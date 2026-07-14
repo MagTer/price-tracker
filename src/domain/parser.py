@@ -1,5 +1,6 @@
 """LLM-based price extraction with cost optimization."""
 
+import dataclasses
 import json
 import logging
 import os
@@ -118,6 +119,18 @@ class PriceParser:
 
         prompt = self._build_prompt(text_content, store_slug, store_hint, product_name)
 
+        return await self._run_llm_cascade(prompt, product_name=product_name, store_slug=store_slug)
+
+    async def _run_llm_cascade(
+        self, prompt: str, *, product_name: str | None, store_slug: str
+    ) -> PriceExtractionResult:
+        """THE model cascade — the only place it exists (extract_price and enrich_with_llm
+        both route through here).
+
+        Returns the accepted result, or a discarded (price_sek=None) result when the best
+        confidence is below the acceptance floor. Raises RuntimeError only when every model
+        raised — callers that must never fail (enrich_with_llm) catch that themselves.
+        """
         # Try models in cascade order (cheapest to most expensive)
         last_result = None
         last_error = None
@@ -192,6 +205,69 @@ class PriceParser:
 
         # All models failed
         raise RuntimeError(f"All models failed. Last error: {last_error}")
+
+    # Fields the LLM may CONTRIBUTE during enrichment — only where the base result has
+    # None. Deliberately excludes price_sek and in_stock: the JSON-LD extraction stays
+    # the price authority, the LLM only fills what structured data cannot carry.
+    _ENRICHABLE_FIELDS = (
+        "store_unit_price_sek",
+        "offer_price_sek",
+        "offer_type",
+        "offer_details",
+        "pack_size",
+        "package_amount",
+        "package_unit",
+    )
+
+    async def enrich_with_llm(
+        self,
+        base: PriceExtractionResult,
+        *,
+        text_content: str,
+        store_slug: str,
+        product_name: str | None,
+    ) -> PriceExtractionResult:
+        """Fill offer/package fields a structured extraction lacks, from the SAME page.
+
+        Reuses the already-fetched text — enrichment never fetches a page. Never raises:
+        any cascade failure or below-floor confidence returns `base` unchanged, so an
+        enrichment problem can never fail a check whose price is already in hand.
+        """
+        try:
+            store_hint = self._store_hints.get(store_slug, "")
+            prompt = self._build_prompt(text_content, store_slug, store_hint, product_name)
+            result = await self._run_llm_cascade(
+                prompt, product_name=product_name, store_slug=store_slug
+            )
+        except Exception as e:
+            logger.warning(
+                f"LLM enrichment failed, keeping base extraction: {e}",
+                extra={"product": product_name, "store": store_slug},
+            )
+            return base
+
+        if result is None or result.confidence < self.MIN_ACCEPT_CONFIDENCE:
+            logger.warning(
+                "LLM enrichment below acceptance floor - keeping base extraction",
+                extra={"product": product_name, "store": store_slug},
+            )
+            return base
+
+        updates: dict[str, object] = {
+            field: getattr(result, field)
+            for field in self._ENRICHABLE_FIELDS
+            if getattr(base, field) is None and getattr(result, field) is not None
+        }
+
+        # Keep the base raw_response (its "source" stays truthful — an enriched
+        # JSON-LD check still counts as jsonld in the scheduler stats) and mark
+        # the enrichment on top.
+        raw = dict(base.raw_response or {})
+        raw["enriched"] = True
+        raw["enrichment_confidence"] = result.confidence
+        updates["raw_response"] = raw
+
+        return dataclasses.replace(base, **updates)
 
     def _build_prompt(
         self,

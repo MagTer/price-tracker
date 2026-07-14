@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from domain.service import PriceTrackerService
+from domain.result import PriceExtractionResult
+from domain.service import PriceTrackerService, perform_price_check
 
 
 @pytest.fixture
@@ -638,3 +639,280 @@ class TestPriceTrackerService:
         assert links[0]["scraped_package_quantity"] == 12.0
         # The operator's intent is untouched — evidence never rewrites it (D-07).
         assert links[0]["package_quantity"] == 24.0
+
+
+# ---------------------------------------------------------------------------
+# perform_price_check — THE single fetch→extract→enrich→apply_scrape→record flow
+# ---------------------------------------------------------------------------
+
+
+def _extraction(
+    price: str | None = "139.90",
+    *,
+    offer: str | None = None,
+    package_amount: str | None = None,
+    package_unit: str | None = None,
+    source: str | None = None,
+    confidence: float = 0.9,
+) -> PriceExtractionResult:
+    raw: dict = {}
+    if source is not None:
+        raw["source"] = source
+    return PriceExtractionResult(
+        price_sek=Decimal(price) if price is not None else None,
+        store_unit_price_sek=None,
+        offer_price_sek=Decimal(offer) if offer is not None else None,
+        offer_type="kampanj" if offer is not None else None,
+        offer_details=None,
+        in_stock=True,
+        confidence=confidence,
+        pack_size=None,
+        package_amount=Decimal(package_amount) if package_amount is not None else None,
+        package_unit=package_unit,
+        raw_response=raw,
+    )
+
+
+def _check_fixtures(
+    *,
+    package_quantity: Decimal | None = None,
+    scraped_package_quantity: Decimal | None = None,
+    prior_point: MagicMock | None = None,
+):
+    """(product_store, product, store, session, fetcher, parser) wired for one check."""
+    product_store = MagicMock()
+    product_store.id = uuid.uuid4()
+    product_store.store_url = "https://www.apotea.se/produkt"
+    product_store.package_quantity = package_quantity
+    product_store.scraped_package_quantity = scraped_package_quantity
+    product_store.last_checked_at = None
+
+    product = MagicMock()
+    product.name = "Lambi Toalettpapper"
+    product.unit = "st"
+
+    store = MagicMock()
+    store.name = "Apotea"
+    store.slug = "apotea"
+
+    session = AsyncMock()
+    prior_result = MagicMock()
+    prior_result.scalars.return_value.first.return_value = prior_point
+    session.execute = AsyncMock(return_value=prior_result)
+
+    fetcher = AsyncMock()
+    fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page text", "html": "<html>"})
+
+    parser = MagicMock()
+    parser.extract_price = AsyncMock()
+    parser.enrich_with_llm = AsyncMock(side_effect=lambda base, **kwargs: base)
+
+    return product_store, product, store, session, fetcher, parser
+
+
+def _prior(price: str = "139.90", offer: str | None = None) -> MagicMock:
+    pp = MagicMock()
+    pp.price_sek = Decimal(price)
+    pp.offer_price_sek = Decimal(offer) if offer is not None else None
+    return pp
+
+
+class TestPerformPriceCheck:
+    @pytest.mark.asyncio
+    async def test_success_records_point_and_applies_scrape(self) -> None:
+        """Happy path: point added, link autofilled (D-07), no commit (caller's job)."""
+        ps, product, store, session, fetcher, parser = _check_fixtures()
+        parser.extract_price.return_value = _extraction(
+            "139.90", package_amount="24", package_unit="st", source="llm"
+        )
+
+        outcome = await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        assert outcome.success is True
+        assert outcome.failure_reason is None
+        session.add.assert_called_once()
+        assert outcome.price_point is session.add.call_args.args[0]
+        assert outcome.price_point.price_sek == Decimal("139.90")
+        # D-07 autofill ran (after enrichment, inside the flow)
+        assert ps.package_quantity == Decimal("24")
+        assert ps.last_checked_at is not None
+        session.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_outcome(self) -> None:
+        ps, product, store, session, fetcher, parser = _check_fixtures()
+        fetcher.fetch = AsyncMock(return_value={"ok": False, "error": "boom"})
+
+        outcome = await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        assert outcome.success is False
+        assert outcome.failure_reason == "fetch_failed"
+        assert outcome.fetch_error == "boom"
+        parser.extract_price.assert_not_called()
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_price_outcome(self) -> None:
+        ps, product, store, session, fetcher, parser = _check_fixtures()
+        parser.extract_price.return_value = _extraction(None, confidence=0.3)
+
+        outcome = await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        assert outcome.success is False
+        assert outcome.failure_reason == "no_price"
+        assert outcome.extraction.confidence == 0.3
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enrichment_fires_on_first_success_without_quantity(self) -> None:
+        """Trigger (a): jsonld result, no prior point, quantity-less link -> enrich."""
+        ps, product, store, session, fetcher, parser = _check_fixtures(prior_point=None)
+        parser.extract_price.return_value = _extraction("108.95", source="jsonld")
+
+        outcome = await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        parser.enrich_with_llm.assert_awaited_once()
+        kwargs = parser.enrich_with_llm.call_args.kwargs
+        assert kwargs["text_content"] == "page text"  # the already-fetched page
+        assert kwargs["store_slug"] == "apotea"
+        assert outcome.success is True
+
+    @pytest.mark.asyncio
+    async def test_enrichment_fires_on_quantity_less_link_with_history(self) -> None:
+        """Trigger (a) second clause: history exists but the link never got a quantity."""
+        ps, product, store, session, fetcher, parser = _check_fixtures(
+            package_quantity=None,
+            scraped_package_quantity=None,
+            prior_point=_prior("108.95"),
+        )
+        parser.extract_price.return_value = _extraction("108.95", source="jsonld")
+
+        await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        parser.enrich_with_llm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_enrichment_fires_on_effective_price_drop(self) -> None:
+        """Trigger (b): current effective price below the prior point's -> enrich."""
+        ps, product, store, session, fetcher, parser = _check_fixtures(
+            package_quantity=Decimal("16"),
+            scraped_package_quantity=Decimal("16"),
+            prior_point=_prior("108.95"),
+        )
+        parser.extract_price.return_value = _extraction("89.95", source="jsonld")
+
+        await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        parser.enrich_with_llm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_enrichment_on_unchanged_or_raised_price(self) -> None:
+        """Neither trigger: settled link (quantity known, history) at same/higher price."""
+        for current in ("108.95", "129.95"):
+            ps, product, store, session, fetcher, parser = _check_fixtures(
+                package_quantity=Decimal("16"),
+                scraped_package_quantity=Decimal("16"),
+                prior_point=_prior("108.95"),
+            )
+            parser.extract_price.return_value = _extraction(current, source="jsonld")
+
+            outcome = await perform_price_check(
+                product_store=ps,
+                product=product,
+                store=store,
+                session=session,
+                fetcher=fetcher,
+                parser=parser,
+            )
+
+            parser.enrich_with_llm.assert_not_awaited()
+            assert outcome.success is True
+
+    @pytest.mark.asyncio
+    async def test_drop_compares_against_prior_offer_price(self) -> None:
+        """The prior EFFECTIVE price is the offer when the prior point had one."""
+        ps, product, store, session, fetcher, parser = _check_fixtures(
+            package_quantity=Decimal("16"),
+            scraped_package_quantity=Decimal("16"),
+            prior_point=_prior("108.95", offer="79.95"),
+        )
+        # 89.95 is below the prior regular but ABOVE the prior offer -> no drop.
+        parser.extract_price.return_value = _extraction("89.95", source="jsonld")
+
+        await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        parser.enrich_with_llm.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_enrichment_for_non_jsonld_sources(self) -> None:
+        """API/LLM extractions already carry all fields — never enriched."""
+        for source in ("willys_api", "llm", None):
+            ps, product, store, session, fetcher, parser = _check_fixtures(prior_point=None)
+            parser.extract_price.return_value = _extraction("89.95", source=source)
+
+            await perform_price_check(
+                product_store=ps,
+                product=product,
+                store=store,
+                session=session,
+                fetcher=fetcher,
+                parser=parser,
+            )
+
+            parser.enrich_with_llm.assert_not_awaited()
+            # No prior-point query either — the triggers are jsonld-only.
+            session.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_service_has_no_check_price(self) -> None:
+        """The third inline copy is gone — everything routes through perform_price_check."""
+        assert not hasattr(PriceTrackerService, "check_price")
