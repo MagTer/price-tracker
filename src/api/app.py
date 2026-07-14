@@ -1,6 +1,8 @@
 """FastAPI application factory with scheduler lifespan."""
 
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,12 +17,22 @@ from infra.db import async_session_factory, engine
 from infra.providers import get_email_service, get_fetcher
 from mcp_server.server import get_mcp_app
 
+logger = logging.getLogger(__name__)
+
 mcp_app, mcp_http_app = get_mcp_app()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with mcp_http_app.lifespan(mcp_http_app):
+        # Mirrors the MCP_BEARER_TOKEN pattern in mcp_server/server.py: loud at
+        # startup, but never a crash — the app still serves everything that does
+        # not need an LLM.
+        if not os.getenv("OPENROUTER_API_KEY"):
+            logger.error(
+                "OPENROUTER_API_KEY not set - LLM price extraction and enrichment "
+                "are effectively disabled until it is configured"
+            )
         fetcher = get_fetcher()
         email_service = get_email_service()
         # Only pass email_service if it is actually configured

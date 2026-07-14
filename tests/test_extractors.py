@@ -378,3 +378,68 @@ class TestJsonLdExtractor:
 
     def test_returns_none_on_plain_html(self) -> None:
         assert JsonLdExtractor().extract_from_html("<html><body>hej</body></html>") is None
+
+
+class TestJsonLdNameSanity:
+    """Zero token overlap between tracked name and node name -> None (LLM fallback).
+
+    Guards against a recommendation carousel's Product node being recorded as the
+    tracked product's price with 0.95 confidence.
+    """
+
+    CAROUSEL = _wrap_ldjson(
+        '{"@type":"Product","name":"Nutrilett Smoothie Crush",'
+        '"offers":{"@type":"Offer","price":"49.90","priceCurrency":"SEK"}}'
+    )
+
+    def test_carousel_name_mismatch_returns_none_and_warns(self, caplog) -> None:
+        with caplog.at_level("WARNING", logger="domain.extractors.jsonld"):
+            result = JsonLdExtractor().extract_from_html(
+                self.CAROUSEL, product_name="Lambi Toalettpapper"
+            )
+        assert result is None
+        warnings = [rec.getMessage() for rec in caplog.records]
+        assert any(
+            "Nutrilett Smoothie Crush" in msg and "Lambi Toalettpapper" in msg for msg in warnings
+        )
+
+    def test_token_overlap_passes_through(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"Lambi Bad & Toalettpapper 16-p",'
+            '"offers":{"@type":"Offer","price":"108.95","priceCurrency":"SEK"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html, product_name="Lambi toalettpapper")
+        assert result is not None
+        assert result.price_sek == Decimal("108.95")
+
+    def test_no_product_name_skips_the_check(self) -> None:
+        result = JsonLdExtractor().extract_from_html(self.CAROUSEL, product_name=None)
+        assert result is not None
+        assert result.price_sek == Decimal("49.90")
+
+    def test_empty_jsonld_name_skips_the_check(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"",'
+            '"offers":{"@type":"Offer","price":"25","priceCurrency":"SEK"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html, product_name="Lambi Toalettpapper")
+        assert result is not None
+        assert result.price_sek == Decimal("25")
+
+    def test_only_short_shared_tokens_count_as_no_overlap(self) -> None:
+        """Tokens shorter than 3 chars ("3", "p", "st") fake an overlap on every title."""
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"Nezeril 3-p st",'
+            '"offers":{"@type":"Offer","price":"79","priceCurrency":"SEK"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html, product_name="Lambi 3-p st")
+        assert result is None
+
+    def test_swedish_letters_participate_in_tokens(self) -> None:
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"Grov m\\u00f6rk r\\u00e5gbr\\u00f6d",'
+            '"offers":{"@type":"Offer","price":"32","priceCurrency":"SEK"}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html, product_name="Rågbröd grov")
+        assert result is not None
+        assert result.price_sek == Decimal("32")

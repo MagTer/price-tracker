@@ -591,3 +591,150 @@ class TestPriceParser:
 
         # scout rejects (0.65 < 0.70), haiku accepts (0.65 >= 0.6 floor)
         assert result.price_sek == Decimal("49.90")
+
+
+def _jsonld_base(
+    price: str = "108.95",
+    store_unit_price_sek: Decimal | None = None,
+    offer_price_sek: Decimal | None = None,
+) -> PriceExtractionResult:
+    """A JSON-LD extraction as the extractor emits it: price + stock, nothing else."""
+    return PriceExtractionResult(
+        price_sek=Decimal(price),
+        store_unit_price_sek=store_unit_price_sek,
+        offer_price_sek=offer_price_sek,
+        offer_type=None,
+        offer_details=None,
+        in_stock=True,
+        confidence=0.95,
+        pack_size=None,
+        package_amount=None,
+        package_unit=None,
+        raw_response={"source": "jsonld", "price": float(price), "in_stock": True},
+    )
+
+
+def _llm_result(
+    price: str | None = "99.90",
+    confidence: float = 0.9,
+    in_stock: bool = False,
+    **fields,
+) -> PriceExtractionResult:
+    defaults: dict = {
+        "store_unit_price_sek": None,
+        "offer_price_sek": None,
+        "offer_type": None,
+        "offer_details": None,
+        "pack_size": None,
+        "package_amount": None,
+        "package_unit": None,
+    }
+    defaults.update(fields)
+    return PriceExtractionResult(
+        price_sek=Decimal(price) if price is not None else None,
+        in_stock=in_stock,
+        confidence=confidence,
+        raw_response={"source": "llm"},
+        **defaults,
+    )
+
+
+class TestEnrichWithLlm:
+    """enrich_with_llm: JSON-LD stays the price authority, the LLM only fills gaps."""
+
+    @pytest.mark.asyncio
+    async def test_fills_only_none_fields_and_base_wins_on_price(self) -> None:
+        """The LLM disagrees on price and stock — base wins; it contributes only gaps."""
+        parser = PriceParser()
+        base = _jsonld_base(price="108.95")
+        llm = _llm_result(
+            price="99.90",  # disagrees with base — must be ignored
+            in_stock=False,  # disagrees with base — must be ignored
+            confidence=0.9,
+            store_unit_price_sek=Decimal("6.81"),
+            offer_price_sek=Decimal("89.90"),
+            offer_type="kampanj",
+            offer_details="Kop 2 betala for 1",
+            pack_size=16,
+            package_amount=Decimal("16"),
+            package_unit="st",
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Lambi"
+            )
+
+        assert enriched.price_sek == Decimal("108.95")  # base authority
+        assert enriched.in_stock is True  # base authority
+        assert enriched.confidence == 0.95  # base authority
+        assert enriched.store_unit_price_sek == Decimal("6.81")
+        assert enriched.offer_price_sek == Decimal("89.90")
+        assert enriched.offer_type == "kampanj"
+        assert enriched.offer_details == "Kop 2 betala for 1"
+        assert enriched.pack_size == 16
+        assert enriched.package_amount == Decimal("16")
+        assert enriched.package_unit == "st"
+        # base is NOT mutated
+        assert base.offer_price_sek is None
+        assert base.raw_response.get("enriched") is None
+
+    @pytest.mark.asyncio
+    async def test_base_fields_survive_when_already_set(self) -> None:
+        """A field base already carries is never overwritten by the LLM's value."""
+        parser = PriceParser()
+        base = _jsonld_base(store_unit_price_sek=Decimal("5.83"))
+        llm = _llm_result(confidence=0.9, store_unit_price_sek=Decimal("99.00"))
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Lambi"
+            )
+
+        assert enriched.store_unit_price_sek == Decimal("5.83")
+
+    @pytest.mark.asyncio
+    async def test_below_floor_returns_base_unchanged(self) -> None:
+        parser = PriceParser()
+        base = _jsonld_base()
+        llm = _llm_result(confidence=0.2, pack_size=16)
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Lambi"
+            )
+
+        assert enriched is base
+
+    @pytest.mark.asyncio
+    async def test_cascade_exception_returns_base_without_raising(self) -> None:
+        parser = PriceParser()
+        base = _jsonld_base()
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.side_effect = RuntimeError("all models down")
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Lambi"
+            )
+
+        assert enriched is base
+
+    @pytest.mark.asyncio
+    async def test_raw_response_keeps_jsonld_source_and_marks_enrichment(self) -> None:
+        """Scheduler stats key on raw_response['source'] — enrichment must not change it."""
+        parser = PriceParser()
+        base = _jsonld_base()
+        llm = _llm_result(confidence=0.85, pack_size=16)
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Lambi"
+            )
+
+        assert enriched.raw_response["source"] == "jsonld"
+        assert enriched.raw_response["enriched"] is True
+        assert enriched.raw_response["enrichment_confidence"] == 0.85
