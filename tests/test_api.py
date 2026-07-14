@@ -1,17 +1,23 @@
 """Tests for FastAPI admin endpoints and auth."""
 
-from unittest.mock import AsyncMock, MagicMock
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.auth import require_auth
+from domain.models import PricePoint, Product, ProductStore, Store
+from domain.result import PriceExtractionResult
 from infra.db import async_session_factory
 
 TENANT = "f21b6620-c793-46e3-a354-dfcd9956b4a2"
 # Any well-formed UUID; the session is mocked, so nothing resolves it.
 LINK_ID = "3f2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+CHECKED_AT = datetime(2026, 7, 14, 6, 0)
 
 
 @pytest.fixture
@@ -65,6 +71,119 @@ def _link_row(mock_session, product_store):
     result = MagicMock()
     result.scalar_one_or_none.return_value = product_store
     mock_session.execute.return_value = result
+
+
+# --- Real ORM instances, deliberately NOT MagicMocks -------------------------------------
+#
+# The read-path tests below build REAL (transient, session-less) ORM objects. A MagicMock
+# auto-creates every attribute it is asked for, so `product.package_size` on a mock returns a
+# mock instead of raising — which is precisely why this suite stayed green for three plans
+# while `list_products`, `get_product` and `get_price_history` were all reading columns the
+# model no longer has. A real Product raises AttributeError. That is the whole point: these
+# fixtures can fail, and against the pre-fix code they do.
+#
+# No database is involved — declarative objects construct fine without a session, and the
+# session itself is still mocked.
+
+
+def _product(unit: str = "st", name: str = "Lambi toalettpapper") -> Product:
+    return Product(id=uuid.uuid4(), tenant_id=uuid.UUID(TENANT), name=name, brand="Lambi",
+                   category="Hushall", unit=unit)
+
+
+def _store(name: str = "Willys", slug: str = "willys") -> Store:
+    return Store(id=uuid.uuid4(), name=name, slug=slug, store_type="grocery",
+                 base_url="https://www.willys.se")
+
+
+def _ps(
+    product: Product,
+    store: Store,
+    *,
+    package_size: str | None = "24-pack",
+    package_quantity: str | None = "24",
+    scraped_package_quantity: str | None = None,
+) -> ProductStore:
+    return ProductStore(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        store_id=store.id,
+        store_url=f"https://www.willys.se/{uuid.uuid4()}",
+        package_size=package_size,
+        package_quantity=Decimal(package_quantity) if package_quantity is not None else None,
+        scraped_package_quantity=(
+            Decimal(scraped_package_quantity) if scraped_package_quantity is not None else None
+        ),
+        is_active=True,
+        check_frequency_hours=72,
+        check_weekday=None,
+        last_checked_at=None,
+    )
+
+
+def _pp(
+    ps: ProductStore,
+    *,
+    price: str = "139.90",
+    offer: str | None = None,
+    store_unit: str | None = None,
+    in_stock: bool = True,
+) -> PricePoint:
+    return PricePoint(
+        id=uuid.uuid4(),
+        product_store_id=ps.id,
+        price_sek=Decimal(price),
+        offer_price_sek=Decimal(offer) if offer is not None else None,
+        store_unit_price_sek=Decimal(store_unit) if store_unit is not None else None,
+        offer_type="kampanj" if offer is not None else None,
+        offer_details=None,
+        in_stock=in_stock,
+        checked_at=CHECKED_AT,
+    )
+
+
+def _scalars(items):
+    """A result whose .scalars().all() yields `items`."""
+    r = MagicMock()
+    r.scalars.return_value.all.return_value = items
+    return r
+
+
+def _scalar(item):
+    """A result whose .scalar_one_or_none() yields `item`."""
+    r = MagicMock()
+    r.scalar_one_or_none.return_value = item
+    return r
+
+
+def _rows(items):
+    """A result whose .all() yields `items` (a list of row tuples)."""
+    r = MagicMock()
+    r.all.return_value = items
+    return r
+
+
+def _extraction(
+    *,
+    price: str = "139.90",
+    store_unit: str | None = "5.83",
+    package_amount: str | None = None,
+    package_unit: str | None = None,
+    pack_size: int | None = None,
+) -> PriceExtractionResult:
+    return PriceExtractionResult(
+        price_sek=Decimal(price),
+        store_unit_price_sek=Decimal(store_unit) if store_unit is not None else None,
+        offer_price_sek=None,
+        offer_type=None,
+        offer_details=None,
+        in_stock=True,
+        confidence=0.9,
+        pack_size=pack_size,
+        package_amount=Decimal(package_amount) if package_amount is not None else None,
+        package_unit=package_unit,
+        raw_response={},
+    )
 
 
 class TestPublicEndpoints:
@@ -447,6 +566,162 @@ class TestOldPairKeyedRoutesAreGone:
         assert r.status_code == 404
 
 
+class TestComputedUnitPriceOnRead:
+    """Every unit price the API reports is COMPUTED from the link's own quantity (D-03/D-04).
+
+    The store's printed one travels beside it in a SEPARATE key and is never the same number
+    by definition (stores print kr/rulle, kr/pack and kr/100g interchangeably), so a test that
+    accepted either would prove nothing.
+    """
+
+    def test_list_products_computes_unit_price_from_the_link(self, client, mock_session):
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90", store_unit="5.83")
+        mock_session.execute.side_effect = [
+            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+        ]
+
+        r = client.get("/products")
+        assert r.status_code == 200
+        link = r.json()[0]["stores"][0]
+
+        # 139.90 / 24 = 5.829166… → 5.83 at the presentation boundary.
+        assert link["unit_price_sek"] == pytest.approx(5.83)
+        assert link["store_unit_price_sek"] == pytest.approx(5.83)  # a SEPARATE key
+        assert "store_unit_price_sek" in link and "unit_price_sek" in link
+        assert link["package_size"] == "24-pack"
+        assert link["package_quantity"] == pytest.approx(24.0)
+        assert link["needs_amount"] is False
+        assert link["quantity_mismatch"] is False
+
+    def test_list_products_sets_needs_amount_on_a_link_without_a_quantity(
+        self, client, mock_session
+    ):
+        """A NULL quantity is a visible flag (D-02) — not a zero, not a crash."""
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_size=None, package_quantity=None)
+        pp = _pp(ps, price="129.00", store_unit="12.90")
+        mock_session.execute.side_effect = [
+            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+        ]
+
+        r = client.get("/products")
+        assert r.status_code == 200
+        link = r.json()[0]["stores"][0]
+
+        assert link["unit_price_sek"] is None
+        assert link["needs_amount"] is True
+        # The store still printed something; it is simply not comparable.
+        assert link["store_unit_price_sek"] == pytest.approx(12.90)
+
+    def test_list_products_flags_a_quantity_mismatch_without_adopting_the_page_value(
+        self, client, mock_session
+    ):
+        """D-07/D-09: the page says 12, the operator typed 24. The API reports 24 and flags it.
+
+        Presenting the scraped value as if it were the stored one would be the silent-rewrite
+        this phase exists to prevent — every kr/unit in the app is computed from that number.
+        """
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24", scraped_package_quantity="12")
+        pp = _pp(ps, price="139.90")
+        mock_session.execute.side_effect = [
+            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+        ]
+
+        r = client.get("/products")
+        link = r.json()[0]["stores"][0]
+
+        assert link["quantity_mismatch"] is True
+        assert link["package_quantity"] == pytest.approx(24.0)  # STILL the operator's value
+        assert link["scraped_package_quantity"] == pytest.approx(12.0)
+        # ...and the unit price is computed from 24, not from the page's 12.
+        assert link["unit_price_sek"] == pytest.approx(5.83)
+
+    def test_the_offer_price_wins_the_unit_price_computation(self, client, mock_session):
+        """The effective price is what you actually pay: the offer when there is one."""
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90", offer="119.90")
+        mock_session.execute.side_effect = [
+            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+        ]
+
+        r = client.get("/products")
+        link = r.json()[0]["stores"][0]
+
+        assert link["unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)  # ~5.00
+        assert link["unit_price_sek"] != pytest.approx(139.90 / 24, rel=1e-3)  # not the regular
+
+    def test_get_product_carries_the_computed_price_and_both_flags(self, client, mock_session):
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="8", scraped_package_quantity="8")
+        pp = _pp(ps, price="59.90", store_unit="8.10")
+        mock_session.execute.side_effect = [
+            _scalar(product), _rows([(ps, store)]), _scalar(pp)
+        ]
+
+        r = client.get(f"/products/{product.id}")
+        assert r.status_code == 200
+        link = r.json()["stores"][0]
+
+        assert link["unit_price_sek"] == pytest.approx(7.49)   # computed: 59.90 / 8
+        assert link["store_unit_price_sek"] == pytest.approx(8.10)  # what the store printed
+        assert link["needs_amount"] is False
+        assert link["quantity_mismatch"] is False  # 8 == 8
+
+    def test_price_history_computes_the_unit_price_and_keeps_the_printed_one(
+        self, client, mock_session
+    ):
+        """The history response could not even be CONSTRUCTED before this plan: it read a
+        dropped column and omitted a required field. Only a mocked service kept it green.
+        """
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90", store_unit="5.83")
+        mock_session.execute.side_effect = [_rows([(pp, store, ps)])]
+
+        r = client.get(f"/products/{product.id}/prices")
+        assert r.status_code == 200
+        row = r.json()[0]
+
+        assert row["unit_price_sek"] == pytest.approx(5.83)
+        assert row["store_unit_price_sek"] == pytest.approx(5.83)
+        assert row["in_stock"] is True
+
+
+class TestProductLinksEndpoint:
+    """GET /products/{id}/links — the product page's data source (D-12)."""
+
+    def test_links_endpoint_preserves_the_services_ranking(self, client, mock_service):
+        """Cheapest-per-unit first, "needs amount" last. The endpoint RENDERS that order and
+        must never re-sort: the domain owns the one unit-price definition, and a second sort
+        here is how a second definition gets in.
+        """
+        ranked = [
+            {"product_store_id": "l1", "store_name": "Willys", "package_size": "24-pack",
+             "unit_price_sek": 5.83, "needs_amount": False, "quantity_mismatch": False},
+            {"product_store_id": "l2", "store_name": "ICA", "package_size": "8-pack",
+             "unit_price_sek": 7.49, "needs_amount": False, "quantity_mismatch": False},
+            {"product_store_id": "l3", "store_name": "Coop", "package_size": None,
+             "unit_price_sek": None, "needs_amount": True, "quantity_mismatch": False},
+        ]
+        mock_service.get_links_for_product = AsyncMock(return_value=ranked)
+
+        r = client.get(f"/products/{uuid.uuid4()}/links")
+        assert r.status_code == 200
+        rows = r.json()
+
+        assert [row["product_store_id"] for row in rows] == ["l1", "l2", "l3"]
+        assert rows[0]["unit_price_sek"] < rows[1]["unit_price_sek"]
+        assert rows[-1]["needs_amount"] is True  # the amount-less link sank to the bottom
+
+    def test_links_endpoint_rejects_a_malformed_product_id(self, client):
+        r = client.get("/products/not-a-uuid/links")
+        assert r.status_code == 400
+
+
 class TestDealsEndpoints:
     def test_get_deals(self, client, mock_session):
         # Empty deals — just verify endpoint responds
@@ -457,6 +732,123 @@ class TestDealsEndpoints:
         r = client.get("/deals")
         assert r.status_code == 200
         assert r.json() == []
+
+    def test_deals_two_links_same_store(self, client, mock_session):
+        """Two pack sizes at ONE store are TWO deals, not one.
+
+        The pre-phase dedupe key was the Python-side `(product.id, store.id)` tuple, which was
+        single-valued only because of the constraint this phase dropped. Fed two links at one
+        store it kept an ARBITRARY one and silently discarded the other — no error, no 500,
+        one pack size simply missing from the operator's deals list. That is why this needs a
+        behavioral test: 04.1-04's static gate detects a `select()` constrained on both
+        columns and structurally cannot see a Python tuple key.
+        """
+        product, store = _product(), _store()
+        ps24 = _ps(product, store, package_size="24-pack", package_quantity="24")
+        ps8 = _ps(product, store, package_size="8-pack", package_quantity="8")
+        pp24 = _pp(ps24, price="139.90", offer="119.90")
+        pp8 = _pp(ps8, price="59.90", offer="49.90")
+
+        mock_session.execute.return_value = _rows([
+            (pp24, product, store, ps24),
+            (pp8, product, store, ps8),
+        ])
+
+        r = client.get("/deals")
+        assert r.status_code == 200
+        deals = r.json()
+
+        assert len(deals) == 2, "the two pack sizes at one store collapsed into one deal row"
+        assert {d["package_size"] for d in deals} == {"24-pack", "8-pack"}
+        assert all(d["store_name"] == "Willys" for d in deals)
+
+        by_pack = {d["package_size"]: d for d in deals}
+        assert by_pack["24-pack"]["unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)
+        assert by_pack["8-pack"]["unit_price_sek"] == pytest.approx(49.90 / 8, rel=1e-3)
+
+    def test_deals_are_still_ordered_by_recency(self, client, mock_session):
+        """The computed kr/unit is EXPOSED on each deal, not adopted as the sort key.
+        Re-ranking deals is a behavior change to an unrelated feature.
+        """
+        product, store = _product(), _store()
+        cheap = _ps(product, store, package_size="24-pack", package_quantity="24")
+        pricey = _ps(product, store, package_size="8-pack", package_quantity="8")
+        # The pricier-per-unit link is the more RECENT row, so it must come first.
+        pp_pricey = _pp(pricey, price="59.90", offer="49.90")
+        pp_cheap = _pp(cheap, price="139.90", offer="119.90")
+
+        mock_session.execute.return_value = _rows([
+            (pp_pricey, product, store, pricey),
+            (pp_cheap, product, store, cheap),
+        ])
+
+        deals = client.get("/deals").json()
+        assert [d["package_size"] for d in deals] == ["8-pack", "24-pack"]
+        # ...even though the 8-pack is the more expensive one per unit.
+        assert deals[0]["unit_price_sek"] > deals[1]["unit_price_sek"]
+
+
+class TestManualCheckAppliesTheScrapeRule:
+    """POST /check/{id} is scrape write-path #3 of three (D-07, AC#4).
+
+    It duplicates service.check_price's fetch/parse/record flow inline instead of calling it,
+    so the autofill/flag/never-overwrite rule does not reach it for free. Without it the
+    operator clicks "Check now", a price appears, and the link's quantity stays empty forever.
+    """
+
+    def _run_check(self, client, mock_session, mock_service, link, product, store, extraction):
+        row = MagicMock()
+        row.one_or_none.return_value = (link, store, product)
+        mock_session.execute.return_value = row
+
+        recorded = _pp(link, price=str(extraction.price_sek),
+                       store_unit=str(extraction.store_unit_price_sek))
+        mock_service.record_price = AsyncMock(return_value=recorded)
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page", "html": "<html>"})
+        parser = MagicMock()
+        parser.extract_price = AsyncMock(return_value=extraction)
+
+        with patch("api.admin.get_fetcher", return_value=fetcher), \
+             patch("api.admin.PriceParser", return_value=parser):
+            return client.post(f"/check/{link.id}")
+
+    def test_check_autofills_an_empty_link_quantity(self, client, mock_session, mock_service):
+        product, store = _product(unit="st"), _store()
+        link = _ps(product, store, package_size=None, package_quantity=None)
+        extraction = _extraction(package_amount="24", package_unit="st")
+
+        r = self._run_check(client, mock_session, mock_service, link, product, store, extraction)
+
+        assert r.status_code == 200
+        body = r.json()
+        # The STORED value was filled — not merely reported back.
+        assert link.package_quantity == Decimal("24.00")
+        assert link.scraped_package_quantity == Decimal("24.00")
+        assert body["package_quantity"] == pytest.approx(24.0)
+        assert body["quantity_mismatch"] is None
+        assert body["unit_price_sek"] == pytest.approx(5.83)  # computed from the new quantity
+        assert body["store_unit_price_sek"] == pytest.approx(5.83)
+
+    def test_check_flags_a_conflict_and_never_overwrites(
+        self, client, mock_session, mock_service
+    ):
+        """The typed value is intent; the page is evidence. Evidence does not rewrite intent."""
+        product, store = _product(unit="st"), _store()
+        link = _ps(product, store, package_quantity="24")
+        extraction = _extraction(package_amount="12", package_unit="st", store_unit="11.66")
+
+        r = self._run_check(client, mock_session, mock_service, link, product, store, extraction)
+
+        assert r.status_code == 200
+        body = r.json()
+        # The stored quantity is UNTOUCHED — assert on the object, not just the response.
+        assert link.package_quantity == Decimal("24")
+        assert link.scraped_package_quantity == Decimal("12.00")
+        assert body["quantity_mismatch"], "the page/operator conflict was not surfaced"
+        assert "12" in body["quantity_mismatch"] and "24" in body["quantity_mismatch"]
+        assert body["package_quantity"] == pytest.approx(24.0)
 
 
 class TestSchedulerEndpoints:
