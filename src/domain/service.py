@@ -12,7 +12,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from infra.providers import get_fetcher
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
 from domain.pricing import (
@@ -21,6 +20,7 @@ from domain.pricing import (
     unit_price_expr,
     unit_price_py,
 )
+from infra.providers import get_fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -279,16 +279,12 @@ class PriceTrackerService:
                             "scraped_package_quantity": _as_float(
                                 product_store.scraped_package_quantity
                             ),
-                            "price_sek": (
-                                float(price_point.price_sek) if price_point else None
-                            ),
+                            "price_sek": (float(price_point.price_sek) if price_point else None),
                             "offer_price_sek": (
                                 _as_float(price_point.offer_price_sek) if price_point else None
                             ),
                             "store_unit_price_sek": (
-                                _as_float(price_point.store_unit_price_sek)
-                                if price_point
-                                else None
+                                _as_float(price_point.store_unit_price_sek) if price_point else None
                             ),
                             "unit_price_sek": _computed_unit_price(
                                 effective, product_store.package_quantity

@@ -9,7 +9,9 @@ class PriceExtractionResult:
     """Result from price extraction."""
 
     price_sek: Decimal | None
-    store_unit_price_sek: Decimal | None  # The store's PRINTED comparison price — never computed (D-05)
+    store_unit_price_sek: (
+        Decimal | None
+    )  # The store's PRINTED comparison price — never computed (D-05)
     offer_price_sek: Decimal | None
     offer_type: str | None  # "stammispris", "extrapris", "kampanj", etc.
     offer_details: str | None  # "Kop 2 betala for 1"

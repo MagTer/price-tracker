@@ -13,14 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi.responses import HTMLResponse
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from infra.db import async_session_factory
-from infra.providers import get_fetcher
 from api.auth import require_auth
-from fastapi.responses import HTMLResponse
 from api.schemas import (
     DealResponse,
     PricePointResponse,
@@ -31,13 +29,15 @@ from api.schemas import (
     ProductStoreLink,
     ProductStoreUpdate,
     ProductUpdate,
-    StoreResponse
+    StoreResponse,
 )
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
 from domain.pricing import apply_scrape_to_link, quantity_mismatch, unit_price_py
 from domain.service import PriceTrackerService
 from domain.tenant import DEFAULT_TENANT_ID
+from infra.db import async_session_factory
+from infra.providers import get_fetcher
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def _computed_unit_price(price: Decimal | None, quantity: Decimal | None) -> flo
 def _as_float(value: Decimal | None) -> float | None:
     """Decimal -> float for a response dict, preserving None."""
     return float(value) if value is not None else None
+
 
 # No path prefix: the /admin prefix was a holdover from the source platform
 # where OpenWebUI owned "/" — standalone, this UI+API is the whole app.
@@ -124,9 +125,7 @@ def sanitize_log(value: Any) -> str:
     return s
 
 
-@router.get(
-    "/stores", response_model=list[StoreResponse]
-)
+@router.get("/stores", response_model=list[StoreResponse])
 async def list_stores(session: AsyncSession = Depends(get_db)) -> list[StoreResponse]:
     """List all configured stores.
         List of store information including slug, type, and status.
@@ -253,9 +252,7 @@ async def list_products(
                     .label("rn")
                 )
                 latest_subq = (
-                    select(PricePoint, rn)
-                    .where(PricePoint.product_store_id.in_(ps_ids))
-                    .subquery()
+                    select(PricePoint, rn).where(PricePoint.product_store_id.in_(ps_ids)).subquery()
                 )
                 latest_pp = aliased(PricePoint, latest_subq)
                 latest_result = await session.execute(
@@ -329,11 +326,14 @@ async def list_products(
         raise HTTPException(status_code=500, detail="Failed to list products") from e
 
 
-@router.post("/products", status_code=201, )
+@router.post(
+    "/products",
+    status_code=201,
+)
 async def create_product(
     data: ProductCreate,
     admin_email: str = Depends(require_auth),
-    service: PriceTrackerService = Depends(get_price_tracker_service)
+    service: PriceTrackerService = Depends(get_price_tracker_service),
 ) -> dict[str, str]:
     """Create a new product to track.
 
@@ -516,9 +516,7 @@ async def get_product_links(
         raise HTTPException(status_code=500, detail="Failed to retrieve product links") from e
 
 
-@router.put(
-    "/products/{product_id}"
-)
+@router.put("/products/{product_id}")
 async def update_product(
     product_id: str,
     data: ProductUpdate,
@@ -953,9 +951,7 @@ async def get_price_history(
         raise HTTPException(status_code=500, detail="Failed to retrieve price history") from e
 
 
-@router.post(
-    "/check/{product_store_id}"
-)
+@router.post("/check/{product_store_id}")
 async def trigger_price_check(
     product_store_id: str,
     service: PriceTrackerService = Depends(get_price_tracker_service),
@@ -1032,9 +1028,7 @@ async def trigger_price_check(
         # price and leaves the link's quantity blank forever. `product_store` is attached to
         # the session record_price commits, so the autofilled quantity and the page's reading
         # persist alongside the price point — no second commit.
-        mismatch_message = apply_scrape_to_link(
-            product_store, extraction_result, product.unit
-        )
+        mismatch_message = apply_scrape_to_link(product_store, extraction_result, product.unit)
         if mismatch_message:
             LOGGER.warning(
                 "Package quantity mismatch on link %s: %s",
@@ -1266,9 +1260,7 @@ async def list_watches(
         raise HTTPException(status_code=500, detail="Failed to list watches") from e
 
 
-@router.post(
-    "/watches", status_code=201
-)
+@router.post("/watches", status_code=201)
 async def create_watch(
     data: PriceWatchCreate,
     tenant_id: str,
@@ -1365,9 +1357,7 @@ async def update_watch(
         raise HTTPException(status_code=500, detail="Failed to update price watch") from e
 
 
-@router.delete(
-    "/watches/{watch_id}"
-)
+@router.delete("/watches/{watch_id}")
 async def delete_watch(
     watch_id: str,
     session: AsyncSession = Depends(get_db),
@@ -1408,9 +1398,7 @@ async def delete_watch(
         raise HTTPException(status_code=500, detail="Failed to delete price watch") from e
 
 
-@router.delete(
-    "/products/{product_id}"
-)
+@router.delete("/products/{product_id}")
 async def delete_product(
     product_id: str,
     service: PriceTrackerService = Depends(get_price_tracker_service),
@@ -1623,7 +1611,9 @@ async def export_data(
         raise HTTPException(status_code=500, detail="Failed to export data") from e
 
 
-@router.post("/import", )
+@router.post(
+    "/import",
+)
 async def import_data(
     file: UploadFile,
     mode: str = "merge",
@@ -1662,7 +1652,9 @@ async def import_data(
         # Validate version
         version = data.get("version")
         if version != "1.0":
-            raise HTTPException(status_code=400, detail=f"Versionen av exporten stöds inte: {version}")
+            raise HTTPException(
+                status_code=400, detail=f"Versionen av exporten stöds inte: {version}"
+            )
 
         products_data = data.get("products", [])
         if not isinstance(products_data, list):
@@ -1883,7 +1875,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
     base_css = _get_admin_nav_css()
     sidebar = _get_admin_sidebar_html()
     header = _get_admin_header_html(admin_email)
-    return """<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="sv">
 <head>
     <meta charset="UTF-8">
@@ -1909,14 +1901,8 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
         {extra_js}
     </script>
 </body>
-</html>""".format(
-        base_css=base_css,
-        extra_css=extra_css,
-        sidebar=sidebar,
-        header=header,
-        content=content,
-        extra_js=extra_js,
-    )
+</html>"""
+
 
 def _get_admin_nav_css() -> str:
     """Return shared CSS for admin navigation."""
@@ -1939,44 +1925,168 @@ def _get_admin_nav_css() -> str:
             --error: #ef4444;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
         .admin-layout { display: flex; min-height: 100vh; }
-        .admin-sidebar { width: var(--nav-width); background: var(--bg-nav); color: var(--text-nav); position: fixed; top: 0; left: 0; bottom: 0; display: flex; flex-direction: column; z-index: 100; }
+        .admin-sidebar {
+            width: var(--nav-width);
+            background: var(--bg-nav);
+            color: var(--text-nav);
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+        }
         .sidebar-header { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); }
-        .sidebar-logo { font-size: 14px; font-weight: 600; color: #fff; text-decoration: none; display: flex; align-items: center; gap: 8px; }
+        .sidebar-logo {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
         .sidebar-logo span { font-size: 18px; }
         .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
-        .nav-section { padding: 8px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; }
-        .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: var(--text-nav); text-decoration: none; font-size: 13px; transition: all 0.15s; border-left: 3px solid transparent; }
+        .nav-section {
+            padding: 8px 16px 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+        }
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            color: var(--text-nav);
+            text-decoration: none;
+            font-size: 13px;
+            transition: all 0.15s;
+            border-left: 3px solid transparent;
+        }
         .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
-        .nav-item.active { background: rgba(37, 99, 235, 0.2); color: var(--text-nav-active); border-left-color: var(--primary); }
+        .nav-item.active {
+            background: rgba(37, 99, 235, 0.2);
+            color: var(--text-nav-active);
+            border-left-color: var(--primary);
+        }
         .nav-icon { font-size: 16px; width: 20px; text-align: center; }
-        .sidebar-footer { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #64748b; }
-        .admin-main { flex: 1; margin-left: var(--nav-width); display: flex; flex-direction: column; min-height: 100vh; }
-        .admin-header { height: var(--header-height); background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; position: sticky; top: 0; z-index: 50; }
+        .sidebar-footer {
+            padding: 12px 16px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 11px;
+            color: #64748b;
+        }
+        .admin-main {
+            flex: 1;
+            margin-left: var(--nav-width);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .admin-header {
+            height: var(--header-height);
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
         .breadcrumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; }
         .breadcrumbs a { color: var(--text-muted); text-decoration: none; }
         .breadcrumbs a:hover { color: var(--primary); }
         .breadcrumbs .separator { color: var(--border); }
         .breadcrumbs .current { color: var(--text); font-weight: 500; }
         .header-actions { display: flex; align-items: center; gap: 12px; }
-        .user-menu { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--bg); border-radius: 6px; font-size: 13px; }
-        .user-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px; }
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--bg);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 12px;
+        }
         .admin-content { flex: 1; padding: 24px; }
         .page-title { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
-        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
         .card-title { font-size: 14px; font-weight: 600; }
-        .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); transition: all 0.15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text);
+            transition: all 0.15s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
         .btn:hover { background: var(--bg); border-color: var(--text-muted); }
         .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
         .btn-primary:hover { background: var(--primary-dark); }
         .btn-sm { padding: 5px 10px; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
-        th { background: var(--bg); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text-muted); }
+        th {
+            background: var(--bg);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: var(--text-muted);
+        }
         tr:hover { background: var(--bg); }
-        .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
         .badge-success { background: #d1fae5; color: #065f46; }
         .badge-warning { background: #fef3c7; color: #92400e; }
         .badge-error { background: #fee2e2; color: #991b1b; }
@@ -1986,19 +2096,48 @@ def _get_admin_nav_css() -> str:
         .status-dot.ok { background: var(--success); }
         .status-dot.warning { background: var(--warning); }
         .status-dot.error { background: var(--error); }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .stat-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
         .stat-value { font-size: 24px; font-weight: 600; color: var(--primary); }
         .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-        .loading { color: var(--text-muted); font-style: italic; text-align: center; padding: 20px; }
+        .loading {
+            color: var(--text-muted);
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
         .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
         .empty-state-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
-        .shared-toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; color: white; font-size: 14px; font-weight: 500; z-index: 9999; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 400px; }
+        .shared-toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 9999;
+            display: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 400px;
+        }
         .shared-toast.success { background: var(--success); display: block; }
         .shared-toast.error { background: var(--error); display: block; }
         .shared-toast.warning { background: var(--warning); display: block; }
         .shared-toast.info { background: var(--primary); display: block; }
     """
+
 
 def _get_admin_sidebar_html() -> str:
     """Generate sidebar HTML."""
@@ -2022,9 +2161,11 @@ def _get_admin_sidebar_html() -> str:
     </aside>
     """
 
+
 def _get_admin_header_html(user_email: str) -> str:
     """Generate header HTML with user info."""
     import html as html_module
+
     safe_email = html_module.escape(user_email)
     user_initial = safe_email[0].upper() if safe_email else "?"
     return f"""

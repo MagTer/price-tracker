@@ -29,9 +29,7 @@ class BearerTokenMiddleware:
             return
 
         if not self.token:
-            await self._respond(
-                send, 503, b'{"detail":"MCP bearer token not configured"}'
-            )
+            await self._respond(send, 503, b'{"detail":"MCP bearer token not configured"}')
             return
 
         headers = dict(scope.get("headers", []))

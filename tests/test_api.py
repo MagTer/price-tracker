@@ -12,7 +12,6 @@ from api.app import create_app
 from api.auth import require_auth
 from domain.models import PricePoint, Product, ProductStore, Store
 from domain.result import PriceExtractionResult
-from infra.db import async_session_factory
 
 TENANT = "f21b6620-c793-46e3-a354-dfcd9956b4a2"
 # Any well-formed UUID; the session is mocked, so nothing resolves it.
@@ -41,6 +40,7 @@ def client(mock_session):
     # Override the get_db used in admin router — it is injected via Depends(get_db)
     # We patch at the module level where get_db is defined
     from api.admin import get_db as admin_get_db
+
     app.dependency_overrides[admin_get_db] = override_get_db
 
     return TestClient(app)
@@ -87,13 +87,24 @@ def _link_row(mock_session, product_store):
 
 
 def _product(unit: str = "st", name: str = "Lambi toalettpapper") -> Product:
-    return Product(id=uuid.uuid4(), tenant_id=uuid.UUID(TENANT), name=name, brand="Lambi",
-                   category="Hushall", unit=unit)
+    return Product(
+        id=uuid.uuid4(),
+        tenant_id=uuid.UUID(TENANT),
+        name=name,
+        brand="Lambi",
+        category="Hushall",
+        unit=unit,
+    )
 
 
 def _store(name: str = "Willys", slug: str = "willys") -> Store:
-    return Store(id=uuid.uuid4(), name=name, slug=slug, store_type="grocery",
-                 base_url="https://www.willys.se")
+    return Store(
+        id=uuid.uuid4(),
+        name=name,
+        slug=slug,
+        store_type="grocery",
+        base_url="https://www.willys.se",
+    )
 
 
 def _ps(
@@ -402,7 +413,9 @@ class TestProductStoreLinkEndpoints:
             side_effect=IntegrityError(
                 "INSERT INTO product_stores ...",
                 {},
-                Exception('duplicate key value violates unique constraint "uq_product_stores_store_url"'),
+                Exception(
+                    'duplicate key value violates unique constraint "uq_product_stores_store_url"'
+                ),
             )
         )
 
@@ -585,7 +598,9 @@ class TestComputedUnitPriceOnRead:
         ps = _ps(product, store, package_quantity="24")
         pp = _pp(ps, price="139.90", store_unit="5.83")
         mock_session.execute.side_effect = [
-            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
         ]
 
         r = client.get("/products")
@@ -609,7 +624,9 @@ class TestComputedUnitPriceOnRead:
         ps = _ps(product, store, package_size=None, package_quantity=None)
         pp = _pp(ps, price="129.00", store_unit="12.90")
         mock_session.execute.side_effect = [
-            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
         ]
 
         r = client.get("/products")
@@ -633,7 +650,9 @@ class TestComputedUnitPriceOnRead:
         ps = _ps(product, store, package_quantity="24", scraped_package_quantity="12")
         pp = _pp(ps, price="139.90")
         mock_session.execute.side_effect = [
-            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
         ]
 
         r = client.get("/products")
@@ -651,7 +670,9 @@ class TestComputedUnitPriceOnRead:
         ps = _ps(product, store, package_quantity="24")
         pp = _pp(ps, price="139.90", offer="119.90")
         mock_session.execute.side_effect = [
-            _scalars([product]), _rows([(ps, store)]), _scalars([pp])
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
         ]
 
         r = client.get("/products")
@@ -664,15 +685,13 @@ class TestComputedUnitPriceOnRead:
         product, store = _product(), _store()
         ps = _ps(product, store, package_quantity="8", scraped_package_quantity="8")
         pp = _pp(ps, price="59.90", store_unit="8.10")
-        mock_session.execute.side_effect = [
-            _scalar(product), _rows([(ps, store)]), _scalar(pp)
-        ]
+        mock_session.execute.side_effect = [_scalar(product), _rows([(ps, store)]), _scalar(pp)]
 
         r = client.get(f"/products/{product.id}")
         assert r.status_code == 200
         link = r.json()["stores"][0]
 
-        assert link["unit_price_sek"] == pytest.approx(7.49)   # computed: 59.90 / 8
+        assert link["unit_price_sek"] == pytest.approx(7.49)  # computed: 59.90 / 8
         assert link["store_unit_price_sek"] == pytest.approx(8.10)  # what the store printed
         assert link["needs_amount"] is False
         assert link["quantity_mismatch"] is False  # 8 == 8
@@ -706,12 +725,30 @@ class TestProductLinksEndpoint:
         here is how a second definition gets in.
         """
         ranked = [
-            {"product_store_id": "l1", "store_name": "Willys", "package_size": "24-pack",
-             "unit_price_sek": 5.83, "needs_amount": False, "quantity_mismatch": False},
-            {"product_store_id": "l2", "store_name": "ICA", "package_size": "8-pack",
-             "unit_price_sek": 7.49, "needs_amount": False, "quantity_mismatch": False},
-            {"product_store_id": "l3", "store_name": "Coop", "package_size": None,
-             "unit_price_sek": None, "needs_amount": True, "quantity_mismatch": False},
+            {
+                "product_store_id": "l1",
+                "store_name": "Willys",
+                "package_size": "24-pack",
+                "unit_price_sek": 5.83,
+                "needs_amount": False,
+                "quantity_mismatch": False,
+            },
+            {
+                "product_store_id": "l2",
+                "store_name": "ICA",
+                "package_size": "8-pack",
+                "unit_price_sek": 7.49,
+                "needs_amount": False,
+                "quantity_mismatch": False,
+            },
+            {
+                "product_store_id": "l3",
+                "store_name": "Coop",
+                "package_size": None,
+                "unit_price_sek": None,
+                "needs_amount": True,
+                "quantity_mismatch": False,
+            },
         ]
         mock_service.get_links_for_product = AsyncMock(return_value=ranked)
 
@@ -755,10 +792,12 @@ class TestDealsEndpoints:
         pp24 = _pp(ps24, price="139.90", offer="119.90")
         pp8 = _pp(ps8, price="59.90", offer="49.90")
 
-        mock_session.execute.return_value = _rows([
-            (pp24, product, store, ps24),
-            (pp8, product, store, ps8),
-        ])
+        mock_session.execute.return_value = _rows(
+            [
+                (pp24, product, store, ps24),
+                (pp8, product, store, ps8),
+            ]
+        )
 
         r = client.get("/deals")
         assert r.status_code == 200
@@ -783,10 +822,12 @@ class TestDealsEndpoints:
         pp_pricey = _pp(pricey, price="59.90", offer="49.90")
         pp_cheap = _pp(cheap, price="139.90", offer="119.90")
 
-        mock_session.execute.return_value = _rows([
-            (pp_pricey, product, store, pricey),
-            (pp_cheap, product, store, cheap),
-        ])
+        mock_session.execute.return_value = _rows(
+            [
+                (pp_pricey, product, store, pricey),
+                (pp_cheap, product, store, cheap),
+            ]
+        )
 
         deals = client.get("/deals").json()
         assert [d["package_size"] for d in deals] == ["8-pack", "24-pack"]
@@ -807,8 +848,9 @@ class TestManualCheckAppliesTheScrapeRule:
         row.one_or_none.return_value = (link, store, product)
         mock_session.execute.return_value = row
 
-        recorded = _pp(link, price=str(extraction.price_sek),
-                       store_unit=str(extraction.store_unit_price_sek))
+        recorded = _pp(
+            link, price=str(extraction.price_sek), store_unit=str(extraction.store_unit_price_sek)
+        )
         mock_service.record_price = AsyncMock(return_value=recorded)
 
         fetcher = MagicMock()
@@ -816,8 +858,10 @@ class TestManualCheckAppliesTheScrapeRule:
         parser = MagicMock()
         parser.extract_price = AsyncMock(return_value=extraction)
 
-        with patch("api.admin.get_fetcher", return_value=fetcher), \
-             patch("api.admin.PriceParser", return_value=parser):
+        with (
+            patch("api.admin.get_fetcher", return_value=fetcher),
+            patch("api.admin.PriceParser", return_value=parser),
+        ):
             return client.post(f"/check/{link.id}")
 
     def test_check_autofills_an_empty_link_quantity(self, client, mock_session, mock_service):
@@ -837,9 +881,7 @@ class TestManualCheckAppliesTheScrapeRule:
         assert body["unit_price_sek"] == pytest.approx(5.83)  # computed from the new quantity
         assert body["store_unit_price_sek"] == pytest.approx(5.83)
 
-    def test_check_flags_a_conflict_and_never_overwrites(
-        self, client, mock_session, mock_service
-    ):
+    def test_check_flags_a_conflict_and_never_overwrites(self, client, mock_session, mock_service):
         """The typed value is intent; the page is evidence. Evidence does not rewrite intent."""
         product, store = _product(unit="st"), _store()
         link = _ps(product, store, package_quantity="24")

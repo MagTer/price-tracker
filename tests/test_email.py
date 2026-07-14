@@ -8,12 +8,16 @@ from domain.protocols.email import EmailMessage, IEmailService
 from infra.email import ResendEmailService
 
 
-def _make_service(api_key: str = "re_test_key", from_addr: str = "noreply@example.se") -> ResendEmailService:
+def _make_service(
+    api_key: str = "re_test_key", from_addr: str = "noreply@example.se"
+) -> ResendEmailService:
     with patch.dict("os.environ", {"RESEND_API_KEY": api_key, "EMAIL_FROM": from_addr}):
         return ResendEmailService()
 
 
-def _mock_response(status_code: int = 200, json_data: dict | None = None, text: str = "") -> MagicMock:
+def _mock_response(
+    status_code: int = 200, json_data: dict | None = None, text: str = ""
+) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = json_data or {}

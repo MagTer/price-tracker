@@ -262,9 +262,7 @@ class TestCheckSingleProduct:
         ):
             fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page content"})
             mock_session = AsyncMock()
-            product_store = _make_product_store(
-                package_quantity=Decimal("24"), product_unit="st"
-            )
+            product_store = _make_product_store(package_quantity=Decimal("24"), product_unit="st")
 
             await scheduler._check_single_product(product_store, mock_session)
 
@@ -644,9 +642,7 @@ class TestCheckDueProducts:
 
         session_factory.side_effect = lambda: make_session_cm()
 
-        with patch.object(
-            scheduler, "_check_single_product", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
             await scheduler._check_due_products()
 
         # 1 load session + 2 per-item sessions
@@ -679,9 +675,7 @@ class TestCheckDueProducts:
 
         session_factory.side_effect = lambda: make_session_cm()
 
-        with patch.object(
-            scheduler, "_check_single_product", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
             mock_check.side_effect = [RuntimeError("boom"), None]
             await scheduler._check_due_products()
 

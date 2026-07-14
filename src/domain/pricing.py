@@ -73,7 +73,9 @@ def unit_price_py(price: Decimal | None, qty: Decimal | None) -> Decimal | None:
     return price / qty
 
 
-def unit_price_expr(price_col: ColumnElement[Any], qty_col: ColumnElement[Any]) -> ColumnElement[Any]:
+def unit_price_expr(
+    price_col: ColumnElement[Any], qty_col: ColumnElement[Any]
+) -> ColumnElement[Any]:
     """SQL-side unit price — the same definition as unit_price_py.
 
     NULLIF is the divide-by-zero guard. A NULL quantity yields NULL by SQL semantics, and
@@ -135,9 +137,7 @@ def normalize_amount(
     return quantized
 
 
-def scraped_quantity_from(
-    extraction: ScrapedPackage, product_unit: str | None
-) -> Decimal | None:
+def scraped_quantity_from(extraction: ScrapedPackage, product_unit: str | None) -> Decimal | None:
     """The page's reading of the package quantity, in the product's canonical unit (D-06/D-08).
 
     Prefers the explicit amount + unit. Falls back to the title-derived item count (`16-p`),

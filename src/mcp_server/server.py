@@ -19,9 +19,8 @@ from decimal import Decimal
 from fastmcp import FastMCP
 
 from domain.service import PriceTrackerService
-from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
-from mcp_server.auth import BearerTokenMiddleware, MCP_BEARER_TOKEN
+from mcp_server.auth import MCP_BEARER_TOKEN, BearerTokenMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ async def check_price(product_name: str) -> str:
     products = await service.get_products(search=product_name)
 
     if not products:
-        return f"Inga produkter matchade \"{product_name}\"."
+        return f'Inga produkter matchade "{product_name}".'
 
     lines: list[str] = [f"## Priser för: {product_name}", ""]
 
@@ -107,7 +106,10 @@ async def find_deals(store_type: str | None = None) -> str:
         filter_text = f" för {store_type}" if store_type else ""
         return f"Inga aktiva erbjudanden hittades{filter_text}."
 
-    lines: list[str] = [f"## Aktuella erbjudanden{' (' + store_type + ')' if store_type else ''}", ""]
+    lines: list[str] = [
+        f"## Aktuella erbjudanden{' (' + store_type + ')' if store_type else ''}",
+        "",
+    ]
 
     for deal in deals[:20]:
         regular = _fmt_price(deal.get("regular_price_sek"))
@@ -147,7 +149,7 @@ async def compare_stores(product_name: str) -> str:
     products = await service.get_products(search=product_name)
 
     if not products:
-        return f"Inga produkter matchade \"{product_name}\"."
+        return f'Inga produkter matchade "{product_name}".'
 
     lines: list[str] = [f"## Jämför priser: {product_name}", ""]
 
@@ -250,7 +252,5 @@ def get_mcp_app():
     http_app = mcp.http_app(path="/")
 
     if not MCP_BEARER_TOKEN:
-        logger.error(
-            "MCP_BEARER_TOKEN not set — MCP endpoint will answer 503 until configured"
-        )
+        logger.error("MCP_BEARER_TOKEN not set — MCP endpoint will answer 503 until configured")
     return BearerTokenMiddleware(http_app, MCP_BEARER_TOKEN), http_app

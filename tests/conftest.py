@@ -116,7 +116,7 @@ def postgres_url() -> str:
     url = _test_url()
     try:
         asyncio.run(_recreate_test_database(url))
-    except (OSError, asyncio.TimeoutError, asyncpg.PostgresError) as exc:
+    except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
         pytest.skip(
             f"No Postgres reachable at "
             f"{url.set(database='postgres').render_as_string(hide_password=True)}: "

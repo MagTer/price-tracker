@@ -61,9 +61,7 @@ class ResendEmailService:
 
             # Resend returns a JSON error body; keep it short in the result
             error_text = response.text[:200]
-            logger.warning(
-                "Resend API error %d: %s", response.status_code, error_text
-            )
+            logger.warning("Resend API error %d: %s", response.status_code, error_text)
             return EmailResult(
                 success=False,
                 error=f"Resend API {response.status_code}: {error_text}",

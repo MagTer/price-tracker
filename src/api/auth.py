@@ -8,11 +8,12 @@ import os
 
 from fastapi import Header, HTTPException, status
 
-
 ALLOWED_ENTRA_EMAIL = os.getenv("ALLOWED_ENTRA_EMAIL", "")
 
 
-def require_auth(x_auth_request_email: str | None = Header(None, alias="X-Auth-Request-Email")) -> str:
+def require_auth(
+    x_auth_request_email: str | None = Header(None, alias="X-Auth-Request-Email"),
+) -> str:
     """Validate the upstream IAP email header.
 
     Returns the validated email address.

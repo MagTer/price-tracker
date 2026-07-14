@@ -91,9 +91,7 @@ class ProductStore(Base):
     __tablename__ = "product_stores"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("products.id"), index=True
-    )
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"), index=True)
     store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stores.id"), index=True)
     store_url: Mapped[str] = mapped_column(String(512))
     store_product_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -145,9 +143,7 @@ class PricePoint(Base):
     __tablename__ = "price_points"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    product_store_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("product_stores.id"), index=True
-    )
+    product_store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product_stores.id"), index=True)
     price_sek: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     # The store's PRINTED comparison price (jämförpris), exactly as scraped (D-05). It is a raw
     # signal shown BESIDE the computed value and is NEVER sorted on: stores print unit prices
@@ -224,9 +220,7 @@ class PriceWatch(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("products.id"), index=True
-    )
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"), index=True)
     target_price_sek: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     alert_on_any_offer: Mapped[bool] = mapped_column(Boolean, default=False)
     price_drop_threshold_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)

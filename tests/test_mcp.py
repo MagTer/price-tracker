@@ -1,9 +1,7 @@
 """Tests for MCP server tools and bearer-token auth."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from mcp_server.auth import BearerTokenMiddleware
 from mcp_server.server import check_price, compare_stores, find_deals, list_products
@@ -89,7 +87,7 @@ def _link(**overrides):
         "store_unit_price_sek": 5.83,
         "unit_price_sek": 5.83,
         "in_stock": True,
-        "checked_at": datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc),
+        "checked_at": datetime(2026, 7, 14, 6, 0, tzinfo=UTC),
         "needs_amount": False,
         "quantity_mismatch": False,
     }
@@ -100,7 +98,7 @@ def _link(**overrides):
 def _history_row(**overrides):
     """A get_price_history() row — every key the service actually emits (04.1-03)."""
     row = {
-        "checked_at": datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc),
+        "checked_at": datetime(2026, 7, 14, 6, 0, tzinfo=UTC),
         "product_store_id": "ps1",
         "store_name": "Apotea",
         "store_slug": "apotea",
@@ -260,9 +258,7 @@ class TestMcpTools:
         assert "10.00 kr" in result
 
     @patch("mcp_server.server._get_service")
-    async def test_compare_stores_one_row_per_link_ranked_by_unit_price(
-        self, mock_get_svc
-    ):
+    async def test_compare_stores_one_row_per_link_ranked_by_unit_price(self, mock_get_svc):
         """The Lambi scenario: three links, cheapest-per-roll first (D-13)."""
         mock_service = MagicMock()
         mock_service.get_products = AsyncMock(
@@ -384,9 +380,7 @@ class TestMcpTools:
                 }
             ]
         )
-        mock_service.get_stores = AsyncMock(
-            return_value=[{"id": "s1", "name": "ICA"}]
-        )
+        mock_service.get_stores = AsyncMock(return_value=[{"id": "s1", "name": "ICA"}])
         mock_get_svc.return_value = mock_service
 
         result = await list_products.fn()

@@ -258,7 +258,10 @@ from domain.extractors.jsonld import JsonLdExtractor  # noqa: E402
 
 
 def _wrap_ldjson(payload: str) -> str:
-    return f'<html><head><script type="application/ld+json">{payload}</script></head><body>x</body></html>'
+    return (
+        f'<html><head><script type="application/ld+json">{payload}</script></head>'
+        f"<body>x</body></html>"
+    )
 
 
 class TestJsonLdExtractor:

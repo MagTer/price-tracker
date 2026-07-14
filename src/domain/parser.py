@@ -92,9 +92,7 @@ class PriceParser:
         # JSON-LD second: exact structured data from the already-fetched page
         if html_content:
             try:
-                jsonld_result = self._jsonld_extractor.extract_from_html(
-                    html_content, product_name
-                )
+                jsonld_result = self._jsonld_extractor.extract_from_html(html_content, product_name)
                 if jsonld_result is not None:
                     logger.info(
                         "Price extracted via JSON-LD",

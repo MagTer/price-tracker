@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from domain.protocols.email import EmailMessage, EmailResult
 from domain.notifier import PriceNotifier
+from domain.protocols.email import EmailMessage, EmailResult
 
 
 class MockEmailService:

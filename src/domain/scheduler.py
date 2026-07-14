@@ -10,7 +10,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
-from domain.protocols import IEmailService, IFetcher
 from domain.models import (
     PricePoint,
     PriceWatch,
@@ -21,6 +20,7 @@ from domain.models import (
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
 from domain.pricing import apply_scrape_to_link, unit_price_py
+from domain.protocols import IEmailService, IFetcher
 
 logger = logging.getLogger(__name__)
 

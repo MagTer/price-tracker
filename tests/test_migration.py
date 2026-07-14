@@ -50,7 +50,9 @@ async def _lambi(session: AsyncSession) -> Product:
     return product
 
 
-def _link(product: Product, store: Store, url: str, quantity: Decimal | None, label: str | None) -> ProductStore:
+def _link(
+    product: Product, store: Store, url: str, quantity: Decimal | None, label: str | None
+) -> ProductStore:
     return ProductStore(
         product_id=product.id,
         store_id=store.id,
@@ -60,7 +62,9 @@ def _link(product: Product, store: Store, url: str, quantity: Decimal | None, la
     )
 
 
-def _price(link: ProductStore, price: Decimal, *, offer: Decimal | None = None, minutes_ago: int = 0) -> PricePoint:
+def _price(
+    link: ProductStore, price: Decimal, *, offer: Decimal | None = None, minutes_ago: int = 0
+) -> PricePoint:
     return PricePoint(
         product_store_id=link.id,
         price_sek=price,
@@ -82,9 +86,7 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
             "products": {c["name"] for c in inspector.get_columns("products")},
             "product_stores": {c["name"] for c in inspector.get_columns("product_stores")},
             "price_points": {c["name"] for c in inspector.get_columns("price_points")},
-            "ps_unique": {
-                uc["name"] for uc in inspector.get_unique_constraints("product_stores")
-            },
+            "ps_unique": {uc["name"] for uc in inspector.get_unique_constraints("product_stores")},
         }
 
     async with db_engine.connect() as conn:
@@ -147,9 +149,7 @@ async def test_two_links_same_store_persist(db_session: AsyncSession) -> None:
     db_session.add(
         _link(lambi, willys, "https://www.willys.se/lambi-24p", Decimal("24"), "24-pack")
     )
-    db_session.add(
-        _link(lambi, willys, "https://www.willys.se/lambi-8p", Decimal("8"), "8-pack")
-    )
+    db_session.add(_link(lambi, willys, "https://www.willys.se/lambi-8p", Decimal("8"), "8-pack"))
     await db_session.commit()
 
     links = (

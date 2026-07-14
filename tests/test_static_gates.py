@@ -124,7 +124,10 @@ def _is_ps_column(node: ast.expr, column: str) -> bool:
 
 
 def _is_join_target(node: ast.expr) -> bool:
-    """True for `Store.id` / `Product.id` / `ProductStore.id` — i.e. a join condition, not a filter."""
+    """True for `Store.id` / `Product.id` / `ProductStore.id`.
+
+    I.e. a join condition, not a filter.
+    """
     return (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
