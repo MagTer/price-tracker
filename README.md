@@ -88,6 +88,78 @@ Postgres on `5432` for host `psql` access. It is never deployed.
 poetry run pytest
 ```
 
+Two tiers:
+
+| Tier | Command | Needs Postgres |
+|------|---------|----------------|
+| fast (mocks) | `poetry run pytest -m "not integration"` | no |
+| integration | `poetry run pytest -m integration` | yes |
+
+`poetry run pytest` runs both. The integration tier (`tests/test_migration.py`) drops and
+recreates a dedicated throwaway database called **`price_tracker_test`** — never the dev database,
+whatever `DATABASE_URL` says — applies `alembic upgrade head` to it, and proves the schema claims
+the mocks structurally cannot (a duplicate `store_url` is rejected; two links at one store both
+persist; the kr/unit `ORDER BY` sinks a link with no amount to the bottom). **When no Postgres is
+reachable those tests SKIP, they do not fail**, so `pytest` stays green on a laptop or a CI job
+with no database. Point them elsewhere with `TEST_DATABASE_URL` if you want.
+
+## Schema reset (Phase 04.1) — required once, by the operator
+
+**Read this before the next deploy. Skipping it fails SILENTLY.**
+
+Phase 04.1 moved the package data from `products` to `product_stores` and rewrote
+`alembic/versions/0001_initial.py` **in place** (D-14) rather than stacking a `0002` — the database
+was empty, so one clean migration beat a migration chain that only ever existed to patch a schema
+nobody was using.
+
+The consequence is a trap:
+
+> `alembic_version` stores only a **revision id**. Alembic does **not** checksum migration bodies.
+> A database already stamped `0001_initial` — **which the deployed instance is** — therefore
+> compares equal to head, applies **nothing**, prints nothing, and **exits 0**. The app then starts
+> against the **old** schema. Nothing warns you. The first symptom is a runtime error on the first
+> query touching `product_stores.package_quantity`, long after the deploy looked successful.
+
+Dropping the volume is the only defence. The deployment compose already runs `alembic upgrade head`
+in its command, so **the operative step is the volume drop** — the migration then runs against an
+empty database, as intended.
+
+This targets the **deployed** stack: the home-server repo's
+`compose/dokploy-apps/price-tracker/` (Dokploy-managed, pinned GHCR image). It is **not** this
+repo's `docker-compose.yml`, which is local-dev-only.
+
+```bash
+# On the deployment host, in compose/dokploy-apps/price-tracker/ (home-server repo).
+
+# 1. Stop the app and DROP THE POSTGRES VOLUME. This removes the tables AND the
+#    alembic_version row that makes the rewritten 0001 look already-applied.
+docker compose down -v
+
+# 2. Bring Postgres back up (empty).
+docker compose up -d postgres
+
+# 3. Start the app: its command runs `alembic upgrade head`, which now executes the
+#    rewritten 0001 against an empty database and re-seeds the five stores.
+docker compose up -d
+
+# 4. VERIFY — do not skip; the failure this guards against is silent.
+docker compose exec app alembic current   # must print: 0001_initial (head)
+docker compose exec app alembic check     # must print: No new upgrade operations detected.
+```
+
+`alembic current` printing `0001_initial (head)` on its own proves nothing (a stale DB prints the
+same thing) — it is `alembic check` that proves the live schema matches the ORM. If `check` reports
+operations, the volume was not actually dropped.
+
+**This destroys all price history.** That is accepted, and it is the basis on which the in-place
+rewrite was sanctioned: the database is empty. There is nothing to rescue.
+
+**⚠ The export format changed — check before you reset.** An export file produced *before* Phase
+04.1 will **not** round-trip through the new import: package data moved from the product rows to
+the store-link rows, and the price-history rows renamed `unit_price_sek` → `store_unit_price_sek`.
+If you are holding an old export you intend to restore, **say so before running the reset** — it
+needs hand-editing first.
+
 ## Release / deployment
 
 This repo's only deployment responsibility is building the container image;
