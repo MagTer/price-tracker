@@ -8,7 +8,7 @@ import random
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +35,44 @@ from api.schemas import (
 )
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
+from domain.pricing import apply_scrape_to_link, quantity_mismatch, unit_price_py
 from domain.service import PriceTrackerService
 from domain.tenant import DEFAULT_TENANT_ID
 
 LOGGER = logging.getLogger(__name__)
+
+_CENT = Decimal("0.01")
+
+
+def _effective_price(price_point: PricePoint | None) -> Decimal | None:
+    """The price actually paid: the offer when there is one, else the regular price."""
+    if price_point is None:
+        return None
+    if price_point.offer_price_sek is not None:
+        return price_point.offer_price_sek
+    return price_point.price_sek
+
+
+def _computed_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
+    """kr/unit for a response — the single definition (D-03), rounded at this boundary.
+
+    None when the link has no amount yet (D-02): the row says "needs amount", it does not lie
+    with a zero.
+
+    The quantity always comes from the LINK that is already in scope at the call site. The
+    ORM hybrid's Python side reads PricePoint.product_store, which lazy-loads in a non-greenlet
+    context and raises MissingGreenlet at request time on any price point loaded without a
+    joinedload — and a mocked test would never see it. So: never the hybrid here, always this.
+    """
+    value = unit_price_py(price, quantity)
+    if value is None:
+        return None
+    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
+
+
+def _as_float(value: Decimal | None) -> float | None:
+    """Decimal -> float for a response dict, preserving None."""
+    return float(value) if value is not None else None
 
 # No path prefix: the /admin prefix was a holdover from the source platform
 # where OpenWebUI owned "/" — standalone, this UI+API is the whole app.
@@ -236,7 +270,7 @@ async def list_products(
             for ps, store in ps_by_product.get(product.id, []):
                 latest_price = latest_by_ps.get(ps.id)
 
-                store_data: dict[str, str | int | None | float] = {
+                store_data: dict[str, str | int | None | float | bool] = {
                     "product_store_id": str(ps.id),
                     "store_id": str(ps.store_id),
                     "store_name": store.name,
@@ -247,17 +281,32 @@ async def list_products(
                     "last_checked_at": (
                         ps.last_checked_at.isoformat() if ps.last_checked_at else None
                     ),
+                    # The package is the LINK's, not the product's.
+                    "package_size": ps.package_size,
+                    "package_quantity": _as_float(ps.package_quantity),
+                    "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
                     "price_sek": (
                         float(latest_price.price_sek)
                         if latest_price and latest_price.price_sek
                         else None
                     ),
-                    "unit_price_sek": (
-                        float(latest_price.unit_price_sek)
-                        if latest_price and latest_price.unit_price_sek
-                        else None
+                    "offer_price_sek": (
+                        _as_float(latest_price.offer_price_sek) if latest_price else None
+                    ),
+                    # COMPUTED from the link's own quantity (D-03) — the comparable number.
+                    "unit_price_sek": _computed_unit_price(
+                        _effective_price(latest_price), ps.package_quantity
+                    ),
+                    # What the STORE printed (D-05) — display only, never sorted on.
+                    "store_unit_price_sek": (
+                        _as_float(latest_price.store_unit_price_sek) if latest_price else None
                     ),
                     "in_stock": latest_price.in_stock if latest_price else None,
+                    # D-02's visible flag: a link may be saved without an amount, but it is
+                    # never SILENTLY blank.
+                    "needs_amount": ps.package_quantity is None,
+                    # D-09's derived, self-clearing flag — never persisted as a boolean.
+                    "quantity_mismatch": quantity_mismatch(ps),
                 }
                 stores_data.append(store_data)
 
@@ -268,10 +317,6 @@ async def list_products(
                     brand=product.brand,
                     category=product.category,
                     unit=product.unit,
-                    package_size=product.package_size,
-                    package_quantity=(
-                        float(product.package_quantity) if product.package_quantity else None
-                    ),
                     stores=stores_data,
                 )
             )
@@ -369,7 +414,7 @@ async def get_product(
         ps_result = await session.execute(ps_stmt)
         ps_rows = ps_result.all()
 
-        stores_data: list[dict[str, str | int | None | float]] = []
+        stores_data: list[dict[str, str | int | None | float | bool]] = []
         for ps, store in ps_rows:
             # Get latest price point for this product-store
             price_stmt = (
@@ -381,7 +426,7 @@ async def get_product(
             price_result = await session.execute(price_stmt)
             latest_price = price_result.scalar_one_or_none()
 
-            store_data: dict[str, str | int | None | float] = {
+            store_data: dict[str, str | int | None | float | bool] = {
                 "product_store_id": str(ps.id),
                 "store_id": str(ps.store_id),
                 "store_name": store.name,
@@ -390,17 +435,29 @@ async def get_product(
                 "check_frequency_hours": ps.check_frequency_hours,
                 "check_weekday": ps.check_weekday,
                 "last_checked_at": ps.last_checked_at.isoformat() if ps.last_checked_at else None,
+                # The package is the LINK's, not the product's.
+                "package_size": ps.package_size,
+                "package_quantity": _as_float(ps.package_quantity),
+                "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
                 "price_sek": (
                     float(latest_price.price_sek)
                     if latest_price and latest_price.price_sek
                     else None
                 ),
-                "unit_price_sek": (
-                    float(latest_price.unit_price_sek)
-                    if latest_price and latest_price.unit_price_sek
-                    else None
+                "offer_price_sek": (
+                    _as_float(latest_price.offer_price_sek) if latest_price else None
+                ),
+                # COMPUTED from the link's own quantity (D-03) — the comparable number.
+                "unit_price_sek": _computed_unit_price(
+                    _effective_price(latest_price), ps.package_quantity
+                ),
+                # What the STORE printed (D-05) — display only, never sorted on.
+                "store_unit_price_sek": (
+                    _as_float(latest_price.store_unit_price_sek) if latest_price else None
                 ),
                 "in_stock": latest_price.in_stock if latest_price else None,
+                "needs_amount": ps.package_quantity is None,
+                "quantity_mismatch": quantity_mismatch(ps),
             }
             stores_data.append(store_data)
 
@@ -410,10 +467,6 @@ async def get_product(
             brand=product.brand,
             category=product.category,
             unit=product.unit,
-            package_size=product.package_size,
-            package_quantity=(
-                float(product.package_quantity) if product.package_quantity else None
-            ),
             stores=stores_data,
         )
     except HTTPException:
@@ -421,6 +474,46 @@ async def get_product(
     except Exception as e:
         LOGGER.exception("Failed to get product %s", sanitize_log(product_id))
         raise HTTPException(status_code=500, detail="Failed to retrieve product") from e
+
+
+@router.get("/products/{product_id}/links")
+async def get_product_links(
+    product_id: str,
+    service: PriceTrackerService = Depends(get_price_tracker_service),
+) -> list[dict[str, Any]]:
+    """The product page's data source (D-12): one row per LINK, cheapest per unit first.
+
+    This is the view that answers the phase's whole question — "which pack size at which store
+    is cheapest per roll". The ordering is the SERVICE's (computed kr/unit ascending, links
+    still needing an amount last); this endpoint renders it and must never re-sort, because the
+    only comparable unit price is the computed one and the domain owns that definition.
+
+    Each row carries the package label and quantity, the page's own last reading of that
+    quantity, both unit prices in separate keys (computed vs store-printed), and the two
+    derived flags `needs_amount` (D-02) and `quantity_mismatch` (D-09).
+
+    Args:
+        product_id: Product UUID.
+        service: Price tracker service.
+
+    Returns:
+        Link rows, cheapest computed unit price first.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    try:
+        uuid.UUID(product_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid product_id format") from e
+
+    try:
+        return await service.get_links_for_product(product_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.exception("Failed to get links for product %s", sanitize_log(product_id))
+        raise HTTPException(status_code=500, detail="Failed to retrieve product links") from e
 
 
 @router.put(
@@ -813,8 +906,11 @@ async def get_price_history(
 
         cutoff_date = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
 
+        # ProductStore was already joined; adding it to the SELECT tuple puts the link's
+        # package_quantity in the row, so the unit price is computed from the link with no
+        # extra query and without touching the ORM hybrid's Python side (MissingGreenlet).
         stmt = (
-            select(PricePoint, Store)
+            select(PricePoint, Store, ProductStore)
             .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
             .join(Store, ProductStore.store_id == Store.id)
             .where(ProductStore.product_id == product_uuid)
@@ -825,15 +921,19 @@ async def get_price_history(
         result = await session.execute(stmt)
         rows = result.all()
 
+        # Computing on read (D-04) is why correcting a link's quantity from 24 to 12
+        # retroactively fixes every historical unit price for free: no stale snapshot of a
+        # derived number exists to go wrong.
         return [
             PricePointResponse(
                 checked_at=price_point.checked_at.isoformat(),
                 store_name=store.name,
                 store_slug=store.slug,
                 price_sek=float(price_point.price_sek) if price_point.price_sek else None,
-                unit_price_sek=(
-                    float(price_point.unit_price_sek) if price_point.unit_price_sek else None
+                unit_price_sek=_computed_unit_price(
+                    _effective_price(price_point), product_store.package_quantity
                 ),
+                store_unit_price_sek=_as_float(price_point.store_unit_price_sek),
                 offer_price_sek=(
                     float(price_point.offer_price_sek) if price_point.offer_price_sek else None
                 ),
@@ -841,7 +941,7 @@ async def get_price_history(
                 offer_details=price_point.offer_details,
                 in_stock=price_point.in_stock,
             )
-            for price_point, store in rows
+            for price_point, store, product_store in rows
         ]
     except HTTPException:
         raise

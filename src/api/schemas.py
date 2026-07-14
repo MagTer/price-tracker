@@ -98,8 +98,13 @@ class StoreResponse(BaseModel):
 class ProductResponse(BaseModel):
     """Schema for product data response with linked stores.
 
-    Package data is NOT here — each dict in `stores` carries its own link's package_size and
-    package_quantity.
+    Package data is NOT here — each dict in `stores` carries its own link's package_size,
+    package_quantity, scraped_package_quantity, both unit prices, and the two derived flags
+    (`needs_amount`, `quantity_mismatch`).
+
+    `bool` is in the value union deliberately: without it, a smart-mode union of
+    `str | int | float` coerces `needs_amount=True` to the integer `1` (bool subclasses int),
+    and a flag the UI must render as a warning arrives as a number.
     """
 
     id: str
@@ -107,7 +112,7 @@ class ProductResponse(BaseModel):
     brand: str | None
     category: str | None
     unit: str | None
-    stores: list[dict[str, str | int | float | None]]
+    stores: list[dict[str, str | int | float | bool | None]]
 
 
 class PricePointResponse(BaseModel):
