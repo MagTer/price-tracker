@@ -95,6 +95,11 @@ class ProductStore(Base):
     store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stores.id"), index=True)
     store_url: Mapped[str] = mapped_column(String(512))
     store_product_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Display label that disambiguates several LINKS under one Store row ("ICA Maxi
+    # Sandviken" vs "ICA Supermarket Björksätra"): ICA prices per physical butik, and both
+    # butiker share the chain-level Store whose slug drives the extractors. A label, not a
+    # second Store row, on purpose — see link_store_name() below.
+    store_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # The human display label ("24-pack", "500 ml").
     package_size: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # The amount in the package, in the product's canonical unit. Every kr/unit in the app is
@@ -130,6 +135,22 @@ class ProductStore(Base):
             f"store_id={self.store_id}, is_active={self.is_active}, "
             f"next_check_at={self.next_check_at})>"
         )
+
+
+def link_store_name(product_store: "ProductStore", store: "Store") -> str:
+    """THE display store name for a link: its own label when set, else the chain name.
+
+    Every surface that prints a store name next to link data (links panel, history
+    series, deals, alert emails, MCP) must go through this — otherwise two ICA-butik
+    links render as an indistinguishable "ICA" twice. A plain function taking both
+    objects, not a ProductStore property: the property would lazy-load `store` and
+    raise MissingGreenlet on any link fetched without a joinedload.
+
+    Deliberately NOT a second Store row per butik: store.slug drives the parser
+    hints, the extractor registry, and the migration seeds — per-butik rows would
+    multiply that machinery to solve what is purely a naming problem.
+    """
+    return product_store.store_label or store.name
 
 
 class PricePoint(Base):

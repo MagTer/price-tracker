@@ -47,6 +47,9 @@ class ProductStoreLink(BaseModel):
     check_weekday: int | None = None  # 0=Monday, 6=Sunday, None=use frequency
     package_size: str | None = None  # Human-readable label: "24-pack", "500 ml", "1 kg"
     package_quantity: float | None = None  # In the product's canonical unit: 24, 0.5, 1.0
+    # Per-link store display name ("ICA Maxi Sandviken") for chains with per-butik pricing.
+    # None = use the chain name.
+    store_label: str | None = None
 
 
 class ProductStoreUpdate(BaseModel):
@@ -59,6 +62,9 @@ class ProductStoreUpdate(BaseModel):
 
     package_size: str | None = None
     package_quantity: float | None = None
+    # Per-link store display name — editable here because the butik does not change the
+    # link's identity (the URL does); relabeling never rewrites history's meaning.
+    store_label: str | None = None
 
 
 class QuickAddPreview(BaseModel):
@@ -94,6 +100,7 @@ class QuickAddCreate(BaseModel):
     check_weekday: int | None = None
     package_size: str | None = None
     package_quantity: float | None = None
+    store_label: str | None = None  # per-link store display name ("ICA Maxi Sandviken")
     run_first_check: bool = True  # fetch the first price (and D-07 autofill) immediately
 
 

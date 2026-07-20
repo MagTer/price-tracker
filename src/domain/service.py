@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
+from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
 from domain.pricing import (
     apply_scrape_to_link,
@@ -330,7 +330,8 @@ class PriceTrackerService:
                     {
                         "checked_at": price_point.checked_at,
                         "product_store_id": str(product_store.id),
-                        "store_name": store.name,
+                        # The LINK's display name — two ICA-butik links must not both say "ICA".
+                        "store_name": link_store_name(product_store, store),
                         "store_slug": store.slug,
                         "package_size": product_store.package_size,
                         "package_quantity": _as_float(product_store.package_quantity),
@@ -410,7 +411,10 @@ class PriceTrackerService:
                         {
                             "product_store_id": str(product_store.id),
                             "store_id": str(product_store.store_id),
-                            "store_name": store.name,
+                            "store_name": link_store_name(product_store, store),
+                            # The raw label separately: the edit dialog needs to know
+                            # whether the display name is a label or the chain fallback.
+                            "store_label": product_store.store_label,
                             "store_slug": store.slug,
                             "store_url": product_store.store_url,
                             "package_size": product_store.package_size,
@@ -508,7 +512,7 @@ class PriceTrackerService:
                             "product_id": str(product.id),
                             "product_name": product.name,
                             "product_store_id": str(product_store.id),
-                            "store_name": store.name,
+                            "store_name": link_store_name(product_store, store),
                             "package_size": product_store.package_size,
                             "regular_price_sek": float(price_point.price_sek),
                             "offer_price_sek": float(price_point.offer_price_sek),
@@ -594,9 +598,12 @@ class PriceTrackerService:
         """
         async with self.session_factory() as session:
             try:
-                stmt = select(ProductStore.product_id, Store.name).join(
-                    Store, ProductStore.store_id == Store.id
-                )
+                # The link's label wins over the chain name (link_store_name's rule, done
+                # in SQL): two labeled ICA-butik links list as two distinct names.
+                stmt = select(
+                    ProductStore.product_id,
+                    func.coalesce(ProductStore.store_label, Store.name),
+                ).join(Store, ProductStore.store_id == Store.id)
                 result = await session.execute(stmt)
 
                 names: dict[str, set[str]] = {}
@@ -691,6 +698,7 @@ class PriceTrackerService:
         check_weekday: int | None = None,
         package_size: str | None = None,
         package_quantity: Decimal | None = None,
+        store_label: str | None = None,
     ) -> ProductStore:
         """Link a product to a store — the concrete package listing at one store page.
 
@@ -708,6 +716,8 @@ class PriceTrackerService:
                            link is saveable before its pack size is known, the first
                            successful scrape autofills it (D-07), and until then the link is
                            rendered "needs amount" rather than silently blank.
+            store_label: Per-link store display name ("ICA Maxi Sandviken") for chains
+                           with per-butik pricing. None = display the chain name.
 
         Returns:
             Created ProductStore instance.
@@ -724,6 +734,7 @@ class PriceTrackerService:
                 check_weekday=check_weekday,
                 package_size=package_size,
                 package_quantity=package_quantity,
+                store_label=store_label,
             )
 
             session.add(product_store)

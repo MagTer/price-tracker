@@ -21,6 +21,7 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 | Field | Mechanism | LLM involved? |
 |---|---|---|
 | Store | Hostname match against the 5 seeded `Store.base_url` values | Never |
+| Butik label (v0.6.0) | The URL's `/stores/<id>/` segment — ICA prices per physical butik. Known ids (`quickadd.KNOWN_STORE_LABELS`) map to names ("ICA Maxi Sandviken"); unknown ids fall back to "ICA \<id\>"; no segment → no label (nationally priced chains) | Never |
 | Name, brand | schema.org JSON-LD `Product` node in the page (`JsonLdExtractor.extract_product_metadata`) | No — exact and free on ICA/Apotea/Med24/DOZ |
 | Price (display only) | Same JSON-LD offer | No |
 | Package (amount/unit/label) | Regex over the product title: `500 ml`, `24-pack`, `8 rullar` … (`quickadd.parse_package_from_name`) | No |
@@ -82,6 +83,10 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 - **New store:** seed its `base_url` (migration) — store matching needs nothing else.
   Add JSON-LD support for free if the store embeds schema.org; otherwise the LLM fallback
   covers it.
+- **New ICA butik:** add its `/stores/<id>/` id to `quickadd.KNOWN_STORE_LABELS` for a
+  friendly label suggestion — unknown ids already work, they just suggest "ICA \<id\>".
+  The saved label lives on the LINK (`ProductStore.store_label`) and is editable in the
+  Förpackning dialog; see `domain.models.link_store_name` for the display rule.
 - **Better title parsing:** extend the regexes in `quickadd.parse_package_from_name`
   (currently `ml|kg|l|g|st` amounts and `pack|st|rullar|tabletter|kapslar|påsar` counts).
 - **MCP:** quick-add is deliberately UI-only for now. If the agent platform should add

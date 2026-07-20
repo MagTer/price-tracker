@@ -48,6 +48,19 @@ _PACK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A butik-scoped path segment, as used by handlaprivatkund.ica.se:
+#   https://handlaprivatkund.ica.se/stores/1003396/products/...
+# The id after /stores/ IS the physical butik — two butiker sell the same product at
+# different prices on two different URLs.
+_STORE_SEGMENT_RE = re.compile(r"/stores/([^/]+)/")
+
+# Butik id -> human name, for the label SUGGESTION only (the field stays editable, and an
+# unknown id falls back to "<chain> <id>"). Single-user app: these are Magnus's stores.
+KNOWN_STORE_LABELS: dict[str, str] = {
+    "1003396": "ICA Maxi Sandviken",
+    "1004503": "ICA Supermarket Björksätra",
+}
+
 
 class StoreLike(Protocol):
     """The two Store columns quick-add matching needs."""
@@ -140,6 +153,22 @@ def derive_unit(entry_unit: str | None, pack_size: int | None) -> str | None:
     if pack_size:
         return "st"
     return None
+
+
+def suggest_store_label(url: str, store_name: str) -> str | None:
+    """A per-butik display label suggested from the URL's /stores/<id>/ segment.
+
+    ICA prices per physical butik, so two butik URLs for one product are two links with
+    different prices — and without a label both render as "ICA". Known butik ids map to
+    their human names; an unknown id still yields a distinguishing "<chain> <id>". None
+    when the URL has no butik segment (Willys, the pharmacies) — those chains price
+    nationally and the chain name suffices.
+    """
+    match = _STORE_SEGMENT_RE.search(url)
+    if not match:
+        return None
+    store_id = match.group(1)
+    return KNOWN_STORE_LABELS.get(store_id, f"{store_name} {store_id}")
 
 
 def suggest_existing_products(

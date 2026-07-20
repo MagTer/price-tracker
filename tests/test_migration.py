@@ -96,6 +96,10 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
     assert {"package_size", "package_quantity", "scraped_package_quantity"} <= schema[
         "product_stores"
     ]
+    # 0002: the per-butik display label (ICA prices per physical butik). Its presence also
+    # proves the 0001→0002 chain applied — the first real revision after the in-place-
+    # rewritten 0001.
+    assert "store_label" in schema["product_stores"]
     # ...and left nothing behind on the abstract good. Asserted by PREFIX, not by name: a
     # forgotten `package_anything` on products would reinstate the model this phase abolished.
     assert not [c for c in schema["products"] if c.startswith("package_")]

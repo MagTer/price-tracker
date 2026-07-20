@@ -16,6 +16,7 @@ from domain.models import (
     Product,
     ProductStore,
     Store,
+    link_store_name,
 )
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
@@ -382,7 +383,7 @@ class PriceCheckScheduler:
                 success = await self.notifier.send_price_alert(
                     to_email=watch.email_address,
                     product_name=product_store.product.name,
-                    store_name=product_store.store.name,
+                    store_name=link_store_name(product_store, product_store.store),
                     current_price=current_price,
                     target_price=target_price_decimal,
                     offer_type=extraction.offer_type,
@@ -443,7 +444,7 @@ class PriceCheckScheduler:
                 deals.append(
                     {
                         "product_name": product.name,
-                        "store_name": store.name,
+                        "store_name": link_store_name(_ps, store),
                         "offer_price_sek": (
                             Decimal(str(price_point.offer_price_sek))
                             if price_point.offer_price_sek
@@ -515,11 +516,11 @@ class PriceCheckScheduler:
                         continue
                     if best_abs is None or effective < best_abs:
                         best_abs = effective
-                        best_abs_store = st.name
+                        best_abs_store = link_store_name(ps, st)
                     unit_price = unit_price_py(effective, ps.package_quantity)
                     if unit_price is not None and (best_unit is None or unit_price < best_unit):
                         best_unit = unit_price
-                        best_unit_store = st.name
+                        best_unit_store = link_store_name(ps, st)
 
                 cent = Decimal("0.01")
                 if best_unit is not None:

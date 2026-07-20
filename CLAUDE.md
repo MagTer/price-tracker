@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **300 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `288 passed, 12 skipped`).
+**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **315 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `303 passed, 12 skipped`).
 
 Remaining from the original extraction plan:
 - **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.
@@ -81,7 +81,7 @@ src/
     └── db.py       # async session factory
 tests/
 └── conftest.py (real-Postgres fixtures) + test_static_gates.py (AST invariant gates) + 9 more
-alembic/versions/0001_initial.py   # the only migration — rewritten in place, see Gotchas
+alembic/versions/   # 0001_initial (rewritten in place during 04.1 — see Gotchas) + 0002_store_label
 ```
 
 **Data model (5 tables):** `stores`, `products`, `product_stores`, `price_points`, `watches`. Tenant-scoped tables carry a `tenant_id` UUID column.
@@ -92,6 +92,7 @@ alembic/versions/0001_initial.py   # the only migration — rewritten in place, 
 - **`PricePoint.unit_price_sek` is GONE.** kr/unit is **computed on read** from `price / link.package_quantity`, exposed as the hybrid `PricePoint.computed_unit_price_sek` (Python + SQL modes). **The single definition lives in `src/domain/pricing.py`. Do not write a second one anywhere.** Correcting a link's amount retroactively fixes all its history — that's the point.
 - **`PricePoint.store_unit_price_sek`** is the store's *printed* comparison price. It is displayed beside the computed value and **never sorted on** — stores print in different units, so sorting on it compares kr/kg against kr/st.
 - **`ProductStore.scraped_package_quantity`** is what the page said, kept as *evidence*. Typed input is *intent*. Evidence autofills an empty field and **flags** a conflict; it never overwrites intent.
+- **`ProductStore.store_label` (v0.6.0)** is the link's optional display store name ("ICA Maxi Sandviken") for chains that price per physical butik — two ICA butiker are two links under the ONE chain-level `Store` row (whose slug drives the extractors; never add per-butik Store rows). `domain.models.link_store_name` (label wins, chain name is fallback) is the single display rule; every store-name emission (links, history, deals, emails, MCP) goes through it. Quick-add suggests the label from the URL's `/stores/<id>/` segment (`quickadd.KNOWN_STORE_LABELS`).
 - **`uq_product_store(product_id, store_id)` is DROPPED; `store_url` is globally unique** (`uq_product_stores_store_url`). One product can have several links at the same store (different pack sizes). The URL is the link's natural key. **An AST gate in `tests/test_static_gates.py` fails any query in `src/` that resolves a link by the `(product_id, store_id)` pair** — if that test fires, your query is built on the pre-04.1 model, not on a lint nit.
 
 **MCP surface:** `check_price`, `find_deals`, `compare_stores`, `list_products` — see EXTRACTION.md §5.
@@ -127,7 +128,7 @@ gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -
 **Version choice** (single-user app, so this is deliberately simple):
 - **patch** (`v0.3.2` → `v0.3.3`) — a bug fix, a corrected display, an internal cleanup.
 - **minor** (`v0.3.x` → `v0.4.0`) — a new capability, a schema change, or anything that alters how the app is operated or deployed.
-- A schema change also means **the deployed DB is stamped on the old `0001`** — see Gotcha 3 before you ship it, or the container will boot quietly against the wrong schema.
+- A schema change means **a new alembic revision** (additive, on top of the chain — see Gotcha 3 for why a shipped revision is never rewritten in place). The deploy applies it via `alembic upgrade head`; verify with `alembic check`, not `alembic current`.
 
 **Then tell Magnus the tag is built and needs the deploy bump.** Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml` (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
 
@@ -146,7 +147,7 @@ Traps that already cost time. Each one **passes silently** — that's why they'r
    ```
    Keep the `test -s` guard. And remember: **"the file parses" is not "the page renders."** Verify rendering separately.
 
-3. **Alembic: `0001_initial.py` was rewritten in place** (there is no `0002`). Alembic does not checksum migration bodies, so a database already stamped `0001_initial` compares equal to head, runs **nothing**, and exits **0**. The app then boots quietly against the **old** schema. **`alembic current` will not reveal this** — it prints the same revision either way. **Only `alembic check` does.** A schema change requires dropping the volume; see `README.md` § "Schema reset (Phase 04.1)".
+3. **Alembic: `0001_initial.py` was rewritten in place** during Phase 04.1. Alembic does not checksum migration bodies, so a database stamped `0001_initial` from BEFORE that rewrite compares equal to head, runs **nothing**, and exits **0** — the app then boots quietly against the **old** schema. **`alembic current` will not reveal this** — it prints the same revision either way. **Only `alembic check` does.** That trap was resolved by the 04.1 volume drop (`README.md` § "Schema reset (Phase 04.1)"). **Since v0.6.0 the chain is normal again:** `0002_store_label` is a real additive revision on top of `0001_initial`, and schema changes from here on are ordinary new revisions applied by `alembic upgrade head` — never rewrite a shipped revision in place again.
 
 4. **TECH DEBT — there are two `get_price_history`.** `src/domain/service.py` has the rich, per-link one, and **only MCP calls it**. `src/api/admin.py` runs its **own duplicate query** for `GET /products/{id}/prices`, and **that** is the one the frontend hits. They have already drifted apart — it was the root cause of the price-history bug (package data never crossed the wire). If you touch price history via the API, you are editing `admin.py`, not `service.py`. Consider collapsing them.
 

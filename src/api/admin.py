@@ -34,7 +34,7 @@ from api.schemas import (
     StoreResponse,
 )
 from domain.extractors.jsonld import JsonLdExtractor
-from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
+from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
 from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
 from domain.quickadd import (
@@ -43,6 +43,7 @@ from domain.quickadd import (
     match_store_by_url,
     parse_package_from_name,
     suggest_existing_products,
+    suggest_store_label,
 )
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
@@ -97,7 +98,11 @@ def _link_payload(
     return {
         "product_store_id": str(ps.id),
         "store_id": str(ps.store_id),
-        "store_name": store.name,
+        # The LINK's display name (label wins over chain) — two ICA-butik links must not
+        # both render as "ICA".
+        "store_name": link_store_name(ps, store),
+        # The raw label separately, so edit dialogs can tell label from chain fallback.
+        "store_label": ps.store_label,
         "store_slug": store.slug,
         "store_url": ps.store_url,
         "check_frequency_hours": ps.check_frequency_hours,
@@ -522,6 +527,9 @@ async def quick_add_preview(
             "url": url,
             "store": {"id": str(store.id), "name": store.name, "slug": store.slug},
             "already_tracked": None,
+            # Per-butik label from the URL's /stores/<id>/ segment (ICA prices per butik).
+            # None for nationally-priced chains — the chain name suffices there.
+            "suggested_store_label": suggest_store_label(url, store.name),
             "name": name,
             "brand": brand,
             "category": category,
@@ -634,6 +642,7 @@ async def quick_add(
                 check_weekday=data.check_weekday,
                 package_size=data.package_size,
                 package_quantity=package_qty,
+                store_label=(data.store_label or "").strip() or None,
             )
         except IntegrityError as e:
             if created_product:
@@ -932,6 +941,7 @@ async def link_product_to_store(
             check_weekday=data.check_weekday,
             package_size=data.package_size,
             package_quantity=package_qty,
+            store_label=(data.store_label or "").strip() or None,
         )
         return {
             "product_store_id": str(product_store.id),
@@ -1113,6 +1123,10 @@ async def update_link_packaging(
             product_store.package_size = data.package_size if data.package_size else None
         if data.package_quantity is not None:
             product_store.package_quantity = Decimal(str(data.package_quantity))
+        # Same omitted-vs-empty semantics as package_size: an omitted field is untouched,
+        # an empty string clears the label back to the chain-name fallback.
+        if data.store_label is not None:
+            product_store.store_label = data.store_label.strip() or None
 
         await session.commit()
         await session.refresh(product_store)
@@ -1125,6 +1139,7 @@ async def update_link_packaging(
                 if product_store.package_quantity is not None
                 else None
             ),
+            "store_label": product_store.store_label,
         }
     except HTTPException:
         raise
@@ -1236,7 +1251,7 @@ async def get_price_history(
             PricePointResponse(
                 checked_at=price_point.checked_at.isoformat(),
                 product_store_id=str(product_store.id),
-                store_name=store.name,
+                store_name=link_store_name(product_store, store),
                 store_slug=store.slug,
                 package_size=product_store.package_size,
                 package_quantity=_as_float(product_store.package_quantity),
@@ -1432,7 +1447,7 @@ async def get_current_deals(
                 DealResponse(
                     product_id=str(product.id),
                     product_name=product.name,
-                    store_name=store.name,
+                    store_name=link_store_name(product_store, store),
                     store_slug=store.slug,
                     package_size=product_store.package_size,
                     price_sek=float(price_point.price_sek) if price_point.price_sek else None,

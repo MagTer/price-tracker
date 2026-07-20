@@ -631,6 +631,9 @@ class TestWeeklySummary:
         pp.offer_type = None
         ps = MagicMock()
         ps.package_quantity = Decimal(quantity) if quantity is not None else None
+        # An UNLABELED link: link_store_name must fall back to the chain name. A bare
+        # MagicMock's auto-created store_label is truthy and would leak into the summary.
+        ps.store_label = None
         store = MagicMock()
         store.name = store_name
         return pp, ps, store

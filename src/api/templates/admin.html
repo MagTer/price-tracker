@@ -134,6 +134,13 @@
                 <label>Butik</label>
                 <input type="text" id="qa-store-name" class="form-input" disabled>
             </div>
+            <!-- Prefilled from the URL's /stores/<id>/ segment when the chain (ICA) prices
+                 per butik; empty for nationally-priced chains. Always editable. -->
+            <div class="form-group">
+                <label>Butiksetikett</label>
+                <input type="text" id="qa-store-label" class="form-input"
+                       placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
+            </div>
             <div class="form-group">
                 <label>Produkt *</label>
                 <select id="qa-product-select" class="form-input" onchange="qaProductChoiceChanged()"></select>
@@ -201,6 +208,13 @@
             <div class="form-group">
                 <label>Produkt-URL *</label>
                 <input type="url" name="store_url" required class="form-input" placeholder="https://...">
+            </div>
+            <!-- Per-butik display name for chains that price per physical store (ICA).
+                 Empty = the chain name. Shown everywhere the link's store name appears. -->
+            <div class="form-group">
+                <label>Butiksetikett</label>
+                <input type="text" name="store_label" class="form-input"
+                       placeholder="t.ex. ICA Maxi Sandviken — skiljer butiker i samma kedja">
             </div>
             <div class="form-group">
                 <label>Kontrollfrekvens (timmar)</label>
@@ -289,6 +303,12 @@
                 <label>Mängdetikett</label>
                 <input type="text" name="package_size" id="edit-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('edit')">
+            </div>
+            <!-- Per-butik display name (ICA prices per physical butik). Empty = chain name. -->
+            <div class="form-group">
+                <label>Butiksetikett</label>
+                <input type="text" id="edit-store-label" class="form-input"
+                       placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Spara förpackning</button>
@@ -913,6 +933,7 @@ async function handleLinkStore(e) {
     const body = {
         store_id: fd.get('store_id'),
         store_url: fd.get('store_url'),
+        store_label: (fd.get('store_label') || '').trim() || null,
         check_frequency_hours: parseInt(fd.get('check_frequency_hours')),
         check_weekday: fd.get('check_weekday') ? parseInt(fd.get('check_weekday')) : null,
         package_size: fd.get('package_size') || null,
@@ -977,6 +998,7 @@ async function handleQuickAddPreview(e) {
 
 function qaRenderPreview(p) {
     document.getElementById('qa-store-name').value = p.store.name;
+    document.getElementById('qa-store-label').value = p.suggested_store_label || '';
     const select = document.getElementById('qa-product-select');
     const options = ['<option value="">Ny produkt' + (p.name ? ': ' + escapeHtml(p.name) : '') + '</option>'];
     for (const s of (p.existing_products || [])) {
@@ -1039,6 +1061,7 @@ async function handleQuickAddConfirm(e) {
     const body = {
         url: document.getElementById('qa-url').value.trim(),
         store_id: qaPreview.store.id,
+        store_label: document.getElementById('qa-store-label').value.trim() || null,
         product_id: existingId,
         name: existingId ? null : name,
         brand: existingId ? null : (document.getElementById('qa-brand').value.trim() || null),
@@ -1467,6 +1490,9 @@ function showEditPackagingModal(productStoreId) {
         link && link.package_quantity != null ? link.package_quantity : '',
         link ? link.package_size : ''
     );
+    // The RAW label, not store_name: store_name falls back to the chain name, and
+    // prefilling that here would turn "no label" into a saved literal "ICA".
+    document.getElementById('edit-store-label').value = (link && link.store_label) || '';
     document.getElementById('modal-edit-packaging').style.display = 'flex';
 }
 
@@ -1476,7 +1502,9 @@ async function handleEditPackaging(e) {
     const id = document.getElementById('edit-pkg-link-id').value;
     const body = {
         package_size: fd.get('package_size') || null,
-        package_quantity: pkgQuantity('edit')
+        package_quantity: pkgQuantity('edit'),
+        // Always sent: '' clears the label back to the chain name (server-side rule).
+        store_label: document.getElementById('edit-store-label').value.trim()
     };
     try {
         await apiPut('/product-stores/' + id + '/packaging', body);

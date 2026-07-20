@@ -12,6 +12,9 @@ or crawling (anti-block policy). **Quick-add** (⚡ Snabbtillägg, since v0.5.0)
 still operates on one pasted URL, but infers the store, product name, package
 and comparison unit from that single page and creates the product + link + first
 price in one confirm step — see [docs/quick-add.md](./docs/quick-add.md).
+Chains that price per physical butik (ICA) are handled with a per-link
+**butiksetikett** ("ICA Maxi Sandviken"), so two butiker of one chain stay
+distinguishable everywhere a store name is shown (v0.6.0).
 
 ## Architecture at a glance
 
