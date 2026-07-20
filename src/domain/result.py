@@ -1,7 +1,28 @@
-"""Shared result type for price extraction."""
+"""Shared result types for price and product-metadata extraction."""
 
 from dataclasses import dataclass
 from decimal import Decimal
+
+
+@dataclass
+class ProductMetadata:
+    """What a product PAGE says the product is — used by quick-add, never by price checks.
+
+    Quick-add needs identity fields (name, brand, category) that PriceExtractionResult
+    deliberately does not carry: a price check already knows what product it is checking.
+    `price_sek` here is preview display only — the recorded first price always comes from
+    the normal perform_price_check flow, so quick-add cannot become a second write path.
+    """
+
+    name: str | None
+    brand: str | None
+    category: str | None
+    price_sek: Decimal | None
+    package_amount: Decimal | None
+    package_unit: str | None
+    pack_size: int | None
+    confidence: float
+    source: str  # "jsonld" | "llm"
 
 
 @dataclass

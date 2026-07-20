@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **217 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `205 passed, 12 skipped`).
+**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **300 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `288 passed, 12 skipped`).
 
 Remaining from the original extraction plan:
 - **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.
@@ -63,7 +63,8 @@ src/
 ├── domain/
 │   ├── models.py  service.py  scheduler.py  parser.py  notifier.py  result.py
 │   ├── pricing.py   # THE definition of kr/unit — see below. Never write a second one.
-│   ├── extractors/  (base.py, willys_api.py)
+│   ├── quickadd.py  # pure decision logic for quick-add (store match, package parse, product suggest) — docs/quick-add.md
+│   ├── extractors/  (base.py, jsonld.py, willys_api.py)
 │   └── stores/    (__init__.py)
 ├── api/
 │   ├── app.py     # FastAPI factory + lifespan starts scheduler
@@ -94,6 +95,8 @@ alembic/versions/0001_initial.py   # the only migration — rewritten in place, 
 - **`uq_product_store(product_id, store_id)` is DROPPED; `store_url` is globally unique** (`uq_product_stores_store_url`). One product can have several links at the same store (different pack sizes). The URL is the link's natural key. **An AST gate in `tests/test_static_gates.py` fails any query in `src/` that resolves a link by the `(product_id, store_id)` pair** — if that test fires, your query is built on the pre-04.1 model, not on a lint nit.
 
 **MCP surface:** `check_price`, `find_deals`, `compare_stores`, `list_products` — see EXTRACTION.md §5.
+
+**Quick-add (v0.5.0):** `POST /quick-add/preview` + `POST /quick-add` create a product AND its store link from one pasted URL (store matched by hostname, name/brand from JSON-LD with LLM fallback, package parsed from the title). Preview-then-confirm on purpose — the confirm step is where "ny produkt" vs "ny länk på befintlig produkt" gets decided, which keeps quick-add from rebuilding the pre-04.1 one-product-per-pack-size shape. Decision logic is pure functions in `domain/quickadd.py`; full design in `docs/quick-add.md`.
 
 **Auth:** The portal + API are served at the app root (`price.<domain>/`); the `/admin` prefix was dropped (old `/admin` URLs 308-redirect to `/`) — D-28. The UI trusts the `X-Auth-Request-Email` header forwarded by the upstream ingress and validates it against `ALLOWED_ENTRA_EMAIL` (which must match the Entra **UPN**, not necessarily the gmail address). Entra ID enforcement itself is **live in production since 2026-07-09**: oauth2-proxy v7.15.2 + Traefik `forwardAuth` (`entra-auth@file`), email claim = `preferred_username`/UPN, managed in the home-server repo — not in this app. The MCP server is served at `price.<domain>/mcp/` (no `mcp.` subdomain — a path-scoped, un-gated Traefik router with explicit priority bypasses the Entra gate for `/mcp` only) and is protected by its own static bearer token; without `MCP_BEARER_TOKEN` the endpoint fails closed (503). See EXTRACTION.md §6 for background, though its original in-app-OIDC description was superseded by this IAP header-trust model, and D-18's `mcp.<domain>` subdomain plan was superseded by the `/mcp` path (D-29 in .planning/STATE.md).
 <!-- GSD:architecture-end -->

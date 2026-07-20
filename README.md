@@ -8,7 +8,10 @@ platform through an MCP server.
 
 A background scheduler re-checks tracked product pages on a per-store cadence.
 Product URLs are entered manually — there is deliberately no product discovery
-or crawling (anti-block policy).
+or crawling (anti-block policy). **Quick-add** (⚡ Snabbtillägg, since v0.5.0)
+still operates on one pasted URL, but infers the store, product name, package
+and comparison unit from that single page and creates the product + link + first
+price in one confirm step — see [docs/quick-add.md](./docs/quick-add.md).
 
 ## Architecture at a glance
 

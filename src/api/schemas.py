@@ -61,6 +61,42 @@ class ProductStoreUpdate(BaseModel):
     package_quantity: float | None = None
 
 
+class QuickAddPreview(BaseModel):
+    """Schema for previewing a quick-add: one pasted product URL, nothing else.
+
+    The response is a suggestion bundle (matched store, extracted name/brand/price, package
+    guess, possible existing products) that the UI renders as an EDITABLE confirm step —
+    nothing is persisted by a preview.
+    """
+
+    url: str
+
+
+class QuickAddCreate(BaseModel):
+    """Schema for confirming a quick-add: create the product AND its link in one call.
+
+    `product_id` set means "this URL is a new LINK on an existing product" — the 04.1 model's
+    normal case for a second pack size — and the identity fields (name/brand/category/unit)
+    are then ignored. `product_id` empty means "create a new product first".
+
+    Package fields follow the same rules as ProductStoreLink: quantity is in the product's
+    canonical unit and may be None (the first scrape autofills it, D-02/D-07).
+    """
+
+    url: str
+    store_id: str
+    product_id: str | None = None  # link to an existing product instead of creating one
+    name: str | None = None  # required when product_id is None
+    brand: str | None = None
+    category: str | None = None
+    unit: str | None = None  # canonical comparison unit: "st", "liter", "kg"
+    check_frequency_hours: int = 72
+    check_weekday: int | None = None
+    package_size: str | None = None
+    package_quantity: float | None = None
+    run_first_check: bool = True  # fetch the first price (and D-07 autofill) immediately
+
+
 class PriceWatchCreate(BaseModel):
     """Schema for creating a price watch."""
 
@@ -175,6 +211,8 @@ __all__ = [
     "ProductUpdate",
     "ProductStoreLink",
     "ProductStoreUpdate",
+    "QuickAddPreview",
+    "QuickAddCreate",
     "PriceWatchCreate",
     "PriceWatchUpdate",
     "StoreResponse",

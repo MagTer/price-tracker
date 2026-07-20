@@ -11,10 +11,10 @@ import httpx
 from domain.extractors.base import PriceExtractor
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.extractors.willys_api import WillysApiExtractor
-from domain.result import PriceExtractionResult
+from domain.result import PriceExtractionResult, ProductMetadata
 from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
 
-__all__ = ["PriceExtractionResult", "PriceParser"]
+__all__ = ["PriceExtractionResult", "PriceParser", "ProductMetadata"]
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,80 @@ class PriceParser:
 
         return dataclasses.replace(base, **updates)
 
+    async def extract_product_metadata(
+        self, text_content: str, store_slug: str
+    ) -> ProductMetadata | None:
+        """Identify the product on a page (name/brand/category/package) for quick-add.
+
+        The LLM fallback for pages without a usable JSON-LD Product node. Same cascade
+        order and acceptance floor as price extraction; returns None instead of raising —
+        quick-add degrades to asking the user to type the name, it never errors out on
+        an extraction failure.
+        """
+        prompt = f"""Identify the product being sold on this Swedish store page.
+
+Store: {store_slug}
+
+Page content (truncated):
+{text_content[:6000]}
+
+Return a JSON object with exactly these fields:
+- "name": The product's name WITHOUT package size suffixes (e.g. "Lambi Toalettpapper 3-lager",
+  not "Lambi Toalettpapper 3-lager 24-pack"). Null if you cannot tell.
+- "brand": The brand name (e.g. "Lambi"), null if not clear.
+- "category": A short product category in Swedish, one or two words
+  (e.g. "toalettpapper", "tandkräm", "kosttillskott"). Null if unclear.
+- "price": Current price in SEK as a number, null if not found.
+- "pack_size": Number of items in the pack from patterns like "24-pack", "16 st". Null if
+  not a multi-pack product.
+- "package_amount": The numeric amount of product in the package, as printed
+  (e.g. 0.5 for "0,5 l", 400 for "400 g", 24 for "24-pack"). Null if not stated.
+- "package_unit": The unit that amount is expressed in - one of "st", "ml", "l",
+  "g", "kg". Null if not stated.
+- "confidence": Your confidence in the identification from 0.0 to 1.0.
+
+Only output the JSON object, no explanation or markdown."""
+
+        for model_name in self.MODEL_CASCADE:
+            try:
+                data = await self._call_model_json(prompt, model_name)
+                confidence = float(data.get("confidence", 0.5))
+                if confidence < self.MIN_ACCEPT_CONFIDENCE:
+                    logger.debug(
+                        f"{model_name} metadata confidence too low ({confidence:.2f}), "
+                        f"trying next model"
+                    )
+                    continue
+                name = str(data["name"]).strip() if data.get("name") else None
+                return ProductMetadata(
+                    name=name,
+                    brand=str(data["brand"]).strip() if data.get("brand") else None,
+                    category=str(data["category"]).strip() if data.get("category") else None,
+                    price_sek=Decimal(str(data["price"])) if data.get("price") else None,
+                    package_amount=(
+                        Decimal(str(data["package_amount"])) if data.get("package_amount") else None
+                    ),
+                    package_unit=(
+                        str(data["package_unit"]).strip().lower()
+                        if data.get("package_unit")
+                        else None
+                    ),
+                    pack_size=int(data["pack_size"]) if data.get("pack_size") else None,
+                    confidence=confidence,
+                    source="llm",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"{model_name} metadata extraction failed: {e}, trying next model",
+                    extra={"store": store_slug},
+                )
+                continue
+
+        logger.warning(
+            "Product metadata extraction failed on all models", extra={"store": store_slug}
+        )
+        return None
+
     def _build_prompt(
         self,
         text_content: str,
@@ -310,8 +384,8 @@ Return a JSON object with exactly these fields:
 
 Only output the JSON object, no explanation or markdown."""
 
-    async def _extract_with_model(self, prompt: str, model: str) -> PriceExtractionResult:
-        """Extract using specified model via OpenRouter."""
+    async def _call_model_json(self, prompt: str, model: str) -> dict:
+        """One OpenRouter chat call, response parsed as a JSON object."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -333,7 +407,11 @@ Only output the JSON object, no explanation or markdown."""
                 content = content[4:]
         content = content.strip()
 
-        data = json.loads(content)
+        return json.loads(content)
+
+    async def _extract_with_model(self, prompt: str, model: str) -> PriceExtractionResult:
+        """Extract using specified model via OpenRouter."""
+        data = await self._call_model_json(prompt, model)
 
         # Extract values. The unit price is REPORTED, never synthesized: this field carries
         # only what the store printed (D-05), so a page/store mismatch stays detectable

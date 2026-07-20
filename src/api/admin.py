@@ -29,11 +29,21 @@ from api.schemas import (
     ProductStoreLink,
     ProductStoreUpdate,
     ProductUpdate,
+    QuickAddCreate,
+    QuickAddPreview,
     StoreResponse,
 )
+from domain.extractors.jsonld import JsonLdExtractor
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.parser import PriceParser
-from domain.pricing import quantity_mismatch, unit_price_py
+from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
+from domain.quickadd import (
+    PackageGuess,
+    derive_unit,
+    match_store_by_url,
+    parse_package_from_name,
+    suggest_existing_products,
+)
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
@@ -403,6 +413,306 @@ async def create_product(
     except Exception as e:
         LOGGER.exception("Failed to create product")
         raise HTTPException(status_code=500, detail="Failed to create product") from e
+
+
+@router.post("/quick-add/preview")
+async def quick_add_preview(
+    data: QuickAddPreview,
+    session: AsyncSession = Depends(get_db),
+    admin_email: str = Depends(require_auth),
+) -> dict[str, Any]:
+    """Everything quick-add can infer from one pasted URL — a suggestion bundle, no writes.
+
+    Extraction ladder for identity (name/brand): JSON-LD Product node first (exact and free
+    on the four JSON-LD stores), LLM metadata fallback only when the page has no usable
+    node. Store matching and package/unit derivation are pure coded logic (domain.quickadd).
+
+    Every field in the response lands in an EDITABLE preview form. The human confirm step
+    is deliberate: it is the carousel guard (JSON-LD's name-overlap sanity check cannot run
+    without a tracked name) and the place where "new product" vs "new link on an existing
+    product" gets decided — the choice that keeps quick-add from rebuilding the
+    one-product-per-pack-size world 04.1 abolished.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    url = (data.url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Ange en fullständig produkt-URL (https://…)")
+
+    try:
+        stores_stmt = select(Store).where(Store.is_active.is_(True))
+        stores = list((await session.execute(stores_stmt)).scalars().all())
+        store = match_store_by_url(url, stores)
+        if store is None:
+            names = ", ".join(sorted(s.name for s in stores))
+            raise HTTPException(
+                status_code=422,
+                detail=f"URL:en matchar ingen av butikerna ({names})",
+            )
+
+        # store_url is the link's natural key (globally unique) — an already-tracked URL
+        # short-circuits BEFORE the fetch: no page load, no LLM call, just the answer.
+        dup_stmt = (
+            select(Product.id, Product.name)
+            .join(ProductStore, ProductStore.product_id == Product.id)
+            .where(ProductStore.store_url == url)
+        )
+        dup = (await session.execute(dup_stmt)).first()
+        if dup:
+            return {
+                "url": url,
+                "store": {"id": str(store.id), "name": store.name, "slug": store.slug},
+                "already_tracked": {"product_id": str(dup[0]), "product_name": dup[1]},
+            }
+
+        fetch_result = await get_fetcher().fetch(url)
+        if not fetch_result.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Kunde inte hämta sidan: {fetch_result.get('error')}",
+            )
+
+        html = fetch_result.get("html") or ""
+        extractor = JsonLdExtractor()
+        meta = extractor.extract_product_metadata(html) if html else None
+        # No product_name yet, so the name-overlap sanity check is skipped — acceptable
+        # because this price is preview display only; the recorded first price comes from
+        # perform_price_check after confirm.
+        price_result = extractor.extract_from_html(html) if html else None
+
+        name = meta.get("name") if meta else None
+        brand = meta.get("brand") if meta else None
+        category: str | None = None
+        price = price_result.price_sek if price_result else None
+        in_stock = price_result.in_stock if price_result else None
+        source = "jsonld" if name else None
+        guess = parse_package_from_name(name)
+
+        if name is None:
+            llm_meta = await PriceParser().extract_product_metadata(
+                fetch_result.get("text", ""), store.slug
+            )
+            if llm_meta is not None:
+                name = llm_meta.name
+                brand = brand or llm_meta.brand
+                category = llm_meta.category
+                price = price if price is not None else llm_meta.price_sek
+                source = "llm"
+                guess = parse_package_from_name(name)
+                if guess.amount is None and llm_meta.package_amount is not None:
+                    # The LLM read the package off the PAGE — better evidence than the title.
+                    guess = PackageGuess(
+                        amount=llm_meta.package_amount,
+                        entry_unit=llm_meta.package_unit,
+                        pack_size=llm_meta.pack_size,
+                        label=(f"{llm_meta.package_amount} {llm_meta.package_unit or ''}".strip()),
+                    )
+
+        suggested_unit = derive_unit(guess.entry_unit, guess.pack_size)
+        package_quantity = normalize_amount(guess.amount, guess.entry_unit, suggested_unit)
+
+        products = list((await session.execute(select(Product))).scalars().all())
+        candidates = [
+            {"id": str(p.id), "name": p.name, "brand": p.brand, "unit": p.unit} for p in products
+        ]
+        suggestions = suggest_existing_products(name, candidates)
+
+        return {
+            "url": url,
+            "store": {"id": str(store.id), "name": store.name, "slug": store.slug},
+            "already_tracked": None,
+            "name": name,
+            "brand": brand,
+            "category": category,
+            "suggested_unit": suggested_unit,
+            "package_size": guess.label,
+            "package_quantity": _as_float(package_quantity),
+            "price_sek": _as_float(price),
+            "in_stock": in_stock,
+            "source": source,
+            "existing_products": suggestions,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.exception("Quick-add preview failed for %s", sanitize_log(url))
+        raise HTTPException(status_code=500, detail="Quick-add preview failed") from e
+
+
+@router.post("/quick-add", status_code=201)
+async def quick_add(
+    data: QuickAddCreate,
+    session: AsyncSession = Depends(get_db),
+    service: PriceTrackerService = Depends(get_price_tracker_service),
+    admin_email: str = Depends(require_auth),
+) -> dict[str, Any]:
+    """Confirm a quick-add: product (new or existing) + link + first check, one call.
+
+    Composes the SAME service methods as the manual flow (create_product,
+    link_product_store) and the SAME check flow (perform_price_check) — quick-add adds no
+    second write path. The first check also drives the D-07 package autofill, so a link
+    confirmed without a quantity usually comes back from this call with one.
+
+    Failure semantics: creation is the task, the first check is best-effort. A fetch or
+    extraction failure after a successful create returns 201 with ``check.success=false``
+    — the scheduler retries later; the product and link exist either way.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    # Same guards as the manual link endpoint — quick-add must not be a validation bypass.
+    if not (72 <= data.check_frequency_hours <= 240):
+        raise HTTPException(
+            status_code=400,
+            detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
+        )
+    if data.check_weekday is not None and not (0 <= data.check_weekday <= 6):
+        raise HTTPException(
+            status_code=400,
+            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
+        )
+    if data.package_quantity is not None and data.package_quantity <= 0:
+        raise HTTPException(status_code=400, detail="package_quantity måste vara positiv")
+    if data.unit is not None and data.unit not in CANONICAL_UNITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unit måste vara en av: {', '.join(CANONICAL_UNITS)}",
+        )
+    if data.product_id is None and not (data.name or "").strip():
+        raise HTTPException(status_code=400, detail="Produktnamn krävs för en ny produkt")
+    try:
+        uuid.UUID(data.store_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Ogiltigt format på store_id") from e
+
+    url = (data.url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Ange en fullständig produkt-URL (https://…)")
+
+    try:
+        # Duplicate check BEFORE creating the product, so a duplicate URL cannot leave an
+        # orphaned just-created product behind (the IntegrityError arm below is the
+        # race-window backstop, not the primary guard).
+        dup_stmt = select(ProductStore.id).where(ProductStore.store_url == url)
+        if (await session.execute(dup_stmt)).first() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Den här butiks-URL:en bevakas redan — varje länk har sin egen URL",
+            )
+
+        created_product = False
+        if data.product_id is not None:
+            try:
+                product_uuid = uuid.UUID(data.product_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
+            existing = (
+                await session.execute(select(Product).where(Product.id == product_uuid))
+            ).scalar_one_or_none()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Produkten hittades inte")
+            product_id = str(existing.id)
+        else:
+            product = await service.create_product(
+                tenant_id=DEFAULT_TENANT_ID,
+                name=data.name.strip(),
+                brand=(data.brand or "").strip() or None,
+                category=(data.category or "").strip() or None,
+                unit=data.unit,
+            )
+            product_id = str(product.id)
+            created_product = True
+
+        package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
+        try:
+            product_store = await service.link_product_store(
+                product_id=product_id,
+                store_id=data.store_id,
+                store_url=url,
+                check_frequency_hours=data.check_frequency_hours,
+                check_weekday=data.check_weekday,
+                package_size=data.package_size,
+                package_quantity=package_qty,
+            )
+        except IntegrityError as e:
+            if created_product:
+                await service.delete_product(product_id)
+            raise HTTPException(
+                status_code=409,
+                detail="Den här butiks-URL:en bevakas redan — varje länk har sin egen URL",
+            ) from e
+        except Exception:
+            if created_product:
+                await service.delete_product(product_id)
+            raise
+
+        check: dict[str, Any] | None = None
+        if data.run_first_check:
+            check = await _run_first_check(session, product_store.id)
+
+        return {
+            "product_id": product_id,
+            "product_store_id": str(product_store.id),
+            "created_product": created_product,
+            "check": check,
+            "message": "Produkt och länk skapade",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.exception("Quick-add failed for %s", sanitize_log(url))
+        raise HTTPException(status_code=500, detail="Quick-add failed") from e
+
+
+async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -> dict[str, Any]:
+    """Best-effort first price check for a just-created link.
+
+    Never raises: quick-add's creation already succeeded, so a failed check reports
+    ``success=false`` and leaves the link for the scheduler — the same eventual path a
+    manually created link takes.
+    """
+    try:
+        stmt = (
+            select(ProductStore, Store, Product)
+            .join(Store, ProductStore.store_id == Store.id)
+            .join(Product, ProductStore.product_id == Product.id)
+            .where(ProductStore.id == product_store_id)
+        )
+        row = (await session.execute(stmt)).one_or_none()
+        if row is None:
+            return {"success": False, "reason": "link_not_found"}
+
+        product_store, store, product = row
+        outcome = await perform_price_check(
+            product_store=product_store,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=get_fetcher(),
+            parser=PriceParser(),
+        )
+        if not outcome.success:
+            return {"success": False, "reason": outcome.failure_reason}
+
+        price_point = outcome.price_point
+        # Response built BEFORE commit — commit expires the instances (MissingGreenlet).
+        result = {
+            "success": True,
+            "price_sek": float(price_point.price_sek),
+            "unit_price_sek": _computed_unit_price(
+                _effective_price(price_point), product_store.package_quantity
+            ),
+            "package_quantity": _as_float(product_store.package_quantity),
+            "offer_price_sek": _as_float(price_point.offer_price_sek),
+            "in_stock": price_point.in_stock,
+        }
+        # perform_price_check does not commit — the caller owns the transaction.
+        await session.commit()
+        return result
+    except Exception:
+        LOGGER.exception("First check failed for new link %s", product_store_id)
+        return {"success": False, "reason": "error"}
 
 
 @router.get(

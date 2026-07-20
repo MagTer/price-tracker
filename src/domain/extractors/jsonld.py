@@ -106,6 +106,29 @@ class JsonLdExtractor:
             },
         )
 
+    def extract_product_metadata(self, html: str) -> dict[str, str | None] | None:
+        """Name and brand of the page's Product node, for quick-add previews.
+
+        No name-overlap sanity check here — quick-add has no tracked name yet to compare
+        against, which is exactly why its UI is a preview-and-confirm step rather than a
+        blind write: the human is the carousel guard.
+        """
+        product = self._find_product(html)
+        if product is None:
+            return None
+
+        name = unescape(str(product.get("name") or "")).strip() or None
+
+        # schema.org allows brand as a plain string or as a Brand/Organization node.
+        brand_node = product.get("brand")
+        if isinstance(brand_node, dict):
+            brand_node = brand_node.get("name")
+        brand = unescape(str(brand_node)).strip() if brand_node else None
+
+        if name is None and brand is None:
+            return None
+        return {"name": name, "brand": brand}
+
     def _find_product(self, html: str) -> dict[str, Any] | None:
         """Return the first schema.org Product node found in any JSON-LD block."""
         for match in _LDJSON_RE.finditer(html):

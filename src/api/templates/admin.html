@@ -24,6 +24,7 @@
         <div class="card-title">Produkter</div>
         <div class="header-actions">
             <input type="text" id="product-search" placeholder="Sök produkter…" class="search-input">
+            <button class="btn btn-primary" onclick="showQuickAddModal()">⚡ Snabbtillägg</button>
             <button class="btn btn-primary" onclick="showCreateProductModal()">+ Ny produkt</button>
             <button class="btn" onclick="loadExport()">Exportera</button>
             <button class="btn" onclick="showImportModal()">Importera</button>
@@ -101,6 +102,84 @@
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Skapa produkt</button>
                 <button type="button" class="btn" onclick="closeModal('modal-create-product')">Avbryt</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Quick Add Modal — product + link from ONE pasted URL, in two steps.
+     Step 1 posts the URL to /quick-add/preview; step 2 renders everything the server
+     could infer (store, name, brand, package, price, matching existing products) as
+     EDITABLE fields and posts the confirmation to /quick-add. The confirm step is
+     deliberate: it is where "ny produkt" vs "ny länk på befintlig produkt" gets decided,
+     and the human check on a wrong extraction (preview shows, never writes). -->
+<div class="modal" id="modal-quick-add" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Snabbtillägg från URL</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-quick-add')">&times;</button>
+        </div>
+        <form id="form-quick-add-url" onsubmit="handleQuickAddPreview(event)">
+            <div class="form-group">
+                <label>Produkt-URL *</label>
+                <input type="url" name="url" id="qa-url" required class="form-input" placeholder="https://…">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" id="qa-fetch-btn">Hämta produktinfo</button>
+            </div>
+        </form>
+        <div id="qa-status" class="loading" style="display:none;"></div>
+        <form id="form-quick-add-confirm" onsubmit="handleQuickAddConfirm(event)" style="display:none;">
+            <div class="form-group">
+                <label>Butik</label>
+                <input type="text" id="qa-store-name" class="form-input" disabled>
+            </div>
+            <div class="form-group">
+                <label>Produkt *</label>
+                <select id="qa-product-select" class="form-input" onchange="qaProductChoiceChanged()"></select>
+            </div>
+            <div id="qa-new-product-fields">
+                <div class="form-group">
+                    <label>Namn *</label>
+                    <input type="text" id="qa-name" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>Varumärke</label>
+                    <input type="text" id="qa-brand" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>Kategori</label>
+                    <input type="text" id="qa-category" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>Enhet</label>
+                    <select id="qa-unit" class="form-input" onchange="qaUnitChanged()">
+                        <option value="">— ingen —</option>
+                        <option value="st">st (styck)</option>
+                        <option value="liter">liter</option>
+                        <option value="kg">kg</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label id="qa-pkg-amount-label">Mängd i förpackningen</label>
+                <div class="pkg-entry-units" id="qa-pkg-entry-units"></div>
+                <input type="number" step="0.01" id="qa-pkg-amount" class="form-input"
+                       placeholder="t.ex. 24" oninput="pkgFieldsChanged('qa')">
+            </div>
+            <div class="form-group">
+                <label>Mängdetikett</label>
+                <input type="text" id="qa-pkg-label" class="form-input"
+                       placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('qa')">
+            </div>
+            <div class="form-group">
+                <label>Kontrollfrekvens (timmar)</label>
+                <input type="number" id="qa-frequency" value="72" min="72" max="240" class="form-input">
+            </div>
+            <div id="qa-price-info" class="best-link" style="padding-bottom:12px;"></div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" id="qa-confirm-btn">Lägg till och hämta pris</button>
+                <button type="button" class="btn" onclick="closeModal('modal-quick-add')">Avbryt</button>
             </div>
         </form>
     </div>
@@ -847,6 +926,149 @@ async function handleLinkStore(e) {
         loadProducts();
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
+    }
+}
+
+// --- Quick add: product + link from one pasted URL (two steps) ---
+//
+// Step 1 (handleQuickAddPreview) posts the URL; the server matches the store by hostname,
+// fetches the page and extracts name/brand/package/price. Step 2 renders that as EDITABLE
+// fields and confirms. The product select is the 04.1 guard: a pasted URL may be a new LINK
+// on an existing product (a second pack size), and defaulting silently to "new product"
+// would rebuild the one-product-per-pack-size world the model change abolished.
+
+let qaPreview = null;
+
+function showQuickAddModal() {
+    qaPreview = null;
+    document.getElementById('form-quick-add-url').reset();
+    document.getElementById('form-quick-add-confirm').style.display = 'none';
+    const status = document.getElementById('qa-status');
+    status.style.display = 'none';
+    status.textContent = '';
+    document.getElementById('modal-quick-add').style.display = 'flex';
+}
+
+async function handleQuickAddPreview(e) {
+    e.preventDefault();
+    const url = document.getElementById('qa-url').value.trim();
+    const btn = document.getElementById('qa-fetch-btn');
+    const status = document.getElementById('qa-status');
+    btn.disabled = true;
+    status.style.display = 'block';
+    status.textContent = 'Hämtar sidan och läser produktinfo…';
+    document.getElementById('form-quick-add-confirm').style.display = 'none';
+    try {
+        const p = await apiPost('/quick-add/preview', { url: url });
+        if (p.already_tracked) {
+            qaPreview = null;
+            status.textContent = 'URL:en bevakas redan (produkt: ' + p.already_tracked.product_name + ').';
+            return;
+        }
+        qaPreview = p;
+        qaRenderPreview(p);
+        status.style.display = 'none';
+    } catch (err) {
+        status.textContent = 'Fel: ' + err.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function qaRenderPreview(p) {
+    document.getElementById('qa-store-name').value = p.store.name;
+    const select = document.getElementById('qa-product-select');
+    const options = ['<option value="">Ny produkt' + (p.name ? ': ' + escapeHtml(p.name) : '') + '</option>'];
+    for (const s of (p.existing_products || [])) {
+        options.push('<option value="' + escapeHtml(s.id) + '">Ny länk på befintlig: '
+            + escapeHtml(s.name) + (s.brand ? ' (' + escapeHtml(s.brand) + ')' : '') + '</option>');
+    }
+    select.innerHTML = options.join('');
+    select.value = '';
+    document.getElementById('qa-name').value = p.name || '';
+    document.getElementById('qa-brand').value = p.brand || '';
+    document.getElementById('qa-category').value = p.category || '';
+    document.getElementById('qa-unit').value = p.suggested_unit || '';
+    document.getElementById('qa-new-product-fields').style.display = '';
+    pkgInitChain('qa', p.suggested_unit || '',
+        p.package_quantity != null ? p.package_quantity : '', p.package_size || '');
+    const info = [];
+    if (p.price_sek != null) info.push('Pris just nu: ' + formatSek(p.price_sek) + ' kr');
+    if (p.source) info.push('källa: ' + (p.source === 'jsonld' ? 'strukturerad sidodata' : 'AI-tolkning'));
+    if (p.name == null) info.push('Ingen produktinfo hittades — fyll i namnet själv');
+    document.getElementById('qa-price-info').textContent = info.join(' · ');
+    document.getElementById('form-quick-add-confirm').style.display = '';
+}
+
+function qaExistingUnit(id) {
+    const s = ((qaPreview && qaPreview.existing_products) || []).find(x => x.id === id);
+    return s ? s.unit : null;
+}
+
+// Choosing an existing product hides the identity fields (the product already has its own)
+// and re-keys the package helpers to THAT product's canonical unit — the amount is always
+// entered in the unit of the product it will belong to.
+function qaProductChoiceChanged() {
+    const id = document.getElementById('qa-product-select').value;
+    const amount = document.getElementById('qa-pkg-amount').value;
+    const label = document.getElementById('qa-pkg-label').value;
+    if (id) {
+        document.getElementById('qa-new-product-fields').style.display = 'none';
+        pkgInitChain('qa', qaExistingUnit(id) || '', amount, label);
+    } else {
+        document.getElementById('qa-new-product-fields').style.display = '';
+        pkgInitChain('qa', document.getElementById('qa-unit').value, amount, label);
+    }
+}
+
+function qaUnitChanged() {
+    pkgInitChain('qa', document.getElementById('qa-unit').value,
+        document.getElementById('qa-pkg-amount').value,
+        document.getElementById('qa-pkg-label').value);
+}
+
+async function handleQuickAddConfirm(e) {
+    e.preventDefault();
+    if (!qaPreview) return;
+    const existingId = document.getElementById('qa-product-select').value || null;
+    const name = document.getElementById('qa-name').value.trim();
+    if (!existingId && !name) {
+        showToast('Ange ett produktnamn', 'error');
+        return;
+    }
+    const body = {
+        url: document.getElementById('qa-url').value.trim(),
+        store_id: qaPreview.store.id,
+        product_id: existingId,
+        name: existingId ? null : name,
+        brand: existingId ? null : (document.getElementById('qa-brand').value.trim() || null),
+        category: existingId ? null : (document.getElementById('qa-category').value.trim() || null),
+        unit: existingId ? null : (document.getElementById('qa-unit').value || null),
+        check_frequency_hours: parseInt(document.getElementById('qa-frequency').value) || 72,
+        package_size: document.getElementById('qa-pkg-label').value.trim() || null,
+        package_quantity: pkgQuantity('qa'),
+        run_first_check: true
+    };
+    const btn = document.getElementById('qa-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Lägger till…';
+    try {
+        const res = await apiPost('/quick-add', body);
+        let msg = 'Produkt tillagd';
+        if (res.check && res.check.success) {
+            msg = 'Tillagd — pris just nu ' + formatSek(res.check.price_sek) + ' kr';
+        } else if (res.check) {
+            msg = 'Tillagd — priset kunde inte hämtas nu, schemaläggaren försöker igen';
+        }
+        showToast(msg);
+        closeModal('modal-quick-add');
+        loadProducts();
+        loadStats();
+    } catch (err) {
+        showToast('Fel: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Lägg till och hämta pris';
     }
 }
 
