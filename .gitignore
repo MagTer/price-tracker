@@ -45,3 +45,4 @@ poetry.lock.bak
 
 # Local env
 *.db
+.coverage
