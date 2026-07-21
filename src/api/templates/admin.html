@@ -827,9 +827,11 @@ function buildProductsTable(products) {
     let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const links = p.stores || [];
-        const storeCell = links.length
-            ? links.map(s => storeLinkHtml(s.store_name, s.store_url)).join(', ')
-            : '-';
+        // COUNT, not names: linked store names made this column swallow the table, and
+        // the names (with outbound links) already live behind the Länkar button.
+        // Distinct display names, so two pack sizes at one butik still count as one.
+        const storeCount = new Set(links.map(s => s.store_name)).size;
+        const storeCell = storeCount ? String(storeCount) : '&#8212;';
         html += `<tr>
             <td>${escapeHtml(p.name)}</td>
             <td>${escapeHtml(p.brand || '-')}</td>

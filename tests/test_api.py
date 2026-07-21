@@ -315,11 +315,18 @@ class TestAdminDashboard:
         assert "Ej billigast" in r.text
 
     def test_store_names_link_to_the_store_page(self, client):
-        """Every store-name emission is a way IN to the store's page — the shopping-list
-        use case dies without it."""
+        """Store names in the deals and links views are ways IN to the store's page —
+        the shopping-list use case dies without them."""
         r = client.get("/")
         assert "storeLinkHtml" in r.text
         assert 'target="_blank" rel="noopener"' in r.text
+
+    def test_product_table_shows_store_count_not_names(self, client):
+        """The Butiker column is a COUNT: linked store names swallowed the whole table,
+        and the names already live behind the Länkar button (distinct display names, so
+        two pack sizes at one butik count once)."""
+        r = client.get("/")
+        assert "new Set(links.map(s => s.store_name)).size" in r.text
 
     def test_freshness_line_exists(self, client):
         """The weekly rhythm made visible: when prices were last refreshed + next round."""
