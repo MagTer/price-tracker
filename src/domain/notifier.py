@@ -238,21 +238,43 @@ class PriceNotifier:
                 store_name = deal.get("store_name", "")
                 offer_price = deal.get("offer_price_sek", "")
                 offer_type = deal.get("offer_type", "")
+                store_url = deal.get("store_url")
+                unit_price = deal.get("unit_price_sek")
+                unit = deal.get("unit")
 
                 # Escape all user-controlled data
                 safe_product_name = html.escape(str(product_name))
                 safe_store_name = html.escape(str(store_name))
                 safe_offer_type = html.escape(str(offer_type))
 
+                # The email is read standing in the aisle: the product name links straight
+                # to the store's page (scheme-validated, like the alert emails).
+                if store_url and self._is_safe_url(str(store_url)):
+                    safe_url = html.escape(str(store_url), quote=True)
+                    product_cell = (
+                        f'<a href="{safe_url}" style="color: #2563eb;">{safe_product_name}</a>'
+                    )
+                else:
+                    product_cell = safe_product_name
+
+                # Jfr-pris under the absolute price — the comparable number, when known.
+                unit_price_html = ""
+                if unit_price is not None:
+                    unit_label = html.escape(f"kr/{unit}" if unit else "kr/enhet")
+                    unit_price_html = (
+                        f'<br><span style="color: #64748b; font-size: 0.85em;">'
+                        f"{float(unit_price):.2f} {unit_label}</span>"
+                    )
+
                 deals_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {safe_product_name}</td>
+                        {product_cell}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_store_name}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;
                                color: #22c55e; font-weight: bold;">
-                        {offer_price} kr
+                        {offer_price} kr{unit_price_html}
                     </td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         <span style="background: #f59e0b; color: white;

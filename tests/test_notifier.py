@@ -160,6 +160,41 @@ class TestPriceNotifier:
         # Should NOT have watched products section
         assert "Dina bevakade produkter" not in html
 
+    def test_build_summary_html_links_deals_to_the_store_page(self) -> None:
+        """The email is read in the aisle: the product name links to the store's page,
+        and the jfr-pris renders under the offer price when known."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+        deals: list[dict[str, str | Decimal | None]] = [
+            {
+                "product_name": "Mjolk Arla",
+                "store_name": "ICA Maxi",
+                "store_url": "https://handlaprivatkund.ica.se/stores/1/products/mjolk",
+                "unit": "liter",
+                "unit_price_sek": Decimal("13.27"),
+                "offer_price_sek": Decimal("19.90"),
+                "offer_type": "stammispris",
+            },
+        ]
+        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        assert 'href="https://handlaprivatkund.ica.se/stores/1/products/mjolk"' in html
+        assert "13.27 kr/liter" in html
+
+    def test_build_summary_html_never_links_unsafe_schemes(self) -> None:
+        """A javascript: store_url must degrade to plain text, not a link."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+        deals: list[dict[str, str | Decimal | None]] = [
+            {
+                "product_name": "Mjolk Arla",
+                "store_name": "ICA Maxi",
+                "store_url": "javascript:alert(1)",
+                "offer_price_sek": Decimal("19.90"),
+                "offer_type": "kampanj",
+            },
+        ]
+        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        assert "javascript:" not in html
+        assert "Mjolk Arla" in html
+
     def test_build_summary_html_with_watched_products(self) -> None:
         """Test _build_summary_html with watched products."""
         mock_service = MockEmailService()

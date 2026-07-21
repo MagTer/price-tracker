@@ -517,13 +517,18 @@ class PriceTrackerService:
                             "product_name": product.name,
                             "product_store_id": str(product_store.id),
                             "store_name": link_store_name(product_store, store),
+                            # For the weekly email: link straight to the store's page and
+                            # label the jfr-pris with the product's unit.
+                            "store_url": product_store.store_url,
+                            "unit": product.unit,
                             "package_size": product_store.package_size,
                             "regular_price_sek": float(price_point.price_sek),
                             "offer_price_sek": float(price_point.offer_price_sek),
                             "unit_price_sek": _computed_unit_price(
                                 price_point.offer_price_sek, product_store.package_quantity
                             ),
-                            "offer_type": price_point.offer_type or "unknown",
+                            # Swedish fallback — MCP and the email surface this as-is.
+                            "offer_type": price_point.offer_type or "erbjudande",
                         }
                     )
 

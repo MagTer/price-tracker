@@ -204,6 +204,10 @@ class DealResponse(BaseModel):
 
     `unit_price_sek` is the COMPUTED kr/unit (D-03), exposed so a consumer can compare packs.
     Deals themselves are still ordered by RECENCY — the number is data here, not the ranking.
+
+    `best_alt_*` is the cheapest CURRENT jfr-pris among the product's OTHER links (any
+    store, any pack size) — the number that turns a discount percentage into a decision:
+    a 20% ICA offer can still be pricier per unit than Willys ordinarie.
     """
 
     product_id: str
@@ -211,6 +215,7 @@ class DealResponse(BaseModel):
     store_name: str
     store_slug: str
     package_size: str | None  # The link's label: "24-pack", "500 ml"
+    unit: str | None  # The product's comparison unit (st/liter/kg) — labels the jfr-pris
     price_sek: float | None
     offer_price_sek: float
     unit_price_sek: float | None  # COMPUTED — None when the link has no amount yet (D-02)
@@ -219,6 +224,9 @@ class DealResponse(BaseModel):
     checked_at: str
     discount_percent: float
     product_url: str
+    best_alt_unit_price_sek: float | None
+    best_alt_store: str | None
+    best_alt_package_size: str | None
 
 
 __all__ = [

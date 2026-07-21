@@ -1,7 +1,7 @@
 [project]
 name = "price-tracker"
 # The released tag, kept in step with it on purpose: this said 0.1.0 while prod ran v0.3.2.
-version = "0.10.0"
+version = "0.11.0"
 description = "Standalone Swedish grocery and pharmacy price tracker (extracted from ai-agent-platform)"
 authors = [{ name = "Magnus Ternstrom", email = "magnus.ternstrom@gmail.com" }]
 readme = "README.md"

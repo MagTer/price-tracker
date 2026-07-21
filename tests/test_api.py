@@ -1,7 +1,7 @@
 """Tests for FastAPI admin endpoints and auth."""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -304,6 +304,49 @@ class TestAdminDashboard:
         assert 'id="edit-weekday"' in r.text
         assert 'id="edit-frequency"' in r.text
         assert "/frequency'" in r.text  # the JS actually calls the endpoint
+
+    def test_deals_table_is_a_decision_not_a_listing(self, client):
+        """The deals view must carry the platform's OWN comparison (jfr-pris + cheapest
+        alternative), not just the store's discount framing."""
+        r = client.get("/")
+        assert "<th>Jämförelse</th>" in r.text
+        assert "dealComparisonCell" in r.text
+        assert "Billigast" in r.text
+        assert "Ej billigast" in r.text
+
+    def test_store_names_link_to_the_store_page(self, client):
+        """Every store-name emission is a way IN to the store's page — the shopping-list
+        use case dies without it."""
+        r = client.get("/")
+        assert "storeLinkHtml" in r.text
+        assert 'target="_blank" rel="noopener"' in r.text
+
+    def test_freshness_line_exists(self, client):
+        """The weekly rhythm made visible: when prices were last refreshed + next round."""
+        r = client.get("/")
+        assert 'id="deals-freshness"' in r.text
+        assert "Priserna kontrollerades senast" in r.text
+
+    def test_page_is_mobile_ready(self, client):
+        """The app doubles as the in-store shopping list: viewport meta, a responsive
+        breakpoint, and sideways-scrolling table containers (never the page)."""
+        r = client.get("/")
+        assert 'name="viewport"' in r.text
+        assert "@media (max-width: 768px)" in r.text
+        assert "overflow-x: auto" in r.text
+
+    def test_stat_boxes_link_to_their_pages(self, client):
+        r = client.get("/")
+        assert '<a class="stat-box" href="#/erbjudanden">' in r.text
+        assert '<a class="stat-box" href="#/produkter">' in r.text
+        assert '<a class="stat-box" href="#/bevakningar">' in r.text
+
+    def test_jfr_pris_is_the_display_term(self, client):
+        """Stores print 'jfr-pris' on the shelf label — the UI uses the shelf's word.
+        (Value labels like 'kr/st' stay; this is about the HEADINGS.)"""
+        r = client.get("/")
+        assert "Lägsta jfr-pris" in r.text
+        assert "Lägsta kr/enhet" not in r.text
 
     def test_deals_is_the_start_page(self, client):
         """Erbjudanden first in the menu and the default page: the freshest, most
@@ -989,12 +1032,21 @@ class TestDealsEndpoints:
         pp24 = _pp(ps24, price="139.90", offer="119.90")
         pp8 = _pp(ps8, price="59.90", offer="49.90")
 
-        mock_session.execute.return_value = _rows(
-            [
-                (pp24, product, store, ps24),
-                (pp8, product, store, ps8),
-            ]
-        )
+        mock_session.execute.side_effect = [
+            _rows(
+                [
+                    (pp24, product, store, ps24),
+                    (pp8, product, store, ps8),
+                ]
+            ),
+            # The alternatives query: latest point per link across the product's links.
+            _rows(
+                [
+                    (ps24, store, pp24),
+                    (ps8, store, pp8),
+                ]
+            ),
+        ]
 
         r = client.get("/deals")
         assert r.status_code == 200
@@ -1008,6 +1060,13 @@ class TestDealsEndpoints:
         assert by_pack["24-pack"]["unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)
         assert by_pack["8-pack"]["unit_price_sek"] == pytest.approx(49.90 / 8, rel=1e-3)
 
+        # Each deal's best alternative is the product's OTHER link — including a different
+        # pack size at the SAME store: the decision is "cheapest way to buy the good".
+        assert by_pack["24-pack"]["best_alt_package_size"] == "8-pack"
+        assert by_pack["24-pack"]["best_alt_unit_price_sek"] == pytest.approx(49.90 / 8, rel=1e-3)
+        assert by_pack["8-pack"]["best_alt_package_size"] == "24-pack"
+        assert by_pack["8-pack"]["best_alt_unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)
+
     def test_deals_are_still_ordered_by_recency(self, client, mock_session):
         """The computed kr/unit is EXPOSED on each deal, not adopted as the sort key.
         Re-ranking deals is a behavior change to an unrelated feature.
@@ -1019,17 +1078,100 @@ class TestDealsEndpoints:
         pp_pricey = _pp(pricey, price="59.90", offer="49.90")
         pp_cheap = _pp(cheap, price="139.90", offer="119.90")
 
-        mock_session.execute.return_value = _rows(
-            [
-                (pp_pricey, product, store, pricey),
-                (pp_cheap, product, store, cheap),
-            ]
-        )
+        mock_session.execute.side_effect = [
+            _rows(
+                [
+                    (pp_pricey, product, store, pricey),
+                    (pp_cheap, product, store, cheap),
+                ]
+            ),
+            _rows([]),  # no alternatives resolved — best_alt stays None
+        ]
 
         deals = client.get("/deals").json()
         assert [d["package_size"] for d in deals] == ["8-pack", "24-pack"]
         # ...even though the 8-pack is the more expensive one per unit.
         assert deals[0]["unit_price_sek"] > deals[1]["unit_price_sek"]
+        assert all(d["best_alt_unit_price_sek"] is None for d in deals)
+
+    def test_deals_flag_a_cheaper_store(self, client, mock_session):
+        """The whole point of the comparison: an offer at one store is flagged against the
+        product's cheapest OTHER link, so '20% rabatt' can be read as a real decision."""
+        product = _product()
+        willys, ica = _store(), _store(name="ICA", slug="ica")
+        ps_offer = _ps(product, willys, package_size="8-pack", package_quantity="8")
+        ps_cheap = _ps(product, ica, package_size="24-pack", package_quantity="24")
+        pp_offer = _pp(ps_offer, price="59.90", offer="49.90")  # 6.24 kr/st on offer
+        pp_cheap = _pp(ps_cheap, price="119.90")  # 5.00 kr/st ordinarie
+
+        mock_session.execute.side_effect = [
+            _rows([(pp_offer, product, willys, ps_offer)]),
+            _rows([(ps_offer, willys, pp_offer), (ps_cheap, ica, pp_cheap)]),
+        ]
+
+        deals = client.get("/deals").json()
+        assert len(deals) == 1
+        assert deals[0]["best_alt_store"] == "ICA"
+        assert deals[0]["best_alt_unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)
+        # The offer is PRICIER per unit than ICA's ordinarie — exactly what the user
+        # must be able to see.
+        assert deals[0]["unit_price_sek"] > deals[0]["best_alt_unit_price_sek"]
+
+    def test_deals_window_is_seven_days(self, client, mock_session):
+        """Most links are checked WEEKLY (Monday schedule) — a 24h window shows an empty
+        deals page from Tuesday on. The service was fixed to 7 days; this pins the API
+        route (Gotcha 4: the duplicated query drifted once already)."""
+        mock_session.execute.return_value = _rows([])
+        client.get("/deals")
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        cutoff = next(v for v in stmt.compile().params.values() if isinstance(v, datetime))
+        age_days = (datetime.now(UTC).replace(tzinfo=None) - cutoff).days
+        assert age_days == 7 or age_days == 6  # 7 days minus test runtime rounding
+
+    def test_swedish_offer_type_fallback(self, client, mock_session):
+        """A missing offer_type must surface as Swedish user text, not 'unknown'."""
+        product, store = _product(), _store()
+        ps = _ps(product, store)
+        pp = _pp(ps, price="139.90", offer="119.90")
+        pp.offer_type = None
+        mock_session.execute.side_effect = [
+            _rows([(pp, product, store, ps)]),
+            _rows([]),
+        ]
+        deals = client.get("/deals").json()
+        assert deals[0]["offer_type"] == "erbjudande"
+
+
+class TestWatchesEndpoint:
+    def test_watches_carry_the_current_lowest_price(self, client, mock_session):
+        """A watch row must answer 'how close is it?' — the current cheapest effective
+        price (offer wins) across the product's links, with its store."""
+        from domain.models import PriceWatch
+
+        product, store = _product(), _store()
+        watch = PriceWatch(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(TENANT),
+            product_id=product.id,
+            email_address="magnus@example.com",
+            alert_on_any_offer=True,
+            created_at=datetime(2026, 7, 1),
+        )
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90", offer="119.90")
+
+        mock_session.execute.side_effect = [
+            _rows([(watch, product)]),
+            _rows([(ps, store, pp)]),
+        ]
+
+        watches = client.get("/watches").json()
+        assert len(watches) == 1
+        assert watches[0]["current_lowest_price_sek"] == pytest.approx(119.90)
+        # _computed_unit_price rounds to 2 decimals: 119.90/24 = 4.9958… → 5.00
+        assert watches[0]["current_lowest_unit_price_sek"] == pytest.approx(5.0)
+        assert watches[0]["current_lowest_store"] == "Willys"
+        assert watches[0]["unit"] == "st"
 
 
 class TestManualCheckAppliesTheScrapeRule:

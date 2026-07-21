@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1542,10 +1542,10 @@ async def get_current_deals(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
-        from datetime import timedelta
-
-        # Get deals from last 24 hours
-        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+        # 7 days, matching service.get_current_deals: most links are checked WEEKLY (Monday
+        # offer-day schedule), so the old 24h window left this page empty from Tuesday on.
+        # This route had kept 24h when the service was fixed — Gotcha 4's duplication again.
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=7)
 
         stmt = (
             select(PricePoint, Product, Store, ProductStore)
@@ -1569,14 +1569,56 @@ async def get_current_deals(
         # them into ONE arbitrary deal row — silently, with no error, one pack size simply
         # vanishing from the list.
         seen: set[uuid.UUID] = set()
-        deals: list[DealResponse] = []
-
+        picked: list[tuple[PricePoint, Product, Store, ProductStore]] = []
         for price_point, product, store, product_store in rows:
-            key = product_store.id
-            if key in seen:
+            if product_store.id in seen:
                 continue
-            seen.add(key)
+            seen.add(product_store.id)
+            picked.append((price_point, product, store, product_store))
 
+        # Cheapest CURRENT jfr-pris per product across ALL its links (latest point per
+        # link, no staleness cutoff — it is the platform's best knowledge). This is what
+        # turns "20% rabatt" into a decision: the discount is the STORE's framing, the
+        # cross-link unit price is ours.
+        alternatives: dict[uuid.UUID, list[tuple[uuid.UUID, float, str, str | None]]] = {}
+        if picked:
+            product_ids = {product.id for _, product, _, _ in picked}
+            latest = (
+                select(
+                    PricePoint.product_store_id.label("ps_id"),
+                    func.max(PricePoint.checked_at).label("checked_at"),
+                )
+                .group_by(PricePoint.product_store_id)
+                .subquery()
+            )
+            alt_stmt = (
+                select(ProductStore, Store, PricePoint)
+                .join(Store, ProductStore.store_id == Store.id)
+                .join(latest, latest.c.ps_id == ProductStore.id)
+                .join(
+                    PricePoint,
+                    (PricePoint.product_store_id == latest.c.ps_id)
+                    & (PricePoint.checked_at == latest.c.checked_at),
+                )
+                .where(ProductStore.product_id.in_(product_ids))
+            )
+            for alt_ps, alt_store, alt_pp in (await session.execute(alt_stmt)).all():
+                alt_unit_price = _computed_unit_price(
+                    _effective_price(alt_pp), alt_ps.package_quantity
+                )
+                if alt_unit_price is None:
+                    continue
+                alternatives.setdefault(alt_ps.product_id, []).append(
+                    (
+                        alt_ps.id,
+                        alt_unit_price,
+                        link_store_name(alt_ps, alt_store),
+                        alt_ps.package_size,
+                    )
+                )
+
+        deals: list[DealResponse] = []
+        for price_point, product, store, product_store in picked:
             # Calculate discount percentage
             discount_percent = 0.0
             if price_point.price_sek and price_point.offer_price_sek:
@@ -1586,6 +1628,9 @@ async def get_current_deals(
                     * 100
                 )
 
+            alts = [a for a in alternatives.get(product.id, []) if a[0] != product_store.id]
+            best_alt = min(alts, key=lambda a: a[1]) if alts else None
+
             deals.append(
                 DealResponse(
                     product_id=str(product.id),
@@ -1593,6 +1638,7 @@ async def get_current_deals(
                     store_name=link_store_name(product_store, store),
                     store_slug=store.slug,
                     package_size=product_store.package_size,
+                    unit=product.unit,
                     price_sek=float(price_point.price_sek) if price_point.price_sek else None,
                     offer_price_sek=float(price_point.offer_price_sek),
                     # Exposed, not ranked on: the ordering below stays by RECENCY. Re-ranking
@@ -1601,11 +1647,15 @@ async def get_current_deals(
                     unit_price_sek=_computed_unit_price(
                         _effective_price(price_point), product_store.package_quantity
                     ),
-                    offer_type=price_point.offer_type or "unknown",
+                    # Swedish fallback — this string reaches the UI badge as-is.
+                    offer_type=price_point.offer_type or "erbjudande",
                     offer_details=price_point.offer_details,
                     checked_at=price_point.checked_at.isoformat(),
                     discount_percent=discount_percent,
                     product_url=product_store.store_url,
+                    best_alt_unit_price_sek=best_alt[1] if best_alt else None,
+                    best_alt_store=best_alt[2] if best_alt else None,
+                    best_alt_package_size=best_alt[3] if best_alt else None,
                 )
             )
 
@@ -1660,8 +1710,47 @@ async def list_watches(
         result = await session.execute(stmt)
         rows = result.all()
 
+        # Current state per watched product — a watch without "how close is it?" is a
+        # write-only register. Cheapest CURRENT effective price (offer wins) across the
+        # product's links, latest point per link.
+        current: dict[uuid.UUID, tuple[float, float | None, str]] = {}
+        if rows:
+            watched_ids = {product.id for _, product in rows}
+            latest = (
+                select(
+                    PricePoint.product_store_id.label("ps_id"),
+                    func.max(PricePoint.checked_at).label("checked_at"),
+                )
+                .group_by(PricePoint.product_store_id)
+                .subquery()
+            )
+            cur_stmt = (
+                select(ProductStore, Store, PricePoint)
+                .join(Store, ProductStore.store_id == Store.id)
+                .join(latest, latest.c.ps_id == ProductStore.id)
+                .join(
+                    PricePoint,
+                    (PricePoint.product_store_id == latest.c.ps_id)
+                    & (PricePoint.checked_at == latest.c.checked_at),
+                )
+                .where(ProductStore.product_id.in_(watched_ids))
+            )
+            for w_ps, w_store, w_pp in (await session.execute(cur_stmt)).all():
+                effective = _effective_price(w_pp)
+                if effective is None:
+                    continue
+                candidate = (
+                    float(effective),
+                    _computed_unit_price(effective, w_ps.package_quantity),
+                    link_store_name(w_ps, w_store),
+                )
+                held = current.get(w_ps.product_id)
+                if held is None or candidate[0] < held[0]:
+                    current[w_ps.product_id] = candidate
+
         watches_list: list[dict[str, Any]] = []
         for watch, product in rows:
+            now = current.get(product.id)
             target_price = float(watch.target_price_sek) if watch.target_price_sek else None
             unit_price_target = (
                 float(watch.unit_price_target_sek) if watch.unit_price_target_sek else None
@@ -1674,6 +1763,7 @@ async def list_watches(
                     "tenant_id": str(watch.tenant_id),
                     "product_id": str(watch.product_id),
                     "product_name": product.name,
+                    "unit": product.unit,
                     "target_price_sek": target_price,
                     "alert_on_any_offer": watch.alert_on_any_offer,
                     "price_drop_threshold_percent": watch.price_drop_threshold_percent,
@@ -1682,6 +1772,9 @@ async def list_watches(
                     "email_address": watch.email_address,
                     "last_alerted_at": last_alerted,
                     "created_at": watch.created_at.isoformat(),
+                    "current_lowest_price_sek": now[0] if now else None,
+                    "current_lowest_unit_price_sek": now[1] if now else None,
+                    "current_lowest_store": now[2] if now else None,
                 }
             )
 
@@ -2275,19 +2368,44 @@ async def import_data(
 async def scheduler_status(
     request: Request,
     admin_email: str = Depends(require_auth),
+    session: AsyncSession = Depends(get_db),
 ):
-    """Get price check scheduler status and statistics.
+    """Get price check scheduler status, statistics, and data freshness.
+
+    `last_check_at` / `next_check_at` make the WEEKLY rhythm visible: prices refresh on
+    the links' check days (Mondays for the offer chains), and the user should be able to
+    see how fresh the numbers are and when the next round comes — not guess.
 
     Returns:
-        Scheduler running state, last summary date, and check stats.
+        Scheduler running state, last summary date, check stats, and freshness bounds.
 
     Security:
         Requires IAP header auth (X-Auth-Request-Email).
     """
     scheduler = request.app.state.scheduler
-    if scheduler is None:
-        return {"running": False, "last_summary_date": None, "stats": None}
-    return scheduler.get_status()  # type: ignore[return-value]
+    status: dict[str, Any] = (
+        {"running": False, "last_summary_date": None, "stats": None}
+        if scheduler is None
+        else scheduler.get_status()
+    )
+    try:
+        bounds = (
+            await session.execute(
+                select(
+                    func.max(ProductStore.last_checked_at),
+                    func.min(ProductStore.next_check_at),
+                ).where(ProductStore.is_active.is_(True))
+            )
+        ).first()
+        last_check, next_check = bounds if bounds else (None, None)
+        status["last_check_at"] = last_check.isoformat() if last_check else None
+        status["next_check_at"] = next_check.isoformat() if next_check else None
+    except Exception:
+        # Freshness is decoration on a status endpoint — never let it break the page load.
+        LOGGER.exception("Failed to read check freshness bounds")
+        status.setdefault("last_check_at", None)
+        status.setdefault("next_check_at", None)
+    return status
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -2569,6 +2687,48 @@ def _get_admin_nav_css() -> str:
         .shared-toast.error { background: var(--error); display: block; }
         .shared-toast.warning { background: var(--warning); display: block; }
         .shared-toast.info { background: var(--primary); display: block; }
+        a.stat-box { text-decoration: none; display: block; color: inherit; }
+        a.stat-box:hover { border-color: var(--primary); }
+        /* Mobile: the app doubles as the shopping list IN the store, so the phone is a
+           first-class surface. The fixed sidebar becomes a horizontal top bar, content
+           gets the full width, and wide tables scroll inside their card (see the
+           template CSS) instead of stretching the page. */
+        @media (max-width: 768px) {
+            .admin-layout { flex-direction: column; }
+            .admin-sidebar {
+                position: static;
+                width: 100%;
+                flex-direction: row;
+                align-items: center;
+            }
+            .sidebar-header { padding: 10px 12px; border-bottom: none; }
+            .sidebar-nav {
+                display: flex;
+                padding: 0;
+                overflow-y: visible;
+                overflow-x: auto;
+            }
+            .nav-item {
+                border-left: none;
+                border-bottom: 3px solid transparent;
+                padding: 12px 10px;
+                white-space: nowrap;
+            }
+            .nav-item.active {
+                border-left-color: transparent;
+                border-bottom-color: var(--primary);
+            }
+            .sidebar-footer { display: none; }
+            .admin-main { margin-left: 0; }
+            .admin-header { padding: 0 12px; }
+            .user-menu span { display: none; }  /* avatar suffices on a phone */
+            .admin-content { padding: 12px; }
+            .card { padding: 12px; }
+            .card-header { flex-wrap: wrap; gap: 8px; }
+            .header-actions { flex-wrap: wrap; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+            th, td { padding: 8px; }
+        }
     """
 
 
@@ -2625,7 +2785,7 @@ def _get_admin_header_html(user_email: str) -> str:
         <div class="header-actions">
             <div class="user-menu">
                 <div class="user-avatar">{user_initial}</div>
-                <span>{safe_email}</span>
+                <span id="user-email">{safe_email}</span>
             </div>
         </div>
     </header>

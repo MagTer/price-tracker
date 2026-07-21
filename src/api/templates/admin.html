@@ -3,18 +3,18 @@
      #/erbjudanden, #/bevakningar) toggled by renderPage() so a long product list can
      never push the deals out of sight. -->
 <div class="stats-grid">
-    <div class="stat-box">
+    <a class="stat-box" href="#/produkter">
         <div class="stat-value" id="stat-products">-</div>
         <div class="stat-label">Produkter</div>
-    </div>
-    <div class="stat-box">
+    </a>
+    <a class="stat-box" href="#/bevakningar">
         <div class="stat-value" id="stat-watches">-</div>
         <div class="stat-label">Aktiva bevakningar</div>
-    </div>
-    <div class="stat-box">
+    </a>
+    <a class="stat-box" href="#/erbjudanden">
         <div class="stat-value" id="stat-deals">-</div>
-        <div class="stat-label">Erbjudanden idag</div>
-    </div>
+        <div class="stat-label">Erbjudanden</div>
+    </a>
     <div class="stat-box">
         <div class="stat-value" id="stat-scheduler">-</div>
         <div class="stat-label">Schemaläggare</div>
@@ -42,7 +42,12 @@
 <section class="app-page" data-page="erbjudanden">
 <div class="card">
     <div class="card-header">
-        <div class="card-title">Aktuella erbjudanden</div>
+        <div>
+            <div class="card-title">Aktuella erbjudanden</div>
+            <!-- The weekly rhythm made visible: when were prices last refreshed, when is
+                 the next round — filled by loadStats() from /scheduler/status. -->
+            <div class="best-link" id="deals-freshness"></div>
+        </div>
         <div class="header-actions">
             <select id="deal-filter" class="search-input" onchange="loadDeals()">
                 <option value="">Alla butiker</option>
@@ -338,7 +343,7 @@
              that has no honest answer: a smaller box always looks cheaper. In absolute mode
              the best-available line is not drawn at all. -->
         <div id="price-history-modes" class="history-modes">
-            <button type="button" class="btn btn-sm active" data-history-mode="unit">kr/enhet</button>
+            <button type="button" class="btn btn-sm active" data-history-mode="unit">Jfr-pris</button>
             <button type="button" class="btn btn-sm" data-history-mode="absolute">Absolut pris</button>
         </div>
         <div id="price-history-chart-container">
@@ -431,7 +436,7 @@
             </div>
             <div class="form-group">
                 <label>E-post *</label>
-                <input type="email" name="email_address" required class="form-input">
+                <input type="email" name="email_address" id="watch-email" required class="form-input">
             </div>
             <div class="form-group">
                 <label>
@@ -486,6 +491,15 @@
 
 <!-- SECTION_SEPARATOR -->
 /* Admin dashboard-specific styles */
+/* Wide tables scroll inside their own container — the PAGE never scrolls sideways.
+   Matters most on the phone, where the app doubles as the in-store shopping list. */
+#products-table-container,
+#deals-table-container,
+#watches-table-container,
+#product-links-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
 .search-input {
     padding: 8px 12px;
     border: 1px solid var(--border);
@@ -517,6 +531,16 @@
 }
 .modal-large {
     max-width: 800px;
+}
+/* Phone: dialogs become bottom sheets — full width, thumb-reachable, scrollable. */
+@media (max-width: 768px) {
+    .modal { align-items: flex-end; }
+    .modal-content {
+        width: 100%;
+        max-width: 100%;
+        max-height: 92vh;
+        border-radius: 12px 12px 0 0;
+    }
 }
 .modal-header {
     display: flex;
@@ -710,6 +734,7 @@ async function loadStats() {
         document.getElementById('stat-deals').textContent = deals.length;
         document.getElementById('stat-scheduler').textContent = sched.running ? 'PÅ' : 'AV';
         document.getElementById('stat-scheduler').style.color = sched.running ? 'var(--success)' : 'var(--error)';
+        renderFreshness(sched);
     } catch (e) {
         console.error('Stats load failed', e);
     }
@@ -792,22 +817,24 @@ function buildBestPriceCell(product, links) {
         (a, b) => (effectivePrice(b) < effectivePrice(a) ? b : a)
     );
     return `<span class="unit-price">${escapeHtml(formatSek(effectivePrice(cheapest)))} kr</span>${missingBadge}`
-         + `<div class="best-link">${escapeHtml(cheapest.store_name)} &#183; kr/enhet saknas</div>`;
+         + `<div class="best-link">${escapeHtml(cheapest.store_name)} &#183; jfr-pris saknas</div>`;
 }
 
 function buildProductsTable(products) {
     if (!products.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
-    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta kr/enhet</th><th>Åtgärder</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const links = p.stores || [];
-        const storeNames = links.map(s => s.store_name).join(', ') || '-';
+        const storeCell = links.length
+            ? links.map(s => storeLinkHtml(s.store_name, s.store_url)).join(', ')
+            : '-';
         html += `<tr>
             <td>${escapeHtml(p.name)}</td>
             <td>${escapeHtml(p.brand || '-')}</td>
             <td>${escapeHtml(p.category || '-')}</td>
-            <td>${escapeHtml(storeNames)}</td>
+            <td>${storeCell}</td>
             <td>${buildBestPriceCell(p, links)}</td>
             <td>
                 <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
@@ -833,6 +860,51 @@ async function loadProducts() {
     }
 }
 
+// DB timestamps are naive UTC — parse them AS UTC or Swedish wall-clock drifts 1-2h.
+function parseUtc(iso) {
+    if (!iso) return null;
+    return new Date(/Z|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+}
+
+function formatWhen(iso) {
+    const d = parseUtc(iso);
+    if (!d || isNaN(d)) return '';
+    return d.toLocaleString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// The weekly rhythm, spelled out: prices refresh on the links' check days, so say when
+// the numbers are from and when the next round comes instead of letting the user guess.
+function renderFreshness(sched) {
+    const el = document.getElementById('deals-freshness');
+    if (!el) return;
+    const parts = [];
+    if (sched.last_check_at) parts.push('Priserna kontrollerades senast ' + formatWhen(sched.last_check_at));
+    if (sched.next_check_at) parts.push('nästa kontroll ' + formatWhen(sched.next_check_at));
+    el.textContent = parts.join(' · ');
+}
+
+// Is this offer actually the cheapest way to buy the product per unit? The discount
+// percentage is the STORE's framing; this cell is ours.
+function dealComparisonCell(d) {
+    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return '&#8212;';
+    const alt = d.best_alt_store + (d.best_alt_package_size ? ' ' + d.best_alt_package_size : '');
+    const altPrice = d.best_alt_unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit);
+    if (d.unit_price_sek <= d.best_alt_unit_price_sek) {
+        return '<span class="price-good">Billigast</span>'
+            + '<div class="best-link">näst bäst: ' + escapeHtml(alt + ' · ' + altPrice) + '</div>';
+    }
+    return '<span class="price-warn">Ej billigast</span>'
+        + '<div class="best-link">' + escapeHtml(alt + ': ' + altPrice) + '</div>';
+}
+
+// Every store-name emission is a way IN to the store's own page — the app's endpoint
+// is a purchase decision, not a table row.
+function storeLinkHtml(name, url) {
+    if (!url) return escapeHtml(name);
+    return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">'
+        + escapeHtml(name) + ' &#8599;</a>';
+}
+
 async function loadDeals() {
     try {
         const filter = document.getElementById('deal-filter').value;
@@ -843,15 +915,22 @@ async function loadDeals() {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>Inga aktiva erbjudanden just nu.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Ordinarie</th><th>Erbjudande</th><th>Rabatt</th><th>Typ</th></tr></thead><tbody>';
+        let html = '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Erbjudande</th><th>Jämförelse</th><th>Rabatt</th><th>Sett</th></tr></thead><tbody>';
         for (const d of deals) {
+            const pct = d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent;
+            const jfr = d.unit_price_sek != null
+                ? '<div class="best-link">' + escapeHtml(d.unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit)) + '</div>'
+                : '';
+            const ord = d.price_sek != null
+                ? '<div class="best-link">ord. ' + escapeHtml(String(d.price_sek)) + ' kr</div>'
+                : '';
             html += `<tr>
-                <td>${escapeHtml(d.product_name)}</td>
-                <td>${escapeHtml(d.store_name)}</td>
-                <td>${d.price_sek != null ? d.price_sek + ' kr' : '-'}</td>
-                <td class="price-good">${d.offer_price_sek} kr</td>
-                <td class="price-good">${d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent}%</td>
-                <td><span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
+                <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}</td>
+                <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
+                <td><span class="price-good">${d.offer_price_sek} kr</span>${jfr}${ord}</td>
+                <td>${dealComparisonCell(d)}</td>
+                <td><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
+                <td>${d.checked_at ? escapeHtml(String(d.checked_at).slice(0, 10)) : '&#8212;'}</td>
             </tr>`;
         }
         html += '</tbody></table>';
@@ -869,12 +948,30 @@ async function loadWatches() {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Produkt</th><th>E-post</th><th>Mål</th><th>Larma vid erbjudande</th><th>Åtgärder</th></tr></thead><tbody>';
+        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th>Larma vid erbjudande</th><th>Åtgärder</th></tr></thead><tbody>';
         for (const w of watches) {
+            // Show the target in whichever currency the watch actually uses —
+            // jfr-pris targets are the norm, absolute kr the legacy.
+            const target = w.unit_price_target_sek != null
+                ? w.unit_price_target_sek + ' ' + unitPriceHeading(w.unit)
+                : (w.target_price_sek != null ? w.target_price_sek + ' kr' : '-');
+            // "How close is it?" — without this the watch is a write-only register.
+            let now = '-';
+            if (w.current_lowest_price_sek != null) {
+                const met = (w.target_price_sek != null && w.current_lowest_price_sek <= w.target_price_sek)
+                    || (w.unit_price_target_sek != null && w.current_lowest_unit_price_sek != null
+                        && w.current_lowest_unit_price_sek <= w.unit_price_target_sek);
+                const nowPrice = w.current_lowest_unit_price_sek != null
+                    ? w.current_lowest_unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(w.unit)
+                    : w.current_lowest_price_sek + ' kr';
+                now = '<span class="' + (met ? 'price-good' : '') + '">' + escapeHtml(nowPrice)
+                    + (met ? ' — under målet!' : '') + '</span>'
+                    + '<div class="best-link">' + escapeHtml(w.current_lowest_store || '') + '</div>';
+            }
             html += `<tr>
                 <td>${escapeHtml(w.product_name || w.product_id)}</td>
-                <td>${escapeHtml(w.email_address)}</td>
-                <td>${w.target_price_sek != null ? w.target_price_sek + ' kr' : '-'}</td>
+                <td>${escapeHtml(target)}</td>
+                <td>${now}</td>
                 <td>${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
                 <td>
                     <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
@@ -1579,7 +1676,7 @@ function buildLinksTable(rows, unit) {
         <th class="sortable-col" data-sort="store_name">Butik</th>
         <th>Förpackning</th>
         <th class="sortable-col" data-sort="price_sek">Pris</th>
-        <th class="sortable-col" data-sort="unit_price_sek">${escapeHtml(unitPriceHeading(unit))}</th>
+        <th class="sortable-col" data-sort="unit_price_sek">Jfr-pris (${escapeHtml(unitPriceHeading(unit))})</th>
         <th>Butiken anger</th>
         <th>Senast kollad</th>
         <th>Åtgärder</th>
@@ -1608,7 +1705,7 @@ function buildLinksTable(rows, unit) {
                 : '&#8212;');
 
         html += `<tr>
-            <td>${escapeHtml(r.store_name)}</td>
+            <td>${storeLinkHtml(r.store_name, r.store_url)}</td>
             <td>${pkg}</td>
             <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
             <td>${unitCell}</td>
@@ -1801,6 +1898,13 @@ async function handleImport(e) {
 function showCreateWatchModal() {
     const select = document.getElementById('watch-product-select');
     select.innerHTML = allProducts.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    // Single-user app: the address is always yours — prefill it from the signed-in
+    // header (still editable for the odd exception).
+    const emailField = document.getElementById('watch-email');
+    if (!emailField.value) {
+        const headerEmail = document.getElementById('user-email');
+        if (headerEmail) emailField.value = headerEmail.textContent.trim();
+    }
     document.getElementById('modal-create-watch').style.display = 'flex';
 }
 
