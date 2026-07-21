@@ -41,10 +41,13 @@ WORKDIR /app
 # Copy the venv from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy source + alembic config
+# Copy source + alembic config. pyproject.toml is REQUIRED at runtime: the package is
+# installed --no-root, so the sidebar-footer version (_read_app_version) has no installed
+# metadata to read and falls back to parsing /app/pyproject.toml — without this COPY the
+# footer silently shows no version at all.
 COPY src ./src
 COPY alembic ./alembic
-COPY alembic.ini ./
+COPY alembic.ini pyproject.toml ./
 
 USER app
 
