@@ -1752,8 +1752,8 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
 // --- Hash router: the sidebar's three pages ---
 //
 // One served page, three visible ones. All data still loads up front (the sets are small),
-// so switching pages is instant and deep links (#/erbjudanden) land right. Unknown or
-// missing hash falls back to Produkter rather than a blank screen.
+// so switching pages is instant and deep links (#/produkter) land right. Unknown or
+// missing hash falls back to Erbjudanden (the start page) rather than a blank screen.
 
 const PAGES = {
     produkter: 'Produkter',
@@ -1762,8 +1762,10 @@ const PAGES = {
 };
 
 function currentPage() {
+    // Erbjudanden is the START page: the freshest, most actionable view — the long
+    // product list is one click away instead of burying it.
     const key = (location.hash || '').replace(/^#\/?/, '');
-    return PAGES[key] ? key : 'produkter';
+    return PAGES[key] ? key : 'erbjudanden';
 }
 
 function renderPage() {

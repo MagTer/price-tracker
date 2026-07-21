@@ -153,6 +153,53 @@ _JSONLD_HTML = """<html><head><script type="application/ld+json">
 </script></head><body>x</body></html>"""
 
 
+class TestButikConfigLoaders:
+    """Env-driven butik config (QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS): another
+    instance shops at other stores, so the ids are operator data. Malformed JSON must fall
+    back to the built-in defaults WITH a warning — a typo must not silently turn quick-add's
+    suggestions off."""
+
+    def test_labels_from_valid_json(self):
+        from domain.quickadd import load_store_labels
+
+        got = load_store_labels('{"1234": "ICA Nära Hemma", "5678": "ICA Kvantum Borta"}')
+        assert got == {"1234": "ICA Nära Hemma", "5678": "ICA Kvantum Borta"}
+
+    def test_labels_empty_env_gives_defaults(self):
+        from domain.quickadd import _DEFAULT_STORE_LABELS, load_store_labels
+
+        assert load_store_labels(None) == _DEFAULT_STORE_LABELS
+        assert load_store_labels("  ") == _DEFAULT_STORE_LABELS
+
+    def test_labels_malformed_json_falls_back_to_defaults(self):
+        from domain.quickadd import _DEFAULT_STORE_LABELS, load_store_labels
+
+        assert load_store_labels("{not json") == _DEFAULT_STORE_LABELS
+        assert load_store_labels('["a", "list"]') == _DEFAULT_STORE_LABELS
+
+    def test_groups_from_valid_json(self):
+        from domain.quickadd import load_sibling_groups
+
+        got = load_sibling_groups('[["1234", "5678"], ["9", "10", "11"]]')
+        assert got == (frozenset({"1234", "5678"}), frozenset({"9", "10", "11"}))
+
+    def test_groups_empty_env_gives_defaults(self):
+        from domain.quickadd import _DEFAULT_SIBLING_GROUPS, load_sibling_groups
+
+        assert load_sibling_groups(None) == _DEFAULT_SIBLING_GROUPS
+
+    def test_groups_malformed_json_falls_back_to_defaults(self):
+        from domain.quickadd import _DEFAULT_SIBLING_GROUPS, load_sibling_groups
+
+        assert load_sibling_groups('{"not": "a list"}') == _DEFAULT_SIBLING_GROUPS
+        assert load_sibling_groups('["flat", "not-nested"]') == _DEFAULT_SIBLING_GROUPS
+
+    def test_empty_inner_groups_are_dropped(self):
+        from domain.quickadd import load_sibling_groups
+
+        assert load_sibling_groups('[[], ["1", "2"]]') == (frozenset({"1", "2"}),)
+
+
 class TestExtractProductMetadata:
     """The LLM metadata fallback — cascade order and the acceptance floor."""
 

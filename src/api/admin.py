@@ -2582,13 +2582,13 @@ def _get_admin_sidebar_html() -> str:
             </a>
         </div>
         <nav class="sidebar-nav">
-            <a href="#/produkter" class="nav-item" data-page="produkter">
-                <span class="nav-icon">&#128230;</span>
-                Produkter
-            </a>
             <a href="#/erbjudanden" class="nav-item" data-page="erbjudanden">
                 <span class="nav-icon">&#127991;&#65039;</span>
                 Erbjudanden
+            </a>
+            <a href="#/produkter" class="nav-item" data-page="produkter">
+                <span class="nav-icon">&#128230;</span>
+                Produkter
             </a>
             <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
                 <span class="nav-icon">&#128276;</span>
@@ -2613,7 +2613,7 @@ def _get_admin_header_html(user_email: str) -> str:
         <div class="breadcrumbs">
             <a href="/">Price Tracker</a>
             <span class="separator">/</span>
-            <span class="current" id="breadcrumb-current">Produkter</span>
+            <span class="current" id="breadcrumb-current">Aktuella erbjudanden</span>
         </div>
         <div class="header-actions">
             <div class="user-menu">

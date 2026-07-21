@@ -8,7 +8,7 @@ status: executing
 stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
 last_updated: "2026-07-21T00:00:00.000Z"
 last_activity: 2026-07-21
-last_activity_desc: "v0.5.0 quick-add, v0.6.0 store_label (migration 0002), v0.7.0 sibling links (ICA butik URL swap, verified live), v0.7.1 UI restructure: 'Admin' wording removed everywhere user-visible, three hash-routed pages (#/produkter, #/erbjudanden, #/bevakningar) in the sidebar so long product lists can't bury deals, app version in the sidebar footer (read from installed metadata / pyproject). Suite: 313+12. All non-GSD at Magnus's request; deploy bump in home-server pending (go straight to v0.7.1)."
+last_activity_desc: "v0.5.0–v0.7.1 quick-add/label/sibling/UI work, then v0.8.0 shareability: butik config moved to env (QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS, JSON, Magnus's butiker as defaults, warn+fallback on malformed), Erbjudanden moved to top of menu and made the start page, MIT LICENSE added (repo is public), README 'Run your own instance' section. Decision: friend gets a SEPARATE instance, not multi-tenant (service-layer reads have zero tenant filters; D-02/D-03 dropped tenancy deliberately). Suite: 321+12. Deploy bump pending (go straight to v0.8.0). NOTE: .env.template not updated — blocked by local permission settings; vars documented in README."
 progress:
   total_phases: 6
   completed_phases: 5
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 Phase: 04.1 (Package data moves to the store link) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 04.1
-Last activity: 2026-07-21 — v0.7.1 UI restructure on top of the v0.5.0–v0.7.0 quick-add/label/sibling work: the old "Admin" naming (a holdover from the source platform) is gone from every user-visible string; the three sections are now separate hash-routed pages (Produkter / Erbjudanden / Bevakningar) picked from the left menu, with the global stats row visible on all of them; the running version shows in the sidebar footer, read from the same source of truth as the release tag. All direct tasks, GSD bypassed at Magnus's request. Deploy bump in home-server pending (go straight to v0.7.1).
+Last activity: 2026-07-21 — v0.8.0 shareability, on top of the v0.5.0–v0.7.1 quick-add/label/sibling/UI work: a friend wants their own instance, and the decision is SEPARATE INSTANCES over multi-tenant (service-layer reads have zero tenant filters; tenancy was deliberately dropped in D-02/D-03 — reversing it is a security audit, not a flag). To make the public repo genuinely reusable: butik config moved to env (QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS, Magnus's butiker as in-repo defaults so his deploy needs no new vars), MIT LICENSE added, README "Run your own instance" section written. Erbjudanden also moved to the top of the menu and made the start page. GSD bypassed at Magnus's request. Deploy bump pending (go straight to v0.8.0).
 
 Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
 

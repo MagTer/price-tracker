@@ -24,6 +24,9 @@ Design constraints this module enforces:
   the first scrape's D-07 autofill (evidence). This module never touches a link.
 """
 
+import json
+import logging
+import os
 import re
 from dataclasses import dataclass
 from decimal import Decimal
@@ -31,6 +34,8 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 from domain.pricing import PKG_UNITS
+
+logger = logging.getLogger(__name__)
 
 # Same token rule as the JSON-LD name-sanity check: 3+ alphanumerics, Swedish letters
 # included. Shorter fragments ("3", "st", "p") appear in virtually every product title
@@ -54,17 +59,67 @@ _PACK_RE = re.compile(
 # different prices on two different URLs.
 _STORE_SEGMENT_RE = re.compile(r"/stores/([^/]+)/")
 
-# Butik id -> human name, for the label SUGGESTION only (the field stays editable, and an
-# unknown id falls back to "<chain> <id>"). Single-user app: these are Magnus's stores.
-KNOWN_STORE_LABELS: dict[str, str] = {
+# --- Per-instance butik config -----------------------------------------------------------
+#
+# The butik ids below are OPERATOR data, not product logic: another instance of this app
+# (the repo is public) shops at other stores. Both tables are therefore overridable via
+# env — QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS — with the original operator's
+# stores as the in-repo defaults, so an existing deployment keeps working with zero new
+# env vars. Malformed JSON falls back to the defaults WITH a warning: a typo must not
+# silently turn the feature off.
+
+_DEFAULT_STORE_LABELS: dict[str, str] = {
     "1003396": "ICA Maxi Sandviken",
     "1004503": "ICA Supermarket Björksätra",
 }
 
+_DEFAULT_SIBLING_GROUPS: tuple[frozenset[str], ...] = (frozenset({"1003396", "1004503"}),)
+
+
+def load_store_labels(raw: str | None) -> dict[str, str]:
+    """Parse QUICKADD_STORE_LABELS: a JSON object of butik id -> display name.
+
+    Example: ``{"1003396": "ICA Maxi Sandviken", "1004503": "ICA Supermarket Björksätra"}``
+    """
+    if not raw or not raw.strip():
+        return dict(_DEFAULT_STORE_LABELS)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object of id -> label")
+        return {str(key): str(value) for key, value in data.items()}
+    except (ValueError, TypeError) as e:
+        logger.warning("Malformed QUICKADD_STORE_LABELS (%s) - using built-in defaults", e)
+        return dict(_DEFAULT_STORE_LABELS)
+
+
+def load_sibling_groups(raw: str | None) -> tuple[frozenset[str], ...]:
+    """Parse QUICKADD_SIBLING_GROUPS: a JSON array of butik-id groups.
+
+    Example: ``[["1003396", "1004503"]]`` — groups, not pairs, so a third butik in the
+    same group is one more element, not a schema change.
+    """
+    if not raw or not raw.strip():
+        return _DEFAULT_SIBLING_GROUPS
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list) or not all(isinstance(group, list) for group in data):
+            raise ValueError("expected a JSON array of arrays of butik ids")
+        return tuple(frozenset(str(sid) for sid in group) for group in data if group)
+    except (ValueError, TypeError) as e:
+        logger.warning("Malformed QUICKADD_SIBLING_GROUPS (%s) - using built-in defaults", e)
+        return _DEFAULT_SIBLING_GROUPS
+
+
+# Butik id -> human name, for the label SUGGESTION only (the field stays editable, and an
+# unknown id falls back to "<chain> <id>").
+KNOWN_STORE_LABELS: dict[str, str] = load_store_labels(os.getenv("QUICKADD_STORE_LABELS"))
+
 # Butiker whose assortments overlap enough that a product added at one is (almost always)
-# also sold at the others — quick-add offers to create the sibling links in the same
-# confirm. Groups, not pairs, so a third butik is one edit here.
-SIBLING_STORE_GROUPS: tuple[frozenset[str], ...] = (frozenset({"1003396", "1004503"}),)
+# also sold at the others — quick-add offers to create the sibling links in the same confirm.
+SIBLING_STORE_GROUPS: tuple[frozenset[str], ...] = load_sibling_groups(
+    os.getenv("QUICKADD_SIBLING_GROUPS")
+)
 
 
 class StoreLike(Protocol):

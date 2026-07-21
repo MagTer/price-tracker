@@ -276,6 +276,16 @@ class TestAdminDashboard:
         # The page sections themselves exist for the router to toggle.
         assert r.text.count('class="app-page"') == 3
 
+    def test_deals_is_the_start_page(self, client):
+        """Erbjudanden first in the menu and the default page: the freshest, most
+        actionable view opens on load; the long product list is one click away."""
+        r = client.get("/")
+        # Menu order: Erbjudanden above Produkter.
+        assert r.text.index('href="#/erbjudanden"') < r.text.index('href="#/produkter"')
+        # The server-rendered breadcrumb matches the client router's fallback.
+        assert 'id="breadcrumb-current">Aktuella erbjudanden' in r.text
+        assert ": 'erbjudanden'" in r.text  # currentPage() fallback
+
 
 class TestStoresEndpoints:
     def test_list_stores(self, client, mock_session):

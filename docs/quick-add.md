@@ -92,12 +92,13 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 - **New store:** seed its `base_url` (migration) — store matching needs nothing else.
   Add JSON-LD support for free if the store embeds schema.org; otherwise the LLM fallback
   covers it.
-- **New ICA butik:** add its `/stores/<id>/` id to `quickadd.KNOWN_STORE_LABELS` for a
-  friendly label suggestion — unknown ids already work, they just suggest "ICA \<id\>".
-  The saved label lives on the LINK (`ProductStore.store_label`) and is editable in the
-  Förpackning dialog; see `domain.models.link_store_name` for the display rule. To have
-  quick-add auto-offer its link too, add the id to the group in
-  `quickadd.SIBLING_STORE_GROUPS` (groups, not pairs — a third butik is one edit).
+- **New ICA butik (v0.8.0 — env config, no code change):** set `QUICKADD_STORE_LABELS`
+  (JSON object, butik id → display name) and `QUICKADD_SIBLING_GROUPS` (JSON array of
+  id groups) on the instance — the butik id is in the product URL after `/stores/`.
+  Unknown ids already work (they suggest "ICA \<id\>"); unset vars use the in-repo
+  defaults; malformed JSON logs a warning and uses the defaults. The saved label lives on
+  the LINK (`ProductStore.store_label`), editable in the Förpackning dialog; see
+  `domain.models.link_store_name` for the display rule.
 - **Better title parsing:** extend the regexes in `quickadd.parse_package_from_name`
   (currently `ml|kg|l|g|st` amounts and `pack|st|rullar|tabletter|kapslar|påsar` counts).
 - **MCP:** quick-add is deliberately UI-only for now. If the agent platform should add

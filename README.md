@@ -61,6 +61,34 @@ distinguishable everywhere a store name is shown (v0.6.0).
 | `PRICE_PARSER_MIN_CONFIDENCE` | no | `0.6` | Acceptance floor; LLM extractions below this are discarded. |
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
+| `QUICKADD_STORE_LABELS` | no | the original operator's butiker | JSON object of ICA butik id → display name, e.g. `{"1003396": "ICA Maxi Sandviken"}`. Used by quick-add's butiksetikett suggestion. |
+| `QUICKADD_SIBLING_GROUPS` | no | the original operator's butiker | JSON array of butik-id groups, e.g. `[["1003396", "1004503"]]`. Quick-add offers to create sister-butik links within a group. Malformed JSON in either variable logs a warning and falls back to the defaults. |
+
+## Run your own instance
+
+The repo is MIT-licensed and an instance is fully self-contained — the steps below are
+everything a second deployment needs.
+
+1. **Image:** pull `ghcr.io/magter/price-tracker:vX.Y.Z` (built by the release workflow),
+   or build your own from the Dockerfile.
+2. **Database:** point `DATABASE_URL` at an empty Postgres 16 database. The container's
+   start command runs `alembic upgrade head`, which creates the schema and seeds the five
+   supported stores (ICA, Willys, Apotea, Med24, Doz).
+3. **Auth:** the app does NOT do login itself. It trusts the `X-Auth-Request-Email`
+   header from your reverse proxy (any forward-auth setup works — oauth2-proxy, Authelia,
+   Cloudflare Access…) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:
+   whatever email your IdP forwards). **Never expose the app without such a proxy** — the
+   header is trusted as-is. `/mcp/` is instead protected by `MCP_BEARER_TOKEN` and fails
+   closed (503) when unset.
+4. **Keys:** get your own `OPENROUTER_API_KEY` (LLM extraction fallback — cheap; most
+   checks use store APIs/JSON-LD and never touch the LLM) and, for email alerts,
+   `RESEND_API_KEY` + `EMAIL_FROM` on a domain you have verified with Resend.
+5. **Your stores:** set `QUICKADD_STORE_LABELS` / `QUICKADD_SIBLING_GROUPS` to *your* ICA
+   butiker (the id is in the product-page URL after `/stores/`). Without them, quick-add
+   suggests the defaults' labels — harmless, but they are someone else's stores.
+
+Single-user by design: one instance per person, auth gates one email. Multi-tenancy is
+deliberately out of scope (see `.planning/` for the decision history).
 
 ## Local development
 
@@ -182,3 +210,7 @@ Then bump the pinned image tag in the home-server repo's
 `compose/dokploy-apps/price-tracker/docker-compose.yml`. The production compose
 runs `alembic upgrade head` before starting uvicorn, has a DB-aware
 `/health` check, and injects all secrets via SOPS/Dokploy.
+
+## License
+
+[MIT](./LICENSE).
