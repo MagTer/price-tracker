@@ -8,7 +8,7 @@ status: executing
 stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
 last_updated: "2026-07-21T00:00:00.000Z"
 last_activity: 2026-07-21
-last_activity_desc: "v0.5.0 quick-add, v0.6.0 store_label (per-butik display names, migration 0002), v0.7.0 sibling links: quick-add auto-offers the sister ICA butik's link (URL /stores/<id>/ swap, verified live — chain-wide product ids; 13.20 vs 12.25 kr for same product proved per-butik pricing). Siblings verified by first fetch, removed if unreachable. SIBLING_STORE_GROUPS in quickadd.py. Suite: 310+12. All non-GSD at Magnus's request; deploy bump in home-server pending (go straight to v0.7.0)."
+last_activity_desc: "v0.5.0 quick-add, v0.6.0 store_label (migration 0002), v0.7.0 sibling links (ICA butik URL swap, verified live), v0.7.1 UI restructure: 'Admin' wording removed everywhere user-visible, three hash-routed pages (#/produkter, #/erbjudanden, #/bevakningar) in the sidebar so long product lists can't bury deals, app version in the sidebar footer (read from installed metadata / pyproject). Suite: 313+12. All non-GSD at Magnus's request; deploy bump in home-server pending (go straight to v0.7.1)."
 progress:
   total_phases: 6
   completed_phases: 5
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 Phase: 04.1 (Package data moves to the store link) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 04.1
-Last activity: 2026-07-21 — v0.7.0 sibling links on top of v0.5.0 (quick-add) and v0.6.0 (store_label): quick-adding an ICA product from one butik now offers a pre-checked "lägg också till" for the sister butik (Maxi Sandviken ↔ Supermarket Björksätra), creating a second link on the same product with the swapped /stores/<id>/ URL, its own label, and its own first price check — removed again if the page is unreachable. URL-swap hypothesis verified live before building. All direct tasks, GSD bypassed at Magnus's request. Deploy bump in home-server pending (go straight to v0.7.0).
+Last activity: 2026-07-21 — v0.7.1 UI restructure on top of the v0.5.0–v0.7.0 quick-add/label/sibling work: the old "Admin" naming (a holdover from the source platform) is gone from every user-visible string; the three sections are now separate hash-routed pages (Produkter / Erbjudanden / Bevakningar) picked from the left menu, with the global stats row visible on all of them; the running version shows in the sidebar footer, read from the same source of truth as the release tag. All direct tasks, GSD bypassed at Magnus's request. Deploy bump in home-server pending (go straight to v0.7.1).
 
 Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
 

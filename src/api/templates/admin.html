@@ -1,5 +1,7 @@
-<div class="page-title">Price Tracker Admin</div>
-
+<!-- The stats row is GLOBAL status (products, watches, deals today, scheduler) and stays
+     visible on every page; the three cards below are hash-routed pages (#/produkter,
+     #/erbjudanden, #/bevakningar) toggled by renderPage() so a long product list can
+     never push the deals out of sight. -->
 <div class="stats-grid">
     <div class="stat-box">
         <div class="stat-value" id="stat-products">-</div>
@@ -19,6 +21,7 @@
     </div>
 </div>
 
+<section class="app-page" data-page="produkter">
 <div class="card">
     <div class="card-header">
         <div class="card-title">Produkter</div>
@@ -34,7 +37,9 @@
         <div class="loading">Laddar produkter…</div>
     </div>
 </div>
+</section>
 
+<section class="app-page" data-page="erbjudanden">
 <div class="card">
     <div class="card-header">
         <div class="card-title">Aktuella erbjudanden</div>
@@ -50,7 +55,9 @@
         <div class="loading">Laddar erbjudanden…</div>
     </div>
 </div>
+</section>
 
+<section class="app-page" data-page="bevakningar">
 <div class="card">
     <div class="card-header">
         <div class="card-title">Prisbevakningar</div>
@@ -62,6 +69,7 @@
         <div class="loading">Laddar bevakningar…</div>
     </div>
 </div>
+</section>
 
 <!-- Create Product Modal -->
 <div class="modal" id="modal-create-product" style="display:none;">
@@ -554,6 +562,9 @@ th.sortable-col:hover {
     color: var(--warning);
     font-weight: 600;
 }
+/* Hash-routed pages: exactly one .app-page is visible; the sidebar picks it. */
+.app-page { display: none; }
+.app-page.active { display: block; }
 
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
@@ -1738,8 +1749,40 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
     }
 });
 
+// --- Hash router: the sidebar's three pages ---
+//
+// One served page, three visible ones. All data still loads up front (the sets are small),
+// so switching pages is instant and deep links (#/erbjudanden) land right. Unknown or
+// missing hash falls back to Produkter rather than a blank screen.
+
+const PAGES = {
+    produkter: 'Produkter',
+    erbjudanden: 'Aktuella erbjudanden',
+    bevakningar: 'Prisbevakningar'
+};
+
+function currentPage() {
+    const key = (location.hash || '').replace(/^#\/?/, '');
+    return PAGES[key] ? key : 'produkter';
+}
+
+function renderPage() {
+    const page = currentPage();
+    for (const el of document.querySelectorAll('.app-page')) {
+        el.classList.toggle('active', el.getAttribute('data-page') === page);
+    }
+    for (const el of document.querySelectorAll('.nav-item[data-page]')) {
+        el.classList.toggle('active', el.getAttribute('data-page') === page);
+    }
+    const crumb = document.getElementById('breadcrumb-current');
+    if (crumb) crumb.textContent = PAGES[page];
+}
+
+window.addEventListener('hashchange', renderPage);
+
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+    renderPage();
     await loadStores();
     loadProducts();
     loadDeals();

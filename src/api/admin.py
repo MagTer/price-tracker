@@ -56,6 +56,32 @@ LOGGER = logging.getLogger(__name__)
 _CENT = Decimal("0.01")
 
 
+def _read_app_version() -> str:
+    """The running app's version, for the sidebar footer.
+
+    Installed metadata first (the Docker image); pyproject.toml as the dev fallback, so
+    the footer matches the tag-source-of-truth rule ("the version in pyproject.toml IS
+    the tag") in every environment. Empty string — footer shows no version — only if
+    both fail.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("price-tracker")
+    except Exception:  # noqa: S110 - PackageNotFoundError or broken metadata
+        pass
+    try:
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        return str(tomllib.loads(pyproject.read_text())["project"]["version"])
+    except Exception:
+        return ""
+
+
+_APP_VERSION = _read_app_version()
+
+
 def _effective_price(price_point: PricePoint | None) -> Decimal | None:
     """The price actually paid: the offer when there is one, else the regular price."""
     if price_point is None:
@@ -2280,7 +2306,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Price Tracker - Admin</title>
+    <title>Price Tracker</title>
     <script src="/static/chart.umd.min.js"></script>
     <style>
         {base_css}
@@ -2540,8 +2566,14 @@ def _get_admin_nav_css() -> str:
 
 
 def _get_admin_sidebar_html() -> str:
-    """Generate sidebar HTML."""
-    return """
+    """Sidebar with one nav item per page.
+
+    The items are hash links, not routes: the app is one served page and the frontend's
+    renderPage() toggles which section is visible (and which item is .active) — so the
+    `active` class is owned by JS, never hardcoded here.
+    """
+    footer = f"Price Tracker v{_APP_VERSION}" if _APP_VERSION else "Price Tracker"
+    return f"""
     <aside class="admin-sidebar">
         <div class="sidebar-header">
             <a href="/" class="sidebar-logo">
@@ -2550,13 +2582,21 @@ def _get_admin_sidebar_html() -> str:
             </a>
         </div>
         <nav class="sidebar-nav">
-            <a href="/" class="nav-item active">
-                <span class="nav-icon">&#128181;</span>
-                Price Tracker
+            <a href="#/produkter" class="nav-item" data-page="produkter">
+                <span class="nav-icon">&#128230;</span>
+                Produkter
+            </a>
+            <a href="#/erbjudanden" class="nav-item" data-page="erbjudanden">
+                <span class="nav-icon">&#127991;&#65039;</span>
+                Erbjudanden
+            </a>
+            <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
+                <span class="nav-icon">&#128276;</span>
+                Bevakningar
             </a>
         </nav>
         <div class="sidebar-footer">
-            Price Tracker Admin
+            {footer}
         </div>
     </aside>
     """
@@ -2571,9 +2611,9 @@ def _get_admin_header_html(user_email: str) -> str:
     return f"""
     <header class="admin-header">
         <div class="breadcrumbs">
-            <a href="/">Admin</a>
+            <a href="/">Price Tracker</a>
             <span class="separator">/</span>
-            <span class="current">Price Tracker</span>
+            <span class="current" id="breadcrumb-current">Produkter</span>
         </div>
         <div class="header-actions">
             <div class="user-menu">

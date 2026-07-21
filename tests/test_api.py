@@ -252,6 +252,30 @@ class TestAdminDashboard:
         assert "text/html" in r.headers["content-type"]
         assert "Price Tracker" in r.text
 
+    def test_no_admin_wording_reaches_the_user(self, client):
+        """The 'Admin' naming was a holdover from the source platform — the app is just
+        'Price Tracker' now. CSS comments may say what they like; visible text may not."""
+        r = client.get("/")
+        assert "<title>Price Tracker</title>" in r.text
+        assert "Price Tracker Admin" not in r.text
+        assert ">Admin<" not in r.text
+
+    def test_sidebar_footer_shows_the_version(self, client):
+        """The footer version comes from the same source of truth as the release tag
+        (pyproject.toml / installed metadata), so what you see is what prod runs."""
+        r = client.get("/")
+        assert "Price Tracker v" in r.text
+
+    def test_sidebar_has_one_nav_item_per_page(self, client):
+        """The three sections are hash-routed pages picked from the left menu — a long
+        product list must never push the deals out of sight."""
+        r = client.get("/")
+        for page in ("produkter", "erbjudanden", "bevakningar"):
+            assert f'data-page="{page}"' in r.text, f"nav/page missing for {page}"
+            assert f'href="#/{page}"' in r.text
+        # The page sections themselves exist for the router to toggle.
+        assert r.text.count('class="app-page"') == 3
+
 
 class TestStoresEndpoints:
     def test_list_stores(self, client, mock_session):

@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **322 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `310 passed, 12 skipped`).
+**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **325 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `313 passed, 12 skipped`).
 
 Remaining from the original extraction plan:
 - **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.
@@ -71,7 +71,11 @@ src/
 │   ├── auth.py    # IAP header trust (X-Auth-Request-Email) + single-email gate
 │   ├── admin.py   # portal + REST API (served at root, not /admin)
 │   ├── schemas.py
-│   └── templates/admin.html   # 3 fragments split on <!-- SECTION_SEPARATOR --> — see Gotchas
+│   └── templates/admin.html   # 3 fragments split on <!-- SECTION_SEPARATOR --> — see Gotchas.
+│   │                          # The UI is ONE served page with three hash-routed pages
+│   │                          # (#/produkter, #/erbjudanden, #/bevakningar) picked from the
+│   │                          # sidebar; renderPage() in fragment 3 owns visibility + active
+│   │                          # nav state. "Admin" is gone from all user-visible text (v0.7.1).
 ├── mcp_server/
 │   └── server.py  # FastMCP, bearer auth, 4 tools
 └── infra/
