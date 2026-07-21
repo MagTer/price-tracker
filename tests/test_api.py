@@ -276,6 +276,17 @@ class TestAdminDashboard:
         # The page sections themselves exist for the router to toggle.
         assert r.text.count('class="app-page"') == 3
 
+    def test_check_day_is_a_named_weekday_choice(self, client):
+        """Both link forms (manual + quick-add) offer the check day as a Swedish weekday
+        select, not a bare 0-6 number — a weekly check on the chain's offer day is the
+        lightest possible schedule against the stores' sites, so it must be easy to pick."""
+        r = client.get("/")
+        assert 'id="qa-weekday"' in r.text
+        assert 'name="check_weekday"' in r.text
+        assert r.text.count("Måndag — nya veckoerbjudanden") == 2
+        # No raw number input for the weekday anywhere.
+        assert 'type="number" name="check_weekday"' not in r.text
+
     def test_deals_is_the_start_page(self, client):
         """Erbjudanden first in the menu and the default page: the freshest, most
         actionable view opens on load; the long product list is one click away."""

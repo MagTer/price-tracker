@@ -23,6 +23,7 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
+    suggest_check_weekday,
     suggest_existing_products,
 )
 
@@ -151,6 +152,26 @@ _JSONLD_HTML = """<html><head><script type="application/ld+json">
  "offers":{"@type":"Offer","price":"89,90","priceCurrency":"SEK",
            "availability":"https://schema.org/InStock"}}
 </script></head><body>x</body></html>"""
+
+
+class TestSuggestCheckWeekday:
+    """Chains with a fixed weekly offer day get Monday suggested — one check/week."""
+
+    def test_ica_and_willys_suggest_monday(self):
+        assert suggest_check_weekday("ica") == 0
+        assert suggest_check_weekday("willys") == 0
+
+    def test_slug_is_case_insensitive(self):
+        assert suggest_check_weekday("WILLYS") == 0
+
+    def test_chains_without_offer_day_suggest_nothing(self):
+        assert suggest_check_weekday("apotea") is None
+        assert suggest_check_weekday("med24") is None
+        assert suggest_check_weekday("doz") is None
+
+    def test_none_and_empty_slug(self):
+        assert suggest_check_weekday(None) is None
+        assert suggest_check_weekday("") is None
 
 
 class TestButikConfigLoaders:
@@ -391,6 +412,8 @@ class TestQuickAddPreview:
         assert [s["id"] for s in body["existing_products"]] == [str(existing.id)]
         # JSON-LD sufficed — the LLM fallback must not have been consulted.
         parser.extract_product_metadata.assert_not_called()
+        # Apotea has no fixed offer day — no weekday suggested.
+        assert body["suggested_check_weekday"] is None
 
     def test_fetch_failure_is_502(self, client, mock_session):
         mock_session.execute.side_effect = [
@@ -445,6 +468,8 @@ class TestQuickAddPreview:
         assert body["suggested_unit"] == "kg"
         assert body["package_quantity"] == pytest.approx(0.5)  # 500 g normalized to kg
         assert body["price_sek"] == pytest.approx(29.90)
+        # Willys publishes weekly offers on Mondays — the preview suggests that day.
+        assert body["suggested_check_weekday"] == 0
 
 
 class TestQuickAddConfirm:
@@ -475,6 +500,17 @@ class TestQuickAddConfirm:
         kwargs = mock_service.link_product_store.await_args.kwargs
         assert kwargs["store_url"] == self.URL
         assert kwargs["package_quantity"] == Decimal("24")
+
+    def test_check_weekday_reaches_the_link(self, client, mock_session, mock_service):
+        mock_session.execute.return_value = _result(first=None)
+        r = self._post(client, check_weekday=0)
+        assert r.status_code == 201
+        assert mock_service.link_product_store.await_args.kwargs["check_weekday"] == 0
+
+    def test_check_weekday_out_of_range_is_400(self, client, mock_service):
+        r = self._post(client, check_weekday=7)
+        assert r.status_code == 400
+        mock_service.create_product.assert_not_awaited()
 
     def test_duplicate_url_is_409_and_creates_nothing(self, client, mock_session, mock_service):
         mock_session.execute.return_value = _result(first=(uuid.uuid4(),))

@@ -196,7 +196,23 @@
                 <input type="text" id="qa-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('qa')">
             </div>
+            <!-- Fixed weekday = one check per week on the chain's offer day (ICA/Willys
+                 publish Mondays) — the lightest schedule against the stores' sites. The
+                 preview prefills it per chain; the interval field only applies without one. -->
             <div class="form-group">
+                <label>Kontrolldag</label>
+                <select id="qa-weekday" class="form-input" onchange="qaWeekdayChanged()">
+                    <option value="">Ingen fast dag — kontrollera per intervall</option>
+                    <option value="0">Måndag — nya veckoerbjudanden</option>
+                    <option value="1">Tisdag</option>
+                    <option value="2">Onsdag</option>
+                    <option value="3">Torsdag</option>
+                    <option value="4">Fredag — helgerbjudanden</option>
+                    <option value="5">Lördag</option>
+                    <option value="6">Söndag</option>
+                </select>
+            </div>
+            <div class="form-group" id="qa-frequency-group">
                 <label>Kontrollfrekvens (timmar)</label>
                 <input type="number" id="qa-frequency" value="72" min="72" max="240" class="form-input">
             </div>
@@ -234,12 +250,21 @@
                        placeholder="t.ex. ICA Maxi Sandviken — skiljer butiker i samma kedja">
             </div>
             <div class="form-group">
-                <label>Kontrollfrekvens (timmar)</label>
-                <input type="number" name="check_frequency_hours" value="72" min="72" max="240" class="form-input">
+                <label>Kontrolldag</label>
+                <select name="check_weekday" class="form-input">
+                    <option value="">Ingen fast dag — kontrollera per intervall</option>
+                    <option value="0">Måndag — nya veckoerbjudanden</option>
+                    <option value="1">Tisdag</option>
+                    <option value="2">Onsdag</option>
+                    <option value="3">Torsdag</option>
+                    <option value="4">Fredag — helgerbjudanden</option>
+                    <option value="5">Lördag</option>
+                    <option value="6">Söndag</option>
+                </select>
             </div>
             <div class="form-group">
-                <label>Kontrollveckodag (0=mån, 6=sön, tomt=frekvens)</label>
-                <input type="number" name="check_weekday" min="0" max="6" class="form-input">
+                <label>Kontrollfrekvens (timmar — gäller utan fast dag)</label>
+                <input type="number" name="check_frequency_hours" value="72" min="72" max="240" class="form-input">
             </div>
             <!-- Packaging (D-11). Deliberately NO unit selector: the product already
                  declares its comparison unit, so the amount is asked for IN that unit and
@@ -1019,6 +1044,10 @@ async function handleQuickAddPreview(e) {
 function qaRenderPreview(p) {
     document.getElementById('qa-store-name').value = p.store.name;
     document.getElementById('qa-store-label').value = p.suggested_store_label || '';
+    // == null (not falsy-check): weekday 0 IS Monday, the common suggestion.
+    const wd = p.suggested_check_weekday;
+    document.getElementById('qa-weekday').value = wd == null ? '' : String(wd);
+    qaWeekdayChanged();
     // Sister butiker not already tracked get a pre-checked opt-out row.
     const sibs = (p.sibling_links || []).filter(s => !s.already_tracked);
     const sibRow = document.getElementById('qa-sibling-row');
@@ -1074,6 +1103,13 @@ function qaProductChoiceChanged() {
     }
 }
 
+// A fixed day makes the interval field irrelevant (the scheduler checks weekly on that
+// day) — hide it rather than leave a field whose value would silently do nothing.
+function qaWeekdayChanged() {
+    const fixed = document.getElementById('qa-weekday').value !== '';
+    document.getElementById('qa-frequency-group').style.display = fixed ? 'none' : '';
+}
+
 function qaUnitChanged() {
     pkgInitChain('qa', document.getElementById('qa-unit').value,
         document.getElementById('qa-pkg-amount').value,
@@ -1099,6 +1135,8 @@ async function handleQuickAddConfirm(e) {
         category: existingId ? null : (document.getElementById('qa-category').value.trim() || null),
         unit: existingId ? null : (document.getElementById('qa-unit').value || null),
         check_frequency_hours: parseInt(document.getElementById('qa-frequency').value) || 72,
+        check_weekday: document.getElementById('qa-weekday').value === ''
+            ? null : parseInt(document.getElementById('qa-weekday').value),
         package_size: document.getElementById('qa-pkg-label').value.trim() || null,
         package_quantity: pkgQuantity('qa'),
         run_first_check: true,

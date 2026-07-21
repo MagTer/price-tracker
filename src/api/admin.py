@@ -42,6 +42,7 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
+    suggest_check_weekday,
     suggest_existing_products,
     suggest_sibling_links,
     suggest_store_label,
@@ -575,6 +576,9 @@ async def quick_add_preview(
             # Per-butik label from the URL's /stores/<id>/ segment (ICA prices per butik).
             # None for nationally-priced chains — the chain name suffices there.
             "suggested_store_label": suggest_store_label(url, store.name),
+            # 0=Monday for chains whose weekly offers land on a fixed day (ICA, Willys) —
+            # one check per week on THAT day beats any hour interval on load AND coverage.
+            "suggested_check_weekday": suggest_check_weekday(store.slug),
             "name": name,
             "brand": brand,
             "category": category,

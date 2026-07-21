@@ -23,6 +23,7 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 | Store | Hostname match against the 5 seeded `Store.base_url` values | Never |
 | Butik label (v0.6.0) | The URL's `/stores/<id>/` segment — ICA prices per physical butik. Known ids (`quickadd.KNOWN_STORE_LABELS`) map to names ("ICA Maxi Sandviken"); unknown ids fall back to "ICA \<id\>"; no segment → no label (nationally priced chains) | Never |
 | Sister-butik links (v0.7.0) | Butiker in the same `quickadd.SIBLING_STORE_GROUPS` group: the sibling URL is the pasted URL with `/stores/<id>/` swapped (product slug + id are chain-wide on handlaprivatkund.ica.se — verified live 2026-07-21: same potatissallad, 13.20 kr at Maxi vs 12.25 kr at Björksätra). Offered as a pre-checked opt-out in the confirm step | Never |
+| Check day (v0.9.0) | `quickadd.OFFER_WEEKDAYS` — chains whose weekly offers land on a fixed day (ICA, Willys: Mondays) get that weekday prefilled in the confirm. A fixed day means ONE check per link per week, on the day the prices actually change — the lightest schedule that misses nothing (we are guests on these sites). Chains without an offer cycle default to the hour interval. A chain property, not per-instance env config | Never |
 | Name, brand | schema.org JSON-LD `Product` node in the page (`JsonLdExtractor.extract_product_metadata`) | No — exact and free on ICA/Apotea/Med24/DOZ |
 | Price (display only) | Same JSON-LD offer | No |
 | Package (amount/unit/label) | Regex over the product title: `500 ml`, `24-pack`, `8 rullar` … (`quickadd.parse_package_from_name`) | No |
@@ -99,6 +100,10 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
   defaults; malformed JSON logs a warning and uses the defaults. The saved label lives on
   the LINK (`ProductStore.store_label`), editable in the Förpackning dialog; see
   `domain.models.link_store_name` for the display rule.
+- **A chain changes its offer day (or a new chain has one):** edit
+  `quickadd.OFFER_WEEKDAYS` (slug → 0-6, 0=Monday). The scheduler side already exists:
+  `check_weekday` checks weekly on that day (mornings, 06–12 spread) and retries a FAILED
+  weekday check after 24 h instead of waiting a week.
 - **Better title parsing:** extend the regexes in `quickadd.parse_package_from_name`
   (currently `ml|kg|l|g|st` amounts and `pack|st|rullar|tabletter|kapslar|påsar` counts).
 - **MCP:** quick-add is deliberately UI-only for now. If the agent platform should add
