@@ -25,12 +25,16 @@ class ProductCreate(BaseModel):
 
 
 class ProductUpdate(BaseModel):
-    """Schema for updating an existing product."""
+    """Schema for updating an existing product.
+
+    `unit` is deliberately absent: it is the scale every link's package_quantity and the
+    whole kr/unit history are expressed in, so changing it would silently misscale all of
+    them. Changing unit = delete the product and recreate it.
+    """
 
     name: str | None = None
     brand: str | None = None
     category: str | None = None
-    unit: str | None = None
 
 
 class ProductStoreLink(BaseModel):

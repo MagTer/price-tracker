@@ -417,6 +417,10 @@ class PriceTrackerService:
                             "store_label": product_store.store_label,
                             "store_slug": store.slug,
                             "store_url": product_store.store_url,
+                            # Cadence, so the edit dialog can prefill and the row can show
+                            # WHICH day/interval the link checks on.
+                            "check_frequency_hours": product_store.check_frequency_hours,
+                            "check_weekday": product_store.check_weekday,
                             "package_size": product_store.package_size,
                             "package_quantity": _as_float(product_store.package_quantity),
                             "scraped_package_quantity": _as_float(

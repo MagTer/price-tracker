@@ -283,9 +283,27 @@ class TestAdminDashboard:
         r = client.get("/")
         assert 'id="qa-weekday"' in r.text
         assert 'name="check_weekday"' in r.text
-        assert r.text.count("Måndag — nya veckoerbjudanden") == 2
+        # Three forms carry the select: quick-add, manual link, and the link-edit dialog.
+        assert r.text.count("Måndag — nya veckoerbjudanden") == 3
         # No raw number input for the weekday anywhere.
         assert 'type="number" name="check_weekday"' not in r.text
+
+    def test_product_edit_dialog_exists_with_locked_unit(self, client):
+        """Identity fields are editable from the product row; the unit is displayed but
+        disabled — it is the scale of every link amount and the whole kr/unit history,
+        so changing it means delete + recreate, never an edit."""
+        r = client.get("/")
+        assert 'id="modal-edit-product"' in r.text
+        assert 'data-action="edit"' in r.text
+        assert 'id="edit-product-unit" class="form-input" disabled' in r.text
+
+    def test_link_dialog_edits_cadence(self, client):
+        """Existing links' check schedule is editable (PUT /frequency finally has a UI) —
+        without this, moving a link to Monday required delete + recreate."""
+        r = client.get("/")
+        assert 'id="edit-weekday"' in r.text
+        assert 'id="edit-frequency"' in r.text
+        assert "/frequency'" in r.text  # the JS actually calls the endpoint
 
     def test_deals_is_the_start_page(self, client):
         """Erbjudanden first in the menu and the default page: the freshest, most
@@ -382,6 +400,48 @@ class TestProductsEndpoints:
         r = client.delete("/products/prod-1")
         assert r.status_code == 200
         assert r.json()["message"] == "Product deleted successfully"
+
+    def _updatable(self, mock_session):
+        """A found product behind PUT /products/{id} — returns the mutable mock."""
+        product = MagicMock()
+        product.unit = "st"
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = product
+        mock_session.execute.return_value = result
+        return product
+
+    def test_update_product_edits_identity_fields(self, client, mock_session):
+        product = self._updatable(mock_session)
+        r = client.put(
+            f"/products/{uuid.uuid4()}",
+            json={"name": "  Nytt namn  ", "brand": "", "category": "Mejeri"},
+        )
+        assert r.status_code == 200
+        assert product.name == "Nytt namn"  # trimmed
+        assert product.brand is None  # '' clears an optional field
+        assert product.category == "Mejeri"
+
+    def test_update_product_cannot_change_unit(self, client, mock_session):
+        """Unit is LOCKED: every link amount and the whole kr/unit history are expressed
+        in it. A client sending unit anyway must be ignored (delete + recreate is the way)."""
+        product = self._updatable(mock_session)
+        r = client.put(f"/products/{uuid.uuid4()}", json={"name": "Namn", "unit": "kg"})
+        assert r.status_code == 200
+        assert product.unit == "st"
+
+    def test_update_product_blank_name_is_400(self, client, mock_session):
+        product = self._updatable(mock_session)
+        r = client.put(f"/products/{uuid.uuid4()}", json={"name": "   "})
+        assert r.status_code == 400
+        # The endpoint rejected before assigning — the mock attribute was never set to a str.
+        assert not isinstance(product.name, str)
+
+    def test_update_product_unknown_id_is_404(self, client, mock_session):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = result
+        r = client.put(f"/products/{uuid.uuid4()}", json={"name": "Namn"})
+        assert r.status_code == 404
 
 
 class TestProductStoreLinkEndpoints:

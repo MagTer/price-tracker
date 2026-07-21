@@ -1007,15 +1007,18 @@ async def update_product(
         if not product:
             raise HTTPException(status_code=404, detail="Produkten hittades inte")
 
-        # Update only provided fields
+        # Update only provided fields. A blank name is a delete-by-accident, not an edit —
+        # brand/category clear on empty string, the name never does.
         if data.name is not None:
-            product.name = data.name
+            if not data.name.strip():
+                raise HTTPException(status_code=400, detail="Produktnamnet kan inte vara tomt")
+            product.name = data.name.strip()
         if data.brand is not None:
             product.brand = data.brand if data.brand else None
         if data.category is not None:
             product.category = data.category if data.category else None
-        if data.unit is not None:
-            product.unit = data.unit if data.unit else None
+        # `unit` is NOT updatable (locked in the schema): every link's package_quantity and
+        # the whole kr/unit history are expressed in it — changing unit = delete + recreate.
         # Package data is edited on the LINK — see PUT /product-stores/{id}/packaging.
 
         await session.commit()

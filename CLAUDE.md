@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server. Single-user (Magnus only); Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-07-14): the extraction is done and this is a live product.** It is deployed in prod (latest tag `v0.3.3`). Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **333 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `321 passed, 12 skipped`).
+**Status (2026-07-21): the extraction is done and this is a live product.** It is deployed in prod. Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **346 passing** (that total includes 12 Postgres integration tests; with no DB reachable they skip cleanly and you get `334 passed, 12 skipped`).
 
 Remaining from the original extraction plan:
 - **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.

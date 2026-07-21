@@ -115,6 +115,43 @@
     </div>
 </div>
 
+<!-- Edit Product Modal — identity fields only. Unit is shown but LOCKED: it is the
+     scale of every link's amount and the whole kr/unit history, so changing it would
+     misscale them all. Changing unit = delete the product and recreate it. -->
+<div class="modal" id="modal-edit-product" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Redigera produkt</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-product')">&times;</button>
+        </div>
+        <form id="form-edit-product" onsubmit="handleEditProduct(event)">
+            <input type="hidden" id="edit-product-id">
+            <div class="form-group">
+                <label>Namn *</label>
+                <input type="text" id="edit-product-name" required class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Varumärke</label>
+                <input type="text" id="edit-product-brand" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Kategori</label>
+                <input type="text" id="edit-product-category" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Enhet — kan inte ändras</label>
+                <input type="text" id="edit-product-unit" class="form-input" disabled>
+                <div class="best-link">Alla länkars mängder och hela prishistoriken är uttryckta i
+                    enheten. Fel enhet? Ta bort produkten och skapa om den.</div>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Spara</button>
+                <button type="button" class="btn" onclick="closeModal('modal-edit-product')">Avbryt</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Quick Add Modal — product + link from ONE pasted URL, in two steps.
      Step 1 posts the URL to /quick-add/preview; step 2 renders everything the server
      could infer (store, name, brand, package, price, matching existing products) as
@@ -330,7 +367,7 @@
 <div class="modal" id="modal-edit-packaging" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Redigera förpackning</h3>
+            <h3>Redigera länk</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-edit-packaging')">&times;</button>
         </div>
         <form id="form-edit-packaging" onsubmit="handleEditPackaging(event)">
@@ -352,8 +389,28 @@
                 <input type="text" id="edit-store-label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
+            <!-- Cadence for an EXISTING link — the gap that made "move my links to Monday"
+                 impossible from the UI. Saving a changed cadence reschedules next_check_at
+                 server-side (PUT /frequency), so it is only sent when actually changed. -->
+            <div class="form-group">
+                <label>Kontrolldag</label>
+                <select id="edit-weekday" class="form-input" onchange="editWeekdayChanged()">
+                    <option value="">Ingen fast dag — kontrollera per intervall</option>
+                    <option value="0">Måndag — nya veckoerbjudanden</option>
+                    <option value="1">Tisdag</option>
+                    <option value="2">Onsdag</option>
+                    <option value="3">Torsdag</option>
+                    <option value="4">Fredag — helgerbjudanden</option>
+                    <option value="5">Lördag</option>
+                    <option value="6">Söndag</option>
+                </select>
+            </div>
+            <div class="form-group" id="edit-frequency-group">
+                <label>Kontrollfrekvens (timmar)</label>
+                <input type="number" id="edit-frequency" value="72" min="72" max="240" class="form-input">
+            </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Spara förpackning</button>
+                <button type="submit" class="btn btn-primary">Spara</button>
                 <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Avbryt</button>
             </div>
         </form>
@@ -756,6 +813,7 @@ function buildProductsTable(products) {
                 <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
                 <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
+                <button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>
                 <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Ta bort</button>
             </td>
         </tr>`;
@@ -944,6 +1002,41 @@ async function handleCreateProduct(e) {
         showToast('Produkt skapad');
         loadProducts();
         loadStats();
+    } catch (err) {
+        showToast('Fel: ' + err.message, 'error');
+    }
+}
+
+function showEditProductModal(id) {
+    const p = (allProducts || []).find(x => x.id === id);
+    if (!p) return;
+    document.getElementById('edit-product-id').value = id;
+    document.getElementById('edit-product-name').value = p.name || '';
+    document.getElementById('edit-product-brand').value = p.brand || '';
+    document.getElementById('edit-product-category').value = p.category || '';
+    document.getElementById('edit-product-unit').value = p.unit || '— ingen —';
+    document.getElementById('modal-edit-product').style.display = 'flex';
+}
+
+async function handleEditProduct(e) {
+    e.preventDefault();
+    const id = document.getElementById('edit-product-id').value;
+    const name = document.getElementById('edit-product-name').value.trim();
+    if (!name) {
+        showToast('Ange ett produktnamn', 'error');
+        return;
+    }
+    const body = {
+        name: name,
+        // '' is sent as-is: the server treats empty string as "clear the field".
+        brand: document.getElementById('edit-product-brand').value.trim(),
+        category: document.getElementById('edit-product-category').value.trim()
+    };
+    try {
+        await apiPut('/products/' + id, body);
+        closeModal('modal-edit-product');
+        showToast('Produkt sparad');
+        loadProducts();
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
     }
@@ -1520,9 +1613,10 @@ function buildLinksTable(rows, unit) {
             <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
             <td>${unitCell}</td>
             <td class="store-says">${r.store_unit_price_sek != null ? escapeHtml(r.store_unit_price_sek) + ' kr' : '&#8212;'}</td>
-            <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}</td>
+            <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}
+                <div class="best-link">${escapeHtml(cadenceLabel(r))}</div></td>
             <td>
-                <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Förpackning</button>
+                <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Redigera</button>
                 <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Kontrollera nu</button>
                 <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Avlänka</button>
             </td>
@@ -1530,6 +1624,16 @@ function buildLinksTable(rows, unit) {
     }
     html += '</tbody></table></div>';
     return html;
+}
+
+// Visible answer to "checks this link on the right day?" — the cadence sits under the
+// last-checked date, so a Monday migration can be verified at a glance.
+function cadenceLabel(r) {
+    if (r.check_weekday != null) {
+        const days = ['måndagar', 'tisdagar', 'onsdagar', 'torsdagar', 'fredagar', 'lördagar', 'söndagar'];
+        return days[r.check_weekday] || '';
+    }
+    return r.check_frequency_hours ? 'var ' + r.check_frequency_hours + ':e timme' : '';
 }
 
 // The rows arrive ALREADY ranked cheapest-per-unit (nulls last) from the service — the domain
@@ -1577,7 +1681,18 @@ function showEditPackagingModal(productStoreId) {
     // The RAW label, not store_name: store_name falls back to the chain name, and
     // prefilling that here would turn "no label" into a saved literal "ICA".
     document.getElementById('edit-store-label').value = (link && link.store_label) || '';
+    // == null, not falsy: weekday 0 IS Monday.
+    const wd = link ? link.check_weekday : null;
+    document.getElementById('edit-weekday').value = wd == null ? '' : String(wd);
+    document.getElementById('edit-frequency').value =
+        (link && link.check_frequency_hours) || 72;
+    editWeekdayChanged();
     document.getElementById('modal-edit-packaging').style.display = 'flex';
+}
+
+function editWeekdayChanged() {
+    const fixed = document.getElementById('edit-weekday').value !== '';
+    document.getElementById('edit-frequency-group').style.display = fixed ? 'none' : '';
 }
 
 async function handleEditPackaging(e) {
@@ -1590,10 +1705,26 @@ async function handleEditPackaging(e) {
         // Always sent: '' clears the label back to the chain name (server-side rule).
         store_label: document.getElementById('edit-store-label').value.trim()
     };
+    // Cadence goes through its OWN endpoint, and only when actually changed — the server
+    // reschedules next_check_at on every cadence PUT, so an untouched schedule must not
+    // be re-sent just because the packaging was edited.
+    const link = (productLinks || []).find(l => l.product_store_id === id);
+    const wdRaw = document.getElementById('edit-weekday').value;
+    const newWeekday = wdRaw === '' ? null : parseInt(wdRaw);
+    const newFrequency = parseInt(document.getElementById('edit-frequency').value) || 72;
+    const cadenceChanged = link &&
+        (newWeekday !== (link.check_weekday == null ? null : link.check_weekday)
+         || newFrequency !== link.check_frequency_hours);
     try {
         await apiPut('/product-stores/' + id + '/packaging', body);
+        if (cadenceChanged) {
+            await apiPut('/product-stores/' + id + '/frequency', {
+                check_frequency_hours: newFrequency,
+                check_weekday: newWeekday
+            });
+        }
         closeModal('modal-edit-packaging');
-        showToast('Förpackning sparad');
+        showToast('Länk sparad');
         await reloadProductLinks();
         loadProducts();
     } catch (err) {
@@ -1743,6 +1874,8 @@ document.getElementById('products-table-container').addEventListener('click', (e
     } else if (action === 'history') {
         const product = (allProducts || []).find(p => p.id === id);
         showPriceHistory(id, product ? product.name : '', product ? product.unit : null);
+    } else if (action === 'edit') {
+        showEditProductModal(id);
     } else if (action === 'delete') {
         deleteProduct(id);
     }
