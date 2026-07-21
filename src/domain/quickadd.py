@@ -61,6 +61,11 @@ KNOWN_STORE_LABELS: dict[str, str] = {
     "1004503": "ICA Supermarket Björksätra",
 }
 
+# Butiker whose assortments overlap enough that a product added at one is (almost always)
+# also sold at the others — quick-add offers to create the sibling links in the same
+# confirm. Groups, not pairs, so a third butik is one edit here.
+SIBLING_STORE_GROUPS: tuple[frozenset[str], ...] = (frozenset({"1003396", "1004503"}),)
+
 
 class StoreLike(Protocol):
     """The two Store columns quick-add matching needs."""
@@ -169,6 +174,40 @@ def suggest_store_label(url: str, store_name: str) -> str | None:
         return None
     store_id = match.group(1)
     return KNOWN_STORE_LABELS.get(store_id, f"{store_name} {store_id}")
+
+
+@dataclass
+class SiblingLink:
+    """A sister-butik link quick-add can create alongside the pasted one."""
+
+    url: str
+    store_label: str | None
+
+
+def suggest_sibling_links(url: str, store_name: str) -> list[SiblingLink]:
+    """The same product's URL at the OTHER butiker in the pasted butik's sibling group.
+
+    On handlaprivatkund.ica.se the product slug and id are chain-wide and only the
+    /stores/<id>/ segment is butik-specific — verified live 2026-07-21 by fetching swapped
+    URLs (same product node, different price: 13.20 kr at Maxi vs 12.25 kr at Björksätra
+    for the same potatissallad). A swap can still miss (assortment differs per butik), so
+    the caller must treat these as CANDIDATES and verify each with a real fetch before
+    keeping the link.
+    """
+    match = _STORE_SEGMENT_RE.search(url)
+    if not match:
+        return []
+    store_id = match.group(1)
+    for group in SIBLING_STORE_GROUPS:
+        if store_id in group:
+            return [
+                SiblingLink(
+                    url=url.replace(f"/stores/{store_id}/", f"/stores/{other}/", 1),
+                    store_label=KNOWN_STORE_LABELS.get(other, f"{store_name} {other}"),
+                )
+                for other in sorted(group - {store_id})
+            ]
+    return []
 
 
 def suggest_existing_products(

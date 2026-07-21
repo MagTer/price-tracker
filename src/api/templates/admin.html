@@ -141,6 +141,15 @@
                 <input type="text" id="qa-store-label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
+            <!-- Sister-butik links (same product, /stores/<id>/ swapped). Pre-checked but
+                 visible — each accepted sibling is verified by fetch on the server and
+                 dropped again if the product is not carried at that butik. -->
+            <div class="form-group" id="qa-sibling-row" style="display:none;">
+                <label>
+                    <input type="checkbox" id="qa-add-siblings" checked>
+                    <span id="qa-sibling-text"></span>
+                </label>
+            </div>
             <div class="form-group">
                 <label>Produkt *</label>
                 <select id="qa-product-select" class="form-input" onchange="qaProductChoiceChanged()"></select>
@@ -999,6 +1008,17 @@ async function handleQuickAddPreview(e) {
 function qaRenderPreview(p) {
     document.getElementById('qa-store-name').value = p.store.name;
     document.getElementById('qa-store-label').value = p.suggested_store_label || '';
+    // Sister butiker not already tracked get a pre-checked opt-out row.
+    const sibs = (p.sibling_links || []).filter(s => !s.already_tracked);
+    const sibRow = document.getElementById('qa-sibling-row');
+    if (sibs.length) {
+        document.getElementById('qa-sibling-text').textContent =
+            'Lägg också till: ' + sibs.map(s => s.store_label || s.url).join(', ');
+        document.getElementById('qa-add-siblings').checked = true;
+        sibRow.style.display = '';
+    } else {
+        sibRow.style.display = 'none';
+    }
     const select = document.getElementById('qa-product-select');
     const options = ['<option value="">Ny produkt' + (p.name ? ': ' + escapeHtml(p.name) : '') + '</option>'];
     for (const s of (p.existing_products || [])) {
@@ -1070,7 +1090,9 @@ async function handleQuickAddConfirm(e) {
         check_frequency_hours: parseInt(document.getElementById('qa-frequency').value) || 72,
         package_size: document.getElementById('qa-pkg-label').value.trim() || null,
         package_quantity: pkgQuantity('qa'),
-        run_first_check: true
+        run_first_check: true,
+        add_siblings: document.getElementById('qa-sibling-row').style.display !== 'none'
+            && document.getElementById('qa-add-siblings').checked
     };
     const btn = document.getElementById('qa-confirm-btn');
     btn.disabled = true;
@@ -1082,6 +1104,19 @@ async function handleQuickAddConfirm(e) {
             msg = 'Tillagd — pris just nu ' + formatSek(res.check.price_sek) + ' kr';
         } else if (res.check) {
             msg = 'Tillagd — priset kunde inte hämtas nu, schemaläggaren försöker igen';
+        }
+        for (const s of (res.sibling_links || [])) {
+            const label = s.store_label || 'syskonbutiken';
+            if (s.status === 'created') {
+                msg += ' · ' + label + (s.check && s.check.success
+                    ? ': ' + formatSek(s.check.price_sek) + ' kr' : ': tillagd');
+            } else if (s.status === 'already_tracked') {
+                msg += ' · ' + label + ': bevakades redan';
+            } else if (s.status === 'removed_not_found') {
+                msg += ' · ' + label + ': sidan hittades inte — ej tillagd';
+            } else {
+                msg += ' · ' + label + ': kunde inte läggas till';
+            }
         }
         showToast(msg);
         closeModal('modal-quick-add');

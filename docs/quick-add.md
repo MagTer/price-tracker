@@ -22,6 +22,7 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 |---|---|---|
 | Store | Hostname match against the 5 seeded `Store.base_url` values | Never |
 | Butik label (v0.6.0) | The URL's `/stores/<id>/` segment — ICA prices per physical butik. Known ids (`quickadd.KNOWN_STORE_LABELS`) map to names ("ICA Maxi Sandviken"); unknown ids fall back to "ICA \<id\>"; no segment → no label (nationally priced chains) | Never |
+| Sister-butik links (v0.7.0) | Butiker in the same `quickadd.SIBLING_STORE_GROUPS` group: the sibling URL is the pasted URL with `/stores/<id>/` swapped (product slug + id are chain-wide on handlaprivatkund.ica.se — verified live 2026-07-21: same potatissallad, 13.20 kr at Maxi vs 12.25 kr at Björksätra). Offered as a pre-checked opt-out in the confirm step | Never |
 | Name, brand | schema.org JSON-LD `Product` node in the page (`JsonLdExtractor.extract_product_metadata`) | No — exact and free on ICA/Apotea/Med24/DOZ |
 | Price (display only) | Same JSON-LD offer | No |
 | Package (amount/unit/label) | Regex over the product title: `500 ml`, `24-pack`, `8 rullar` … (`quickadd.parse_package_from_name`) | No |
@@ -67,6 +68,14 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
    `perform_price_check` after confirm — quick-add cannot introduce a second price
    authority.
 
+7. **A sibling link is a candidate, not a fact (v0.7.0).** The `/stores/<id>/` swap almost
+   always resolves to the same product at the sister butik, but assortments differ — so
+   each accepted sibling runs its own first check, and a link whose page cannot be fetched
+   is **removed again** (`removed_not_found`) rather than left to fail on every scheduler
+   tick. `no_price` keeps the link: the page exists, extraction retries like any link.
+   The primary link is the task; sibling outcomes (`created` / `already_tracked` /
+   `removed_not_found` / `error`) are reported per entry and never fail the request.
+
 ## Failure modes
 
 | Situation | Behavior |
@@ -86,7 +95,9 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 - **New ICA butik:** add its `/stores/<id>/` id to `quickadd.KNOWN_STORE_LABELS` for a
   friendly label suggestion — unknown ids already work, they just suggest "ICA \<id\>".
   The saved label lives on the LINK (`ProductStore.store_label`) and is editable in the
-  Förpackning dialog; see `domain.models.link_store_name` for the display rule.
+  Förpackning dialog; see `domain.models.link_store_name` for the display rule. To have
+  quick-add auto-offer its link too, add the id to the group in
+  `quickadd.SIBLING_STORE_GROUPS` (groups, not pairs — a third butik is one edit).
 - **Better title parsing:** extend the regexes in `quickadd.parse_package_from_name`
   (currently `ml|kg|l|g|st` amounts and `pack|st|rullar|tabletter|kapslar|påsar` counts).
 - **MCP:** quick-add is deliberately UI-only for now. If the agent platform should add

@@ -6,9 +6,9 @@ current_phase: 04.1
 current_phase_name: Package data moves to the store link
 status: executing
 stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
-last_updated: "2026-07-20T12:00:00.000Z"
-last_activity: 2026-07-20
-last_activity_desc: "v0.5.0 quick-add (one pasted URL → product+link+first check, docs/quick-add.md) and v0.6.0 store_label: per-link butik display name for ICA's per-butik pricing (Maxi Sandviken 1003396 / Supermarket Björksätra 1004503). First REAL additive migration 0002_store_label after the in-place 0001. link_store_name is the single display rule across UI/email/MCP. Suite: 303+12. Both non-GSD at Magnus's request; deploy bump in home-server pending."
+last_updated: "2026-07-21T00:00:00.000Z"
+last_activity: 2026-07-21
+last_activity_desc: "v0.5.0 quick-add, v0.6.0 store_label (per-butik display names, migration 0002), v0.7.0 sibling links: quick-add auto-offers the sister ICA butik's link (URL /stores/<id>/ swap, verified live — chain-wide product ids; 13.20 vs 12.25 kr for same product proved per-butik pricing). Siblings verified by first fetch, removed if unreachable. SIBLING_STORE_GROUPS in quickadd.py. Suite: 310+12. All non-GSD at Magnus's request; deploy bump in home-server pending (go straight to v0.7.0)."
 progress:
   total_phases: 6
   completed_phases: 5
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-05-04)
 Phase: 04.1 (Package data moves to the store link) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 04.1
-Last activity: 2026-07-20 — v0.5.0 (quick-add from one pasted URL) and v0.6.0 (per-link store_label: ICA prices per physical butik, so two ICA-butik links on one product now carry their own display names — "ICA Maxi Sandviken" / "ICA Supermarket Björksätra" — everywhere a store name renders: links panel, history series, deals, alert/weekly emails, MCP. Migration 0002_store_label, the first real additive revision after the in-place-rewritten 0001). Both direct tasks, GSD bypassed at Magnus's request. Deploy bump in home-server pending.
+Last activity: 2026-07-21 — v0.7.0 sibling links on top of v0.5.0 (quick-add) and v0.6.0 (store_label): quick-adding an ICA product from one butik now offers a pre-checked "lägg också till" for the sister butik (Maxi Sandviken ↔ Supermarket Björksätra), creating a second link on the same product with the swapped /stores/<id>/ URL, its own label, and its own first price check — removed again if the page is unreachable. URL-swap hypothesis verified live before building. All direct tasks, GSD bypassed at Magnus's request. Deploy bump in home-server pending (go straight to v0.7.0).
 
 Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
 

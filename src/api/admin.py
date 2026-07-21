@@ -43,6 +43,7 @@ from domain.quickadd import (
     match_store_by_url,
     parse_package_from_name,
     suggest_existing_products,
+    suggest_sibling_links,
     suggest_store_label,
 )
 from domain.service import PriceTrackerService, perform_price_check
@@ -523,6 +524,24 @@ async def quick_add_preview(
         ]
         suggestions = suggest_existing_products(name, candidates)
 
+        # Sister-butik candidates (same product page, /stores/<id>/ swapped — verified
+        # live 2026-07-21) — offered as a pre-checked choice in the confirm step; each
+        # accepted sibling is verified by its own first fetch before it is kept.
+        sibling_payload = []
+        for sibling in suggest_sibling_links(url, store.name):
+            tracked = (
+                await session.execute(
+                    select(ProductStore.id).where(ProductStore.store_url == sibling.url)
+                )
+            ).first() is not None
+            sibling_payload.append(
+                {
+                    "url": sibling.url,
+                    "store_label": sibling.store_label,
+                    "already_tracked": tracked,
+                }
+            )
+
         return {
             "url": url,
             "store": {"id": str(store.id), "name": store.name, "slug": store.slug},
@@ -540,6 +559,7 @@ async def quick_add_preview(
             "in_stock": in_stock,
             "source": source,
             "existing_products": suggestions,
+            "sibling_links": sibling_payload,
         }
     except HTTPException:
         raise
@@ -660,11 +680,22 @@ async def quick_add(
         if data.run_first_check:
             check = await _run_first_check(session, product_store.id)
 
+        sibling_links: list[dict[str, Any]] = []
+        if data.add_siblings:
+            sibling_links = await _add_sibling_links(
+                session=session,
+                service=service,
+                product_id=product_id,
+                data=data,
+                url=url,
+            )
+
         return {
             "product_id": product_id,
             "product_store_id": str(product_store.id),
             "created_product": created_product,
             "check": check,
+            "sibling_links": sibling_links,
             "message": "Produkt och länk skapade",
         }
     except HTTPException:
@@ -672,6 +703,85 @@ async def quick_add(
     except Exception as e:
         LOGGER.exception("Quick-add failed for %s", sanitize_log(url))
         raise HTTPException(status_code=500, detail="Quick-add failed") from e
+
+
+async def _add_sibling_links(
+    *,
+    session: AsyncSession,
+    service: PriceTrackerService,
+    product_id: str,
+    data: QuickAddCreate,
+    url: str,
+) -> list[dict[str, Any]]:
+    """Create the sister-butik links for a just-confirmed quick-add (best-effort).
+
+    A sibling is a CANDIDATE, not a fact: the URL swap almost always holds (chain-wide
+    product ids, verified live), but the assortment may differ per butik. So each created
+    sibling is verified by its own first check, and a link whose page cannot be fetched is
+    removed again — a dead link would otherwise fail on every scheduler tick forever.
+    ``no_price`` keeps the link (the page exists; extraction gets retried like any link).
+
+    Never raises: the primary link is the task, siblings report their own outcome —
+    ``created`` / ``already_tracked`` / ``removed_not_found`` / ``error`` per entry.
+    """
+    store_name_row = (
+        await session.execute(select(Store.name).where(Store.id == uuid.UUID(data.store_id)))
+    ).first()
+    store_name = store_name_row[0] if store_name_row else ""
+    package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
+
+    results: list[dict[str, Any]] = []
+    for sibling in suggest_sibling_links(url, store_name):
+        entry: dict[str, Any] = {"url": sibling.url, "store_label": sibling.store_label}
+        try:
+            dup = (
+                await session.execute(
+                    select(ProductStore.id).where(ProductStore.store_url == sibling.url)
+                )
+            ).first()
+            if dup is not None:
+                entry["status"] = "already_tracked"
+                results.append(entry)
+                continue
+
+            # Same product, same listing — the sibling inherits the primary's package
+            # and cadence; only URL and butik label differ.
+            product_store = await service.link_product_store(
+                product_id=product_id,
+                store_id=data.store_id,
+                store_url=sibling.url,
+                check_frequency_hours=data.check_frequency_hours,
+                check_weekday=data.check_weekday,
+                package_size=data.package_size,
+                package_quantity=package_qty,
+                store_label=sibling.store_label,
+            )
+            entry["product_store_id"] = str(product_store.id)
+            entry["status"] = "created"
+
+            if data.run_first_check:
+                check = await _run_first_check(session, product_store.id)
+                entry["check"] = check
+                if not check.get("success") and check.get("reason") == "fetch_failed":
+                    await _remove_link(session, product_store.id)
+                    entry["status"] = "removed_not_found"
+        except IntegrityError:
+            entry["status"] = "already_tracked"
+        except Exception:
+            LOGGER.exception("Sibling link creation failed for %s", sanitize_log(sibling.url))
+            entry["status"] = "error"
+        results.append(entry)
+    return results
+
+
+async def _remove_link(session: AsyncSession, product_store_id: uuid.UUID) -> None:
+    """Delete a just-created link again (failed sibling verification)."""
+    link = (
+        await session.execute(select(ProductStore).where(ProductStore.id == product_store_id))
+    ).scalar_one_or_none()
+    if link is not None:
+        await session.delete(link)
+        await session.commit()
 
 
 async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -> dict[str, Any]:

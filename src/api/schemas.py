@@ -102,6 +102,10 @@ class QuickAddCreate(BaseModel):
     package_quantity: float | None = None
     store_label: str | None = None  # per-link store display name ("ICA Maxi Sandviken")
     run_first_check: bool = True  # fetch the first price (and D-07 autofill) immediately
+    # Also create the link(s) for the pasted butik's sibling stores (SIBLING_STORE_GROUPS),
+    # derived server-side from `url`. Each sibling is verified by its own first check and
+    # removed again if its page cannot be fetched — a candidate, not a blind write.
+    add_siblings: bool = False
 
 
 class PriceWatchCreate(BaseModel):

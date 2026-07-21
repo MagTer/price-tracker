@@ -212,6 +212,7 @@ class TestQuickAddSuggestsLabel:
             _result(scalars_all=[_store()]),
             _result(first=None),
             _result(scalars_all=[]),
+            _result(first=None),  # sibling-link dup check
         ]
         fetcher = MagicMock()
         fetcher.fetch = AsyncMock(
@@ -220,7 +221,16 @@ class TestQuickAddSuggestsLabel:
         with patch("api.admin.get_fetcher", return_value=fetcher):
             r = client.post("/quick-add/preview", json={"url": ICA_MAXI_URL})
         assert r.status_code == 200
-        assert r.json()["suggested_store_label"] == "ICA Maxi Sandviken"
+        body = r.json()
+        assert body["suggested_store_label"] == "ICA Maxi Sandviken"
+        # The sister butik surfaced as a candidate: same URL, /stores/<id>/ swapped.
+        assert body["sibling_links"] == [
+            {
+                "url": ICA_MAXI_URL.replace("/stores/1003396/", "/stores/1004503/"),
+                "store_label": "ICA Supermarket Björksätra",
+                "already_tracked": False,
+            }
+        ]
 
     def test_confirm_passes_the_label_to_the_service(self, client, mock_session, mock_service):
         mock_session.execute.return_value = _result(first=None)
@@ -239,6 +249,151 @@ class TestQuickAddSuggestsLabel:
         assert r.status_code == 201
         kwargs = mock_service.link_product_store.await_args.kwargs
         assert kwargs["store_label"] == "ICA Supermarket Björksätra"
+
+
+class TestSuggestSiblingLinks:
+    def test_maxi_url_yields_bjorksatra_candidate(self):
+        from domain.quickadd import suggest_sibling_links
+
+        sibs = suggest_sibling_links(ICA_MAXI_URL, "ICA")
+        assert len(sibs) == 1
+        assert sibs[0].url == ICA_MAXI_URL.replace("/stores/1003396/", "/stores/1004503/")
+        assert sibs[0].store_label == "ICA Supermarket Björksätra"
+
+    def test_symmetric_the_other_way(self):
+        from domain.quickadd import suggest_sibling_links
+
+        sibs = suggest_sibling_links(ICA_BJORKSATRA_URL, "ICA")
+        assert [s.store_label for s in sibs] == ["ICA Maxi Sandviken"]
+        assert "/stores/1003396/" in sibs[0].url
+
+    def test_butik_outside_any_group_has_no_siblings(self):
+        from domain.quickadd import suggest_sibling_links
+
+        url = "https://handlaprivatkund.ica.se/stores/9999999/products/x/1"
+        assert suggest_sibling_links(url, "ICA") == []
+
+    def test_url_without_store_segment_has_no_siblings(self):
+        from domain.quickadd import suggest_sibling_links
+
+        assert suggest_sibling_links("https://www.willys.se/produkt/x-1_ST", "Willys") == []
+
+
+class TestSiblingLinkCreation:
+    STORE_ID = str(uuid.uuid4())
+
+    def _confirm(self, client, **overrides):
+        body = {
+            "url": ICA_MAXI_URL,
+            "store_id": self.STORE_ID,
+            "name": "Potatissallad 200g ICA",
+            "unit": "kg",
+            "package_quantity": 0.2,
+            "store_label": "ICA Maxi Sandviken",
+            "add_siblings": True,
+            "run_first_check": False,
+        }
+        body.update(overrides)
+        return client.post("/quick-add", json=body)
+
+    def test_sibling_link_is_created_on_the_same_product(self, client, mock_session, mock_service):
+        mock_session.execute.side_effect = [
+            _result(first=None),  # primary dup check
+            _result(first=("ICA",)),  # store-name lookup for the label fallback
+            _result(first=None),  # sibling dup check
+        ]
+        r = self._confirm(client)
+        assert r.status_code == 201
+
+        assert mock_service.link_product_store.await_count == 2
+        primary_kwargs = mock_service.link_product_store.await_args_list[0].kwargs
+        sibling_kwargs = mock_service.link_product_store.await_args_list[1].kwargs
+        # Same product, same store row, same package — only URL and butik label differ.
+        assert sibling_kwargs["product_id"] == primary_kwargs["product_id"]
+        assert sibling_kwargs["store_id"] == self.STORE_ID
+        assert sibling_kwargs["store_url"] == ICA_MAXI_URL.replace(
+            "/stores/1003396/", "/stores/1004503/"
+        )
+        assert sibling_kwargs["store_label"] == "ICA Supermarket Björksätra"
+        assert sibling_kwargs["package_quantity"] == Decimal("0.2")
+
+        siblings = r.json()["sibling_links"]
+        assert len(siblings) == 1 and siblings[0]["status"] == "created"
+
+    def test_already_tracked_sibling_is_skipped(self, client, mock_session, mock_service):
+        mock_session.execute.side_effect = [
+            _result(first=None),  # primary dup check
+            _result(first=("ICA",)),  # store-name lookup
+            _result(first=(uuid.uuid4(),)),  # sibling dup check: already tracked
+        ]
+        r = self._confirm(client)
+        assert r.status_code == 201
+        assert mock_service.link_product_store.await_count == 1  # primary only
+        assert r.json()["sibling_links"][0]["status"] == "already_tracked"
+
+    def test_unfetchable_sibling_is_removed_again(self, client, mock_session, mock_service):
+        """The URL swap is a candidate: a butik that does not carry the product must not
+        leave a dead link behind to fail on every scheduler tick."""
+        from domain.result import PriceExtractionResult
+
+        store = _store()
+        product = Product(id=uuid.uuid4(), tenant_id=uuid.uuid4(), name="Potatissallad", unit="kg")
+        sibling_url = ICA_MAXI_URL.replace("/stores/1003396/", "/stores/1004503/")
+        link_primary = _link(store, label="ICA Maxi Sandviken")
+        link_sibling = _link(store, label="ICA Supermarket Björksätra", url=sibling_url)
+
+        def row(link):
+            m = MagicMock()
+            m.one_or_none.return_value = (link, store, product)
+            return m
+
+        remove_load = MagicMock()
+        remove_load.scalar_one_or_none.return_value = link_sibling
+        mock_session.execute.side_effect = [
+            _result(first=None),  # primary dup check
+            row(link_primary),  # primary first-check row
+            _result(first=("ICA",)),  # store-name lookup
+            _result(first=None),  # sibling dup check
+            row(link_sibling),  # sibling first-check row
+            remove_load,  # _remove_link load
+        ]
+
+        two_links = [MagicMock(id=link_primary.id), MagicMock(id=link_sibling.id)]
+        mock_service.link_product_store = AsyncMock(side_effect=two_links)
+
+        extraction = PriceExtractionResult(
+            price_sek=Decimal("13.20"),
+            store_unit_price_sek=None,
+            offer_price_sek=None,
+            offer_type=None,
+            offer_details=None,
+            in_stock=True,
+            confidence=0.95,
+            pack_size=None,
+            package_amount=None,
+            package_unit=None,
+            raw_response={"source": "llm"},
+        )
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(
+            side_effect=lambda url: {"ok": True, "text": "page", "html": ""}
+            if url == ICA_MAXI_URL
+            else {"ok": False, "text": "", "html": "", "error": "404 Not Found"}
+        )
+        parser = MagicMock()
+        parser.extract_price = AsyncMock(return_value=extraction)
+
+        with (
+            patch("api.admin.get_fetcher", return_value=fetcher),
+            patch("api.admin.PriceParser", return_value=parser),
+        ):
+            r = self._confirm(client, run_first_check=True)
+
+        assert r.status_code == 201
+        body = r.json()
+        assert body["check"]["success"] is True  # the primary got its Maxi price
+        assert body["sibling_links"][0]["status"] == "removed_not_found"
+        mock_session.delete.assert_called_once_with(link_sibling)
 
 
 class TestHistorySeriesAreDistinguishable:
