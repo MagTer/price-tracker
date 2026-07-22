@@ -10,6 +10,7 @@ def get_store_hints() -> dict[str, str]:
         "med24": MED24_HINTS,
         "doz": DOZ_HINTS,
         "kronans": KRONANS_HINTS,
+        "apohem": APOHEM_HINTS,
     }
 
 
@@ -53,6 +54,17 @@ Med24 (pharmacy) uses these patterns:
 - "Lagerstatus" indicates availability
 - "Ordinarie pris" for regular price
 - Campaign prices often in larger font
+"""
+
+APOHEM_HINTS = """
+Apohem (pharmacy) uses these patterns:
+- Price shown as "X kr"
+- "Nice Price" label marks discounted/competitive prices (the current price)
+- "Ordinarie pris" for regular price when discounted
+- "Finns i lager" for in stock, with delivery estimate ("hos dig inom 1-2 vardagar")
+- "Forpackningsstorlek" shows package size (e.g. "132 st")
+- Discount codes advertised in banners (e.g. "Anvand kod: X for 10% rabatt") - ignore these
+- Prescription items marked "Receptbelagt"
 """
 
 KRONANS_HINTS = """

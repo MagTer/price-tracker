@@ -305,6 +305,25 @@ class TestJsonLdExtractor:
         assert result is not None
         assert result.price_sek == Decimal("133")
 
+    def test_offer_list_with_price_specification(self) -> None:
+        """Apohem shape (verified 2026-07-22): offers is a LIST of Offer dicts, string
+        price, ord.pris relegated to a ListPrice priceSpecification we deliberately
+        ignore."""
+        html = _wrap_ldjson(
+            '{"@context":"http://schema.org/","@type":"Product",'
+            '"name":"Elexir Pharma Omega-3 Forte 1000 mg 132 kapslar",'
+            '"brand":{"type":"Thing","name":"Elexir Pharma"},'
+            '"offers":[{"type":"Offer","availability":"http://schema.org/InStock",'
+            '"price":"97","priceCurrency":"SEK",'
+            '"priceSpecification":{"type":"UnitPriceSpecification",'
+            '"priceType":"http://schema.org/ListPrice","price":"129",'
+            '"priceCurrency":"SEK"}}]}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("97")
+        assert result.in_stock is True
+
     def test_top_level_list_of_typed_objects(self) -> None:
         """Kronans Apotek shape (verified 2026-07-22): one block holding a LIST of typed
         objects, Product first, campaign price in offers.price with the ord.pris relegated

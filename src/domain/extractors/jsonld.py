@@ -3,7 +3,7 @@
 Swedish e-commerce sites embed schema.org Product data in server-rendered
 ``<script type="application/ld+json">`` blocks (verified 2026-07-13 against
 live product pages: ICA handlaprivatkund, Apotea, Med24, DOZ Apotek;
-2026-07-22: Kronans Apotek).
+2026-07-22: Kronans Apotek, Apohem).
 Parsing that is exact and free, and reuses the page fetch the pipeline
 already made — so it sits between the store-API extractors and the LLM
 cascade in ``PriceParser.extract_price``.
@@ -12,6 +12,7 @@ Shapes handled (all observed in the wild):
 - top-level ``Product`` object (ICA, Apotea)
 - ``ItemPage``/``WebPage`` wrapper with ``mainEntity: Product`` (DOZ)
 - lists of typed objects and ``@graph`` arrays (Med24, Kronans Apotek)
+- ``offers`` as a list of Offer dicts (Apohem)
 - ``price`` as JSON number or string, with either dot or comma decimals
 """
 

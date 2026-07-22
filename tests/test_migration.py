@@ -115,9 +115,9 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
 
 
 async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
-    """The 0001 seed survived the in-place rewrite, and 0003 added Kronans."""
+    """The 0001 seed survived the in-place rewrite; 0003/0004 added Kronans and Apohem."""
     slugs = (await db_session.execute(select(Store.slug).order_by(Store.slug))).scalars().all()
-    assert list(slugs) == ["apotea", "doz", "ica", "kronans", "med24", "willys"]
+    assert list(slugs) == ["apohem", "apotea", "doz", "ica", "kronans", "med24", "willys"]
 
 
 def test_alembic_check_reports_no_drift(alembic_env) -> None:
