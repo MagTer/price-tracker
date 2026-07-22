@@ -1,7 +1,7 @@
 # price-tracker
 
 Standalone Swedish grocery and pharmacy price tracker. Tracks prices at **ICA,
-Willys, Apotea, Med24 and Doz**, records price history, and alerts on drops via
+Willys, Apotea, Med24, Doz and Kronans Apotek**, records price history, and alerts on drops via
 email. It is single-user (Magnus only) and was extracted from the
 `ai-agent-platform` monolith; it exposes its capabilities back to the agent
 platform through an MCP server.
@@ -73,7 +73,7 @@ everything a second deployment needs.
    or build your own from the Dockerfile.
 2. **Database:** point `DATABASE_URL` at an empty Postgres 16 database. The container's
    start command runs `alembic upgrade head`, which creates the schema and seeds the five
-   supported stores (ICA, Willys, Apotea, Med24, Doz).
+   supported stores (ICA, Willys, Apotea, Med24, Doz, Kronans Apotek).
 3. **Auth:** the app does NOT do login itself. It trusts the `X-Auth-Request-Email`
    header from your reverse proxy (any forward-auth setup works — oauth2-proxy, Authelia,
    Cloudflare Access…) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:

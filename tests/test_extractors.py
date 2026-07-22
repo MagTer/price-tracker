@@ -305,6 +305,26 @@ class TestJsonLdExtractor:
         assert result is not None
         assert result.price_sek == Decimal("133")
 
+    def test_top_level_list_of_typed_objects(self) -> None:
+        """Kronans Apotek shape (verified 2026-07-22): one block holding a LIST of typed
+        objects, Product first, campaign price in offers.price with the ord.pris relegated
+        to a StrikethroughPrice priceSpecification we deliberately ignore."""
+        html = _wrap_ldjson(
+            '[{"@context":"https://schema.org","@type":"Product","@id":"#product",'
+            '"name":"Elexir Pharma Omega-3 forte Kapslar 132 st",'
+            '"brand":{"@type":"Brand","name":"Elexir Pharma"},'
+            '"offers":{"@type":"Offer","price":102.75,"priceCurrency":"SEK",'
+            '"priceSpecification":[{"@type":"UnitPriceSpecification",'
+            '"priceType":"https://schema.org/StrikethroughPrice","price":137,'
+            '"priceCurrency":"SEK"}],'
+            '"availability":"https://schema.org/InStock"}},'
+            '{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[]}]'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("102.75")
+        assert result.in_stock is True
+
     def test_product_among_multiple_blocks(self) -> None:
         """Med24 shape: Product after non-Product blocks."""
         html = (
