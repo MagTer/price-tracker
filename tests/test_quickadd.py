@@ -23,7 +23,6 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
-    suggest_check_weekday,
     suggest_existing_products,
 )
 
@@ -154,26 +153,6 @@ _JSONLD_HTML = """<html><head><script type="application/ld+json">
 </script></head><body>x</body></html>"""
 
 
-class TestSuggestCheckWeekday:
-    """Chains with a fixed weekly offer day get Monday suggested — one check/week."""
-
-    def test_ica_and_willys_suggest_monday(self):
-        assert suggest_check_weekday("ica") == 0
-        assert suggest_check_weekday("willys") == 0
-
-    def test_slug_is_case_insensitive(self):
-        assert suggest_check_weekday("WILLYS") == 0
-
-    def test_chains_without_offer_day_suggest_nothing(self):
-        assert suggest_check_weekday("apotea") is None
-        assert suggest_check_weekday("med24") is None
-        assert suggest_check_weekday("doz") is None
-
-    def test_none_and_empty_slug(self):
-        assert suggest_check_weekday(None) is None
-        assert suggest_check_weekday("") is None
-
-
 class TestButikConfigLoaders:
     """Env-driven butik config (QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS): another
     instance shops at other stores, so the ids are operator data. Malformed JSON must fall
@@ -286,13 +265,17 @@ class TestJsonLdMetadata:
 TENANT_STORE_ID = uuid.uuid4()
 
 
-def _store(slug="apotea", base_url="https://www.apotea.se"):
+def _store(slug="apotea", base_url="https://www.apotea.se", check_weekdays=None):
+    # Schedule fields set explicitly: ORM defaults apply at flush, and these Store
+    # objects never touch a session — unset they would be None, not the DB's 72.
     return Store(
         id=TENANT_STORE_ID,
         name=slug.capitalize(),
         slug=slug,
         store_type="pharmacy",
         base_url=base_url,
+        check_weekdays=check_weekdays,
+        check_frequency_hours=72,
         is_active=True,
     )
 
@@ -412,8 +395,9 @@ class TestQuickAddPreview:
         assert [s["id"] for s in body["existing_products"]] == [str(existing.id)]
         # JSON-LD sufficed — the LLM fallback must not have been consulted.
         parser.extract_product_metadata.assert_not_called()
-        # Apotea has no fixed offer day — no weekday suggested.
-        assert body["suggested_check_weekday"] is None
+        # Apotea has no offer cycle — the store schedule (which the link INHERITS)
+        # is interval mode; the preview reports it for the confirm step's info line.
+        assert body["store_schedule"] == {"weekdays": [], "frequency_hours": 72}
 
     def test_fetch_failure_is_502(self, client, mock_session):
         mock_session.execute.side_effect = [
@@ -432,7 +416,15 @@ class TestQuickAddPreview:
         from domain.result import ProductMetadata
 
         mock_session.execute.side_effect = [
-            _result(scalars_all=[_store(slug="willys", base_url="https://www.willys.se")]),
+            _result(
+                scalars_all=[
+                    _store(
+                        slug="willys",
+                        base_url="https://www.willys.se",
+                        check_weekdays=[0, 4],
+                    )
+                ]
+            ),
             _result(first=None),
             _result(scalars_all=[]),
         ]
@@ -468,8 +460,9 @@ class TestQuickAddPreview:
         assert body["suggested_unit"] == "kg"
         assert body["package_quantity"] == pytest.approx(0.5)  # 500 g normalized to kg
         assert body["price_sek"] == pytest.approx(29.90)
-        # Willys publishes weekly offers on Mondays — the preview suggests that day.
-        assert body["suggested_check_weekday"] == 0
+        # Willys publishes offers Mondays AND Fridays — the STORE schedule carries the
+        # days; the link inherits them, so the preview only reports, never prefills.
+        assert body["store_schedule"] == {"weekdays": [0, 4], "frequency_hours": 72}
 
 
 class TestQuickAddConfirm:
@@ -501,16 +494,15 @@ class TestQuickAddConfirm:
         assert kwargs["store_url"] == self.URL
         assert kwargs["package_quantity"] == Decimal("24")
 
-    def test_check_weekday_reaches_the_link(self, client, mock_session, mock_service):
+    def test_link_inherits_the_store_schedule(self, client, mock_session, mock_service):
+        """Quick-add sets NO per-link schedule — the link follows its store. The override
+        lives in the link-edit dialog, not in the add flow."""
         mock_session.execute.return_value = _result(first=None)
-        r = self._post(client, check_weekday=0)
+        r = self._post(client)
         assert r.status_code == 201
-        assert mock_service.link_product_store.await_args.kwargs["check_weekday"] == 0
-
-    def test_check_weekday_out_of_range_is_400(self, client, mock_service):
-        r = self._post(client, check_weekday=7)
-        assert r.status_code == 400
-        mock_service.create_product.assert_not_awaited()
+        kwargs = mock_service.link_product_store.await_args.kwargs
+        assert "check_frequency_hours" not in kwargs
+        assert "check_weekdays" not in kwargs
 
     def test_duplicate_url_is_409_and_creates_nothing(self, client, mock_session, mock_service):
         mock_session.execute.return_value = _result(first=(uuid.uuid4(),))
@@ -546,10 +538,6 @@ class TestQuickAddConfirm:
 
     def test_bad_unit_is_rejected(self, client, mock_service):
         r = self._post(client, unit="gram")
-        assert r.status_code == 400
-
-    def test_frequency_bounds_still_apply(self, client, mock_service):
-        r = self._post(client, check_frequency_hours=24)
         assert r.status_code == 400
 
     def test_link_integrity_error_rolls_back_the_created_product(

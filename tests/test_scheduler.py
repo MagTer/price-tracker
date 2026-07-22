@@ -46,8 +46,8 @@ def _make_product_store(
     store_url: str = "https://www.willys.se/produkt/mjolk-100014716_ST",
     store_id: uuid.UUID | None = None,
     product_id: uuid.UUID | None = None,
-    check_weekday: int | None = None,
-    check_frequency_hours: int = 72,
+    check_weekdays: list[int] | None = None,
+    check_frequency_hours: int | None = None,
     package_quantity: Decimal | None = None,
     scraped_package_quantity: Decimal | None = None,
     product_unit: str | None = "st",
@@ -61,7 +61,7 @@ def _make_product_store(
     ps.store_id = store_id or uuid.uuid4()
     ps.product_id = product_id or uuid.uuid4()
     ps.store_url = store_url
-    ps.check_weekday = check_weekday
+    ps.check_weekdays = check_weekdays
     ps.check_frequency_hours = check_frequency_hours
     ps.last_checked_at = None
     ps.next_check_at = None
@@ -76,6 +76,10 @@ def _make_product_store(
     store = MagicMock()
     store.name = "Willys"
     store.slug = store_slug
+    # Real values, not MagicMock attributes: effective_schedule() reads these, and a
+    # truthy MagicMock would silently masquerade as a weekday list.
+    store.check_weekdays = None
+    store.check_frequency_hours = 72
     ps.store = store
 
     return ps
@@ -873,7 +877,7 @@ class TestCheckDueProducts:
         """fetch_failed/no_price on a weekday link -> +24h, not next week."""
         scheduler, session_factory, _ = _make_scheduler()
 
-        ps = _make_product_store(check_weekday=0)
+        ps = _make_product_store(check_weekdays=[0])
         due_result = MagicMock()
         due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
 
@@ -909,7 +913,7 @@ class TestCheckDueProducts:
         """Frequency-based links keep the jittered rescheduling on failure."""
         scheduler, session_factory, _ = _make_scheduler()
 
-        ps = _make_product_store(check_weekday=None, check_frequency_hours=72)
+        ps = _make_product_store(check_weekdays=None, check_frequency_hours=72)
         due_result = MagicMock()
         due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
 
@@ -932,7 +936,7 @@ class TestCheckDueProducts:
         sentinel = datetime(2026, 3, 2, 8, 0, 0)
         with (
             patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
-            patch.object(scheduler, "_compute_next_check", return_value=sentinel) as mock_compute,
+            patch("domain.scheduler.next_check_time", return_value=sentinel) as mock_compute,
         ):
             mock_check.return_value = failed_outcome
             await scheduler._check_due_products()
@@ -946,7 +950,7 @@ class TestCheckDueProducts:
         """Success on a weekday link keeps the next-weekday morning-spread behavior."""
         scheduler, session_factory, _ = _make_scheduler()
 
-        ps = _make_product_store(check_weekday=0)
+        ps = _make_product_store(check_weekdays=[0])
         due_result = MagicMock()
         due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
 
@@ -969,7 +973,7 @@ class TestCheckDueProducts:
         sentinel = datetime(2026, 3, 9, 7, 30, 0)
         with (
             patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
-            patch.object(scheduler, "_compute_next_check", return_value=sentinel) as mock_compute,
+            patch("domain.scheduler.next_check_time", return_value=sentinel) as mock_compute,
         ):
             mock_check.return_value = ok_outcome
             await scheduler._check_due_products()

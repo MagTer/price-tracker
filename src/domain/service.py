@@ -23,6 +23,7 @@ from domain.pricing import (
 )
 from domain.protocols import IFetcher
 from domain.result import PriceExtractionResult
+from domain.schedule import effective_schedule, is_inherited
 
 logger = logging.getLogger(__name__)
 
@@ -407,6 +408,7 @@ class PriceTrackerService:
                 links: list[dict[str, str | float | bool | datetime | None]] = []
                 for product_store, store, price_point in rows:
                     effective = _effective_price(price_point) if price_point else None
+                    eff_weekdays, eff_frequency = effective_schedule(product_store, store)
                     links.append(
                         {
                             "product_store_id": str(product_store.id),
@@ -417,10 +419,18 @@ class PriceTrackerService:
                             "store_label": product_store.store_label,
                             "store_slug": store.slug,
                             "store_url": product_store.store_url,
-                            # Cadence, so the edit dialog can prefill and the row can show
-                            # WHICH day/interval the link checks on.
+                            # Cadence: raw override fields (edit-dialog prefill), the
+                            # EFFECTIVE schedule (what the row displays), and the store's
+                            # own schedule (the dialog's "Butikens standard (…)" label).
                             "check_frequency_hours": product_store.check_frequency_hours,
-                            "check_weekday": product_store.check_weekday,
+                            "check_weekdays": product_store.check_weekdays,
+                            "schedule_inherited": is_inherited(product_store),
+                            "effective_check_weekdays": eff_weekdays,
+                            "effective_check_frequency_hours": eff_frequency,
+                            "store_schedule": {
+                                "weekdays": store.check_weekdays or [],
+                                "frequency_hours": store.check_frequency_hours,
+                            },
                             "package_size": product_store.package_size,
                             "package_quantity": _as_float(product_store.package_quantity),
                             "scraped_package_quantity": _as_float(
@@ -703,8 +713,8 @@ class PriceTrackerService:
         product_id: str,
         store_id: str,
         store_url: str,
-        check_frequency_hours: int = 72,
-        check_weekday: int | None = None,
+        check_frequency_hours: int | None = None,
+        check_weekdays: list[int] | None = None,
         package_size: str | None = None,
         package_quantity: Decimal | None = None,
         store_label: str | None = None,
@@ -715,9 +725,11 @@ class PriceTrackerService:
             product_id: UUID string of the product.
             store_id: UUID string of the store.
             store_url: URL to the product page on the store website.
-            check_frequency_hours: How often to check price (default 72 hours / 3 days).
-            check_weekday: Day of week to check (0=Monday, 6=Sunday). If set,
-                           overrides frequency with weekly checks on that day.
+            check_frequency_hours: Per-link interval override in hours. None (the
+                           normal case) inherits the store's schedule.
+            check_weekdays: Per-link weekday override (0=Monday). None inherits the
+                           store's schedule; setting either override field takes over
+                           wholesale (domain.schedule.effective_schedule).
             package_size: Human display label ("24-pack", "500 ml"). Optional.
             package_quantity: The amount in the package, in the PRODUCT's canonical unit —
                            every kr/unit in the app is computed from this number. Optional:
@@ -740,7 +752,7 @@ class PriceTrackerService:
                 store_id=store_uuid,
                 store_url=store_url,
                 check_frequency_hours=check_frequency_hours,
-                check_weekday=check_weekday,
+                check_weekdays=check_weekdays,
                 package_size=package_size,
                 package_quantity=package_quantity,
                 store_label=store_label,

@@ -126,8 +126,9 @@ def _ps(
             Decimal(scraped_package_quantity) if scraped_package_quantity is not None else None
         ),
         is_active=True,
-        check_frequency_hours=72,
-        check_weekday=None,
+        # Inherit the store schedule — the new normal state for a link.
+        check_frequency_hours=None,
+        check_weekdays=None,
         last_checked_at=None,
     )
 
@@ -276,17 +277,20 @@ class TestAdminDashboard:
         # The page sections themselves exist for the router to toggle.
         assert r.text.count('class="app-page"') == 3
 
-    def test_check_day_is_a_named_weekday_choice(self, client):
-        """Both link forms (manual + quick-add) offer the check day as a Swedish weekday
-        select, not a bare 0-6 number — a weekly check on the chain's offer day is the
-        lightest possible schedule against the stores' sites, so it must be easy to pick."""
+    def test_schedule_is_store_level_and_hidden_from_add_flows(self, client):
+        """The check schedule is a STORE property since v0.13.0: the add flows (quick-add,
+        manual link) carry NO schedule fields — a new link inherits its store's schedule.
+        Only the link-edit dialog offers an override, defaulting to the store standard."""
         r = client.get("/")
-        assert 'id="qa-weekday"' in r.text
-        assert 'name="check_weekday"' in r.text
-        # Three forms carry the select: quick-add, manual link, and the link-edit dialog.
-        assert r.text.count("Måndag — nya veckoerbjudanden") == 3
-        # No raw number input for the weekday anywhere.
-        assert 'type="number" name="check_weekday"' not in r.text
+        # The add flows ask nothing about scheduling.
+        assert 'id="qa-weekday"' not in r.text
+        assert 'name="check_weekday"' not in r.text
+        assert 'name="check_frequency_hours"' not in r.text
+        # The edit dialog's override: store standard by default, weekday checkboxes for
+        # a custom schedule (a LIST — Willys checks Mondays AND Fridays).
+        assert 'id="edit-schedule-mode"' in r.text
+        assert "Butikens standard" in r.text
+        assert 'id="edit-weekdays"' in r.text
 
     def test_product_edit_dialog_exists_with_locked_unit(self, client):
         """Identity fields are editable from the product row; the unit is displayed but
@@ -298,10 +302,11 @@ class TestAdminDashboard:
         assert 'id="edit-product-unit" class="form-input" disabled' in r.text
 
     def test_link_dialog_edits_cadence(self, client):
-        """Existing links' check schedule is editable (PUT /frequency finally has a UI) —
-        without this, moving a link to Monday required delete + recreate."""
+        """Existing links' schedule override is editable (PUT /frequency has a UI):
+        store standard by default, custom weekday checkboxes + interval behind it."""
         r = client.get("/")
-        assert 'id="edit-weekday"' in r.text
+        assert 'id="edit-schedule-mode"' in r.text
+        assert 'id="edit-weekdays"' in r.text
         assert 'id="edit-frequency"' in r.text
         assert "/frequency'" in r.text  # the JS actually calls the endpoint
 
@@ -591,18 +596,59 @@ class TestProductStoreLinkEndpoints:
 
 
 class TestLinkFrequencyEndpoint:
-    def test_update_frequency_by_link_id(self, client, mock_session):
+    """PUT /frequency sets the link's schedule OVERRIDE — or clears it back to inherit."""
+
+    @staticmethod
+    def _link(**kwargs):
+        # MagicMock with REAL schedule values: the endpoint resolves the effective
+        # schedule through domain.schedule, and truthy mock attributes would
+        # masquerade as weekday lists.
         ps = MagicMock()
+        ps.check_weekdays = kwargs.get("check_weekdays")
+        ps.check_frequency_hours = kwargs.get("check_frequency_hours")
+        ps.store.check_weekdays = kwargs.get("store_weekdays")
+        ps.store.check_frequency_hours = kwargs.get("store_frequency", 72)
+        return ps
+
+    def test_update_weekdays_override(self, client, mock_session):
+        ps = self._link()
         _link_row(mock_session, ps)
 
         r = client.put(
             f"/product-stores/{LINK_ID}/frequency",
-            json={"check_frequency_hours": 168, "check_weekday": 2},
+            json={"check_weekdays": [0, 4]},
         )
         assert r.status_code == 200, r.text
         assert r.json()["message"] == "Frequency updated"
+        assert ps.check_weekdays == [0, 4]
+        assert ps.check_frequency_hours is None
+        assert r.json()["next_check_at"] is not None
+
+    def test_update_interval_override(self, client, mock_session):
+        ps = self._link()
+        _link_row(mock_session, ps)
+
+        r = client.put(
+            f"/product-stores/{LINK_ID}/frequency",
+            json={"check_frequency_hours": 168},
+        )
+        assert r.status_code == 200, r.text
         assert ps.check_frequency_hours == 168
-        assert ps.check_weekday == 2
+        assert ps.check_weekdays is None
+
+    def test_both_null_clears_back_to_store_schedule(self, client, mock_session):
+        """The reset path: a link with an override returns to following its store."""
+        ps = self._link(check_weekdays=[2], store_weekdays=[0])
+        _link_row(mock_session, ps)
+
+        r = client.put(
+            f"/product-stores/{LINK_ID}/frequency",
+            json={"check_frequency_hours": None, "check_weekdays": None},
+        )
+        assert r.status_code == 200, r.text
+        assert ps.check_weekdays is None
+        assert ps.check_frequency_hours is None
+        # next_check_at is rescheduled from the STORE's schedule (Mondays here).
         assert r.json()["next_check_at"] is not None
 
     def test_update_frequency_unknown_link_returns_404(self, client, mock_session):
@@ -630,7 +676,7 @@ class TestLinkFrequencyEndpoint:
     def test_update_frequency_rejects_out_of_range_weekday(self, client):
         r = client.put(
             f"/product-stores/{LINK_ID}/frequency",
-            json={"check_frequency_hours": 168, "check_weekday": 9},
+            json={"check_weekdays": [9]},
         )
         assert r.status_code == 400
 

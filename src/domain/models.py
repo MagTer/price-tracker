@@ -39,6 +39,14 @@ class Store(Base):
     store_type: Mapped[str] = mapped_column(String(20))  # grocery, pharmacy, etc.
     base_url: Mapped[str] = mapped_column(String(255))
     parser_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # The chain's DEFAULT check schedule, inherited by every link whose own schedule
+    # fields are NULL (domain.schedule.effective_schedule — the single resolution rule).
+    # Weekdays (0=Mon) are the chain's offer-cycle days: ICA publishes Mondays, Willys
+    # Mondays AND Fridays — hence a list, not a single day. Empty/NULL = interval mode
+    # every check_frequency_hours, morning-aligned. A chain property because politeness
+    # toward the site is a property of the SITE, not of what we track on it.
+    check_weekdays: Mapped[list[int] | None] = mapped_column(JSONB, nullable=True)
+    check_frequency_hours: Mapped[int] = mapped_column(Integer, default=72)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
 
@@ -113,8 +121,12 @@ class ProductStore(Base):
     scraped_package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    check_frequency_hours: Mapped[int] = mapped_column(Integer, default=72)
-    check_weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0=Mon, 6=Sun
+    # Per-link schedule OVERRIDE. Both NULL (the normal state — quick-add creates links
+    # this way) means the link inherits its store's schedule; setting either field takes
+    # over wholesale (domain.schedule.effective_schedule). Kept for the legitimate case
+    # a store default cannot express: a watched product earning a tighter cadence.
+    check_frequency_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    check_weekdays: Mapped[list[int] | None] = mapped_column(JSONB, nullable=True)  # 0=Mon
     next_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Relationships

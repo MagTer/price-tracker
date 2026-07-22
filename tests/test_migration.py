@@ -100,6 +100,10 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
     # proves the 0001→0002 chain applied — the first real revision after the in-place-
     # rewritten 0001.
     assert "store_label" in schema["product_stores"]
+    # 0005: the schedule became a STORE property links inherit — the link keeps only an
+    # override pair, and the single-day column is gone (Willys checks Mondays AND Fridays).
+    assert "check_weekdays" in schema["product_stores"]
+    assert "check_weekday" not in schema["product_stores"]
     # ...and left nothing behind on the abstract good. Asserted by PREFIX, not by name: a
     # forgotten `package_anything` on products would reinstate the model this phase abolished.
     assert not [c for c in schema["products"] if c.startswith("package_")]
@@ -118,6 +122,21 @@ async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
     """The 0001 seed survived the in-place rewrite; 0003/0004 added Kronans and Apohem."""
     slugs = (await db_session.execute(select(Store.slug).order_by(Store.slug))).scalars().all()
     assert list(slugs) == ["apohem", "apotea", "doz", "ica", "kronans", "med24", "willys"]
+
+
+async def test_migration_seeded_the_store_schedules(db_session: AsyncSession) -> None:
+    """0005: chain offer cycles live on the Store rows — ICA Mondays, Willys Mondays AND
+    Fridays, everyone else interval mode at the 72h default."""
+    rows = (
+        await db_session.execute(
+            select(Store.slug, Store.check_weekdays, Store.check_frequency_hours)
+        )
+    ).all()
+    by_slug = {slug: (weekdays, freq) for slug, weekdays, freq in rows}
+    assert by_slug["ica"] == ([0], 72)
+    assert by_slug["willys"] == ([0, 4], 72)
+    for slug in ("apotea", "med24", "doz", "kronans", "apohem"):
+        assert by_slug[slug] == (None, 72)
 
 
 def test_alembic_check_reports_no_drift(alembic_env) -> None:

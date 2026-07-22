@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import random
+import time
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -22,6 +22,7 @@ from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
 from domain.pricing import unit_price_py
 from domain.protocols import IEmailService, IFetcher
+from domain.schedule import effective_schedule, next_check_time
 from domain.service import PriceCheckOutcome, perform_price_check
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,11 @@ class PriceCheckScheduler:
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._last_summary_date: date | None = None
+        # Monotonic time of the last request per store id — the politeness ledger. Kept on
+        # the instance (not per batch) so the RATE_LIMIT_DELAY spacing holds across cycle
+        # boundaries and for non-adjacent same-store items, which the old "compare with the
+        # previous item" check silently missed.
+        self._last_request_at: dict[object, float] = {}
         self._stats: dict[str, int] = {
             "checks_total": 0,
             "checks_success": 0,
@@ -134,12 +140,17 @@ class PriceCheckScheduler:
 
         logger.info(f"Checking {len(due_items)} products")
 
-        last_store_id = None
         for product_store in due_items:
             try:
-                # Rate limit per store (no session held during the sleep)
-                if last_store_id == product_store.store_id:
-                    await asyncio.sleep(self.RATE_LIMIT_DELAY)
+                # Rate limit per store (no session held during the sleep): keep at least
+                # RATE_LIMIT_DELAY between requests to one store, whenever the previous
+                # one happened — earlier in this batch or in a previous cycle.
+                last_request = self._last_request_at.get(product_store.store_id)
+                if last_request is not None:
+                    wait = self.RATE_LIMIT_DELAY - (time.monotonic() - last_request)
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                self._last_request_at[product_store.store_id] = time.monotonic()
 
                 async with self.session_factory() as session:
                     outcome = await self._check_single_product(product_store, session)
@@ -150,14 +161,11 @@ class PriceCheckScheduler:
                     # full week; frequency-based links keep their jittered
                     # schedule, and success keeps current behavior exactly.
                     now_utc = datetime.now(UTC).replace(tzinfo=None)
-                    if (
-                        outcome is not None
-                        and not outcome.success
-                        and product_store.check_weekday is not None
-                    ):
+                    weekdays, frequency = effective_schedule(product_store, product_store.store)
+                    if outcome is not None and not outcome.success and weekdays:
                         next_check = now_utc + timedelta(hours=24)
                     else:
-                        next_check = self._compute_next_check(product_store, now_utc)
+                        next_check = next_check_time(weekdays, frequency, now_utc)
                     await session.execute(
                         update(ProductStore)
                         .where(ProductStore.id == product_store.id)
@@ -165,8 +173,6 @@ class PriceCheckScheduler:
                     )
 
                     await session.commit()
-
-                last_store_id = product_store.store_id
 
             except Exception as e:
                 logger.error(f"Failed to check product {product_store.id}: {e}")
@@ -190,32 +196,6 @@ class PriceCheckScheduler:
                     logger.error(
                         f"Failed to back off schedule for {product_store.id}: {backoff_error}"
                     )
-
-    def _compute_next_check(self, product_store: ProductStore, now_utc: datetime) -> datetime:
-        """Next check time: weekly on a weekday (morning spread) or jittered frequency."""
-        if product_store.check_weekday is not None:
-            # Weekday-based: schedule for next occurrence of that weekday
-            # Spread checks over morning hours (06:00 - 12:00)
-            days_until = (product_store.check_weekday - now_utc.weekday()) % 7
-            if days_until == 0:
-                # Already checked today, schedule for next week
-                days_until = 7
-            # Random hour between 6 and 12
-            check_hour = 6 + int(random.random() * 6)  # noqa: S311
-            check_minute = int(random.random() * 60)  # noqa: S311
-            next_check = now_utc.replace(
-                hour=check_hour, minute=check_minute, second=0, microsecond=0
-            )
-            return next_check + timedelta(days=days_until)
-
-        # Frequency-based: use jitter as before
-        jitter_percent = 0.1
-        jitter_hours = (
-            (random.random() * 2 - 1)  # noqa: S311
-            * jitter_percent
-            * product_store.check_frequency_hours
-        )
-        return now_utc + timedelta(hours=product_store.check_frequency_hours + jitter_hours)
 
     async def _check_single_product(
         self,

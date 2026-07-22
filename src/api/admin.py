@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -17,6 +16,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from api.auth import require_auth
 from api.schemas import (
@@ -42,11 +42,11 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
-    suggest_check_weekday,
     suggest_existing_products,
     suggest_sibling_links,
     suggest_store_label,
 )
+from domain.schedule import effective_schedule, is_inherited, next_check_time
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
@@ -133,8 +133,16 @@ def _link_payload(
         "store_label": ps.store_label,
         "store_slug": store.slug,
         "store_url": ps.store_url,
+        # Raw override fields plus the resolved schedule — same shape as the links route.
         "check_frequency_hours": ps.check_frequency_hours,
-        "check_weekday": ps.check_weekday,
+        "check_weekdays": ps.check_weekdays,
+        "schedule_inherited": is_inherited(ps),
+        "effective_check_weekdays": effective_schedule(ps, store)[0],
+        "effective_check_frequency_hours": effective_schedule(ps, store)[1],
+        "store_schedule": {
+            "weekdays": store.check_weekdays or [],
+            "frequency_hours": store.check_frequency_hours,
+        },
         "last_checked_at": ps.last_checked_at.isoformat() if ps.last_checked_at else None,
         # The package is the LINK's, not the product's.
         "package_size": ps.package_size,
@@ -576,9 +584,13 @@ async def quick_add_preview(
             # Per-butik label from the URL's /stores/<id>/ segment (ICA prices per butik).
             # None for nationally-priced chains — the chain name suffices there.
             "suggested_store_label": suggest_store_label(url, store.name),
-            # 0=Monday for chains whose weekly offers land on a fixed day (ICA, Willys) —
-            # one check per week on THAT day beats any hour interval on load AND coverage.
-            "suggested_check_weekday": suggest_check_weekday(store.slug),
+            # The store's own schedule, for the confirm step's read-only info line — the
+            # link INHERITS it (quick-add never sets a per-link schedule; the override
+            # lives in the link-edit dialog for the rare case that earns one).
+            "store_schedule": {
+                "weekdays": store.check_weekdays or [],
+                "frequency_hours": store.check_frequency_hours,
+            },
             "name": name,
             "brand": brand,
             "category": category,
@@ -620,16 +632,7 @@ async def quick_add(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     # Same guards as the manual link endpoint — quick-add must not be a validation bypass.
-    if not (72 <= data.check_frequency_hours <= 240):
-        raise HTTPException(
-            status_code=400,
-            detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
-        )
-    if data.check_weekday is not None and not (0 <= data.check_weekday <= 6):
-        raise HTTPException(
-            status_code=400,
-            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
-        )
+    # (No schedule guards: quick-add creates the link INHERITING the store's schedule.)
     if data.package_quantity is not None and data.package_quantity <= 0:
         raise HTTPException(status_code=400, detail="package_quantity måste vara positiv")
     if data.unit is not None and data.unit not in CANONICAL_UNITS:
@@ -688,8 +691,6 @@ async def quick_add(
                 product_id=product_id,
                 store_id=data.store_id,
                 store_url=url,
-                check_frequency_hours=data.check_frequency_hours,
-                check_weekday=data.check_weekday,
                 package_size=data.package_size,
                 package_quantity=package_qty,
                 store_label=(data.store_label or "").strip() or None,
@@ -780,8 +781,6 @@ async def _add_sibling_links(
                 product_id=product_id,
                 store_id=data.store_id,
                 store_url=sibling.url,
-                check_frequency_hours=data.check_frequency_hours,
-                check_weekday=data.check_weekday,
                 package_size=data.package_size,
                 package_quantity=package_qty,
                 store_label=sibling.store_label,
@@ -1055,17 +1054,17 @@ async def link_product_to_store(
     Security:
         Requires IAP header auth (X-Auth-Request-Email).
     """
-    # Validate frequency range (3 days to 10 days)
-    if not (72 <= data.check_frequency_hours <= 240):
+    # Schedule fields are an OVERRIDE — None inherits the store's schedule. Validate
+    # only what was actually provided (3-to-10-day interval, weekdays 0..6).
+    if data.check_frequency_hours is not None and not (72 <= data.check_frequency_hours <= 240):
         raise HTTPException(
             status_code=400,
             detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
         )
-    # Validate weekday if provided (0=Monday, 6=Sunday)
-    if data.check_weekday is not None and not (0 <= data.check_weekday <= 6):
+    if data.check_weekdays is not None and any(not (0 <= d <= 6) for d in data.check_weekdays):
         raise HTTPException(
             status_code=400,
-            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
+            detail="check_weekdays måste innehålla dagar mellan 0 (måndag) och 6 (söndag)",
         )
     # Validate package_quantity if provided. This check MOVED here from create_product when
     # the package data moved onto the link; it was not dropped in the move. A zero quantity
@@ -1081,7 +1080,7 @@ async def link_product_to_store(
             store_id=data.store_id,
             store_url=data.store_url,
             check_frequency_hours=data.check_frequency_hours,
-            check_weekday=data.check_weekday,
+            check_weekdays=data.check_weekdays,
             package_size=data.package_size,
             package_quantity=package_qty,
             store_label=(data.store_label or "").strip() or None,
@@ -1122,19 +1121,17 @@ async def update_check_frequency(
     request: dict[str, Any],
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str | None]:
-    """Update check frequency for a product-store link.
+    """Update a link's schedule OVERRIDE — or clear it back to the store's schedule.
+
+    Both fields null (or absent) means "follow the store" — the normal state. Setting
+    either field takes over wholesale (domain.schedule.effective_schedule). Every save
+    reschedules next_check_at from the resolved schedule, through the SAME domain
+    function the scheduler uses — this endpoint used to carry its own copy of the
+    weekday arithmetic, which is the Gotcha-4 drift pattern.
 
     Keyed on the LINK's own id, never on the (product_id, store_id) pair: a product may hold
     several links at one store, so the pair is no longer single-valued and resolving on it
     raises MultipleResultsFound.
-
-    Args:
-        product_store_id: ProductStore UUID.
-        request: Dictionary containing check_frequency_hours.
-        session: Database session.
-
-    Returns:
-        Success message with updated next_check_at timestamp.
 
     Security:
         Requires IAP header auth (X-Auth-Request-Email).
@@ -1145,61 +1142,46 @@ async def update_check_frequency(
         raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
 
     check_frequency_hours = request.get("check_frequency_hours")
-    check_weekday = request.get("check_weekday")  # 0=Monday, 6=Sunday, None=use frequency
+    check_weekdays = request.get("check_weekdays")  # list of 0=Monday..6=Sunday, or null
 
-    if check_frequency_hours is None:
-        raise HTTPException(status_code=400, detail="check_frequency_hours krävs")
-
-    # Validate frequency range (3 days to 10 days)
-    if not (72 <= check_frequency_hours <= 240):
+    if check_frequency_hours is not None and not (
+        isinstance(check_frequency_hours, int) and 72 <= check_frequency_hours <= 240
+    ):
         raise HTTPException(
             status_code=400,
             detail="check_frequency_hours måste vara mellan 72 och 240 (inklusive)",
         )
-    # Validate weekday if provided
-    if check_weekday is not None and not (0 <= check_weekday <= 6):
+    if check_weekdays is not None and (
+        not isinstance(check_weekdays, list)
+        or any(not isinstance(d, int) or not (0 <= d <= 6) for d in check_weekdays)
+    ):
         raise HTTPException(
             status_code=400,
-            detail="check_weekday måste vara mellan 0 (måndag) och 6 (söndag)",
+            detail="check_weekdays måste innehålla dagar mellan 0 (måndag) och 6 (söndag)",
         )
+    # An explicit empty list is not a meaningful override — interval mode without an
+    # interval is just the store schedule said backwards. Normalize to inherit.
+    if check_weekdays == [] and check_frequency_hours is None:
+        check_weekdays = None
 
     try:
-        stmt = select(ProductStore).where(ProductStore.id == ps_uuid)
+        stmt = (
+            select(ProductStore)
+            .options(joinedload(ProductStore.store))
+            .where(ProductStore.id == ps_uuid)
+        )
         result = await session.execute(stmt)
         product_store = result.scalar_one_or_none()
 
         if not product_store:
             raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
 
-        # Update frequency and weekday
         product_store.check_frequency_hours = check_frequency_hours
-        product_store.check_weekday = check_weekday
+        product_store.check_weekdays = check_weekdays
 
-        # Calculate next_check_at
         now_utc = datetime.now(UTC).replace(tzinfo=None)
-
-        if check_weekday is not None:
-            # Weekday-based: schedule for next occurrence of that weekday
-            # Spread checks over morning hours (06:00 - 12:00)
-            days_until = (check_weekday - now_utc.weekday()) % 7
-            if days_until == 0 and now_utc.hour >= 12:
-                # Already past check window today, schedule for next week
-                days_until = 7
-            # Random hour between 6 and 12
-            check_hour = 6 + int(random.random() * 6)  # noqa: S311
-            check_minute = int(random.random() * 60)  # noqa: S311
-            next_check = now_utc.replace(hour=check_hour, minute=check_minute, second=0)
-            next_check = next_check + timedelta(days=days_until)
-            product_store.next_check_at = next_check
-        else:
-            # Frequency-based: use jitter as before
-            jitter_percent = 0.1
-            jitter_hours = (
-                (random.random() * 2 - 1) * jitter_percent * check_frequency_hours  # noqa: S311
-            )
-            product_store.next_check_at = now_utc + timedelta(
-                hours=check_frequency_hours + jitter_hours
-            )
+        weekdays, frequency = effective_schedule(product_store, product_store.store)
+        product_store.next_check_at = next_check_time(weekdays, frequency, now_utc)
 
         await session.commit()
         await session.refresh(product_store)
@@ -2014,7 +1996,7 @@ async def export_data(
                     "store_slug": store.slug,
                     "store_url": ps.store_url,
                     "check_frequency_hours": ps.check_frequency_hours,
-                    "check_weekday": ps.check_weekday,
+                    "check_weekdays": ps.check_weekdays,
                     "is_active": ps.is_active,
                     # The package data follows the LINK it describes.
                     "package_size": ps.package_size,
@@ -2283,8 +2265,10 @@ async def import_data(
                         product_id=product.id,
                         store_id=store.id,
                         store_url=store_url,
-                        check_frequency_hours=link_data.get("check_frequency_hours", 168),
-                        check_weekday=link_data.get("check_weekday"),
+                        # Absent schedule fields = inherit the store's schedule (the old
+                        # 168h import default predates store-level schedules).
+                        check_frequency_hours=link_data.get("check_frequency_hours"),
+                        check_weekdays=link_data.get("check_weekdays"),
                         is_active=link_data.get("is_active", True),
                         package_size=link_data.get("package_size"),
                         package_quantity=link_package_qty,

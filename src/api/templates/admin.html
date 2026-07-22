@@ -238,26 +238,9 @@
                 <input type="text" id="qa-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('qa')">
             </div>
-            <!-- Fixed weekday = one check per week on the chain's offer day (ICA/Willys
-                 publish Mondays) — the lightest schedule against the stores' sites. The
-                 preview prefills it per chain; the interval field only applies without one. -->
-            <div class="form-group">
-                <label>Kontrolldag</label>
-                <select id="qa-weekday" class="form-input" onchange="qaWeekdayChanged()">
-                    <option value="">Ingen fast dag — kontrollera per intervall</option>
-                    <option value="0">Måndag — nya veckoerbjudanden</option>
-                    <option value="1">Tisdag</option>
-                    <option value="2">Onsdag</option>
-                    <option value="3">Torsdag</option>
-                    <option value="4">Fredag — helgerbjudanden</option>
-                    <option value="5">Lördag</option>
-                    <option value="6">Söndag</option>
-                </select>
-            </div>
-            <div class="form-group" id="qa-frequency-group">
-                <label>Kontrollfrekvens (timmar)</label>
-                <input type="number" id="qa-frequency" value="72" min="72" max="240" class="form-input">
-            </div>
+            <!-- NO schedule fields: the link inherits the STORE's check schedule
+                 (ICA måndagar, Willys mån+fre, apoteken var 72:e timme — all förmiddag).
+                 The info line below says so; an override lives in the link-edit dialog. -->
             <div id="qa-price-info" class="best-link" style="padding-bottom:12px;"></div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary" id="qa-confirm-btn">Lägg till och hämta pris</button>
@@ -291,23 +274,8 @@
                 <input type="text" name="store_label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — skiljer butiker i samma kedja">
             </div>
-            <div class="form-group">
-                <label>Kontrolldag</label>
-                <select name="check_weekday" class="form-input">
-                    <option value="">Ingen fast dag — kontrollera per intervall</option>
-                    <option value="0">Måndag — nya veckoerbjudanden</option>
-                    <option value="1">Tisdag</option>
-                    <option value="2">Onsdag</option>
-                    <option value="3">Torsdag</option>
-                    <option value="4">Fredag — helgerbjudanden</option>
-                    <option value="5">Lördag</option>
-                    <option value="6">Söndag</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Kontrollfrekvens (timmar — gäller utan fast dag)</label>
-                <input type="number" name="check_frequency_hours" value="72" min="72" max="240" class="form-input">
-            </div>
+            <!-- NO schedule fields: a new link inherits the store's check schedule.
+                 The link-edit dialog holds the per-link override for links that earn one. -->
             <!-- Packaging (D-11). Deliberately NO unit selector: the product already
                  declares its comparison unit, so the amount is asked for IN that unit and
                  the buttons below only offer entry helpers that normalize INTO it (ml ->
@@ -394,25 +362,34 @@
                 <input type="text" id="edit-store-label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
-            <!-- Cadence for an EXISTING link — the gap that made "move my links to Monday"
-                 impossible from the UI. Saving a changed cadence reschedules next_check_at
+            <!-- Schedule: the STORE's schedule is the norm and the default; "Eget schema"
+                 is the per-link override for a link that earns its own cadence (e.g. a
+                 watched product). Saving a changed schedule reschedules next_check_at
                  server-side (PUT /frequency), so it is only sent when actually changed. -->
             <div class="form-group">
-                <label>Kontrolldag</label>
-                <select id="edit-weekday" class="form-input" onchange="editWeekdayChanged()">
-                    <option value="">Ingen fast dag — kontrollera per intervall</option>
-                    <option value="0">Måndag — nya veckoerbjudanden</option>
-                    <option value="1">Tisdag</option>
-                    <option value="2">Onsdag</option>
-                    <option value="3">Torsdag</option>
-                    <option value="4">Fredag — helgerbjudanden</option>
-                    <option value="5">Lördag</option>
-                    <option value="6">Söndag</option>
+                <label>Kontrollschema</label>
+                <select id="edit-schedule-mode" class="form-input" onchange="editScheduleModeChanged()">
+                    <option value="" id="edit-schedule-standard-opt">Butikens standard</option>
+                    <option value="custom">Eget schema för länken</option>
                 </select>
             </div>
-            <div class="form-group" id="edit-frequency-group">
-                <label>Kontrollfrekvens (timmar)</label>
-                <input type="number" id="edit-frequency" value="72" min="72" max="240" class="form-input">
+            <div id="edit-schedule-custom" style="display:none;">
+                <div class="form-group">
+                    <label>Kontrolldagar (körs på förmiddagen)</label>
+                    <div class="pkg-entry-units" id="edit-weekdays">
+                        <label><input type="checkbox" value="0"> mån</label>
+                        <label><input type="checkbox" value="1"> tis</label>
+                        <label><input type="checkbox" value="2"> ons</label>
+                        <label><input type="checkbox" value="3"> tors</label>
+                        <label><input type="checkbox" value="4"> fre</label>
+                        <label><input type="checkbox" value="5"> lör</label>
+                        <label><input type="checkbox" value="6"> sön</label>
+                    </div>
+                </div>
+                <div class="form-group" id="edit-frequency-group">
+                    <label>Kontrollfrekvens (timmar — gäller utan valda dagar)</label>
+                    <input type="number" id="edit-frequency" value="72" min="72" max="240" class="form-input">
+                </div>
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Spara</button>
@@ -1171,8 +1148,7 @@ async function handleLinkStore(e) {
         store_id: fd.get('store_id'),
         store_url: fd.get('store_url'),
         store_label: (fd.get('store_label') || '').trim() || null,
-        check_frequency_hours: parseInt(fd.get('check_frequency_hours')),
-        check_weekday: fd.get('check_weekday') ? parseInt(fd.get('check_weekday')) : null,
+        // No schedule fields: the link inherits the store's schedule.
         package_size: fd.get('package_size') || null,
         package_quantity: pkgQuantity('link')
     };
@@ -1236,10 +1212,6 @@ async function handleQuickAddPreview(e) {
 function qaRenderPreview(p) {
     document.getElementById('qa-store-name').value = p.store.name;
     document.getElementById('qa-store-label').value = p.suggested_store_label || '';
-    // == null (not falsy-check): weekday 0 IS Monday, the common suggestion.
-    const wd = p.suggested_check_weekday;
-    document.getElementById('qa-weekday').value = wd == null ? '' : String(wd);
-    qaWeekdayChanged();
     // Sister butiker not already tracked get a pre-checked opt-out row.
     const sibs = (p.sibling_links || []).filter(s => !s.already_tracked);
     const sibRow = document.getElementById('qa-sibling-row');
@@ -1269,6 +1241,8 @@ function qaRenderPreview(p) {
     const info = [];
     if (p.price_sek != null) info.push('Pris just nu: ' + formatSek(p.price_sek) + ' kr');
     if (p.source) info.push('källa: ' + (p.source === 'jsonld' ? 'strukturerad sidodata' : 'AI-tolkning'));
+    // The link inherits the store's schedule — say so instead of asking about it.
+    if (p.store_schedule) info.push('kontrolleras ' + scheduleText(p.store_schedule.weekdays, p.store_schedule.frequency_hours));
     if (p.name == null) info.push('Ingen produktinfo hittades — fyll i namnet själv');
     document.getElementById('qa-price-info').textContent = info.join(' · ');
     document.getElementById('form-quick-add-confirm').style.display = '';
@@ -1295,13 +1269,6 @@ function qaProductChoiceChanged() {
     }
 }
 
-// A fixed day makes the interval field irrelevant (the scheduler checks weekly on that
-// day) — hide it rather than leave a field whose value would silently do nothing.
-function qaWeekdayChanged() {
-    const fixed = document.getElementById('qa-weekday').value !== '';
-    document.getElementById('qa-frequency-group').style.display = fixed ? 'none' : '';
-}
-
 function qaUnitChanged() {
     pkgInitChain('qa', document.getElementById('qa-unit').value,
         document.getElementById('qa-pkg-amount').value,
@@ -1326,9 +1293,6 @@ async function handleQuickAddConfirm(e) {
         brand: existingId ? null : (document.getElementById('qa-brand').value.trim() || null),
         category: existingId ? null : (document.getElementById('qa-category').value.trim() || null),
         unit: existingId ? null : (document.getElementById('qa-unit').value || null),
-        check_frequency_hours: parseInt(document.getElementById('qa-frequency').value) || 72,
-        check_weekday: document.getElementById('qa-weekday').value === ''
-            ? null : parseInt(document.getElementById('qa-weekday').value),
         package_size: document.getElementById('qa-pkg-label').value.trim() || null,
         package_quantity: pkgQuantity('qa'),
         run_first_check: true,
@@ -1422,7 +1386,7 @@ function groupHistoryByLink(rows) {
 // The cheapest kr/unit across links on each date, FORWARD-FILLED, aligned 1:1 with `dates`.
 //
 // Forward-fill is not cosmetic. Links are checked on independent schedules
-// (check_frequency_hours, optional check_weekday), so on any given date only SOME were sampled.
+// (store default or per-link override), so on any given date only SOME were sampled.
 // Without the carry, the best line would spike and dip purely because a store was not checked
 // that day — reintroducing the exact phantom movement this whole fix removes, one level up.
 //
@@ -1725,14 +1689,22 @@ function buildLinksTable(rows, unit) {
     return html;
 }
 
+// Human text for a schedule pair — used by the links table, the edit dialog's
+// "Butikens standard (…)" option and quick-add's info line. Both modes run förmiddag.
+const DAY_PLURAL = ['måndagar', 'tisdagar', 'onsdagar', 'torsdagar', 'fredagar', 'lördagar', 'söndagar'];
+const DAY_SHORT = ['mån', 'tis', 'ons', 'tors', 'fre', 'lör', 'sön'];
+function scheduleText(weekdays, freqHours) {
+    if (weekdays && weekdays.length === 1) return DAY_PLURAL[weekdays[0]] + ' förmiddag';
+    if (weekdays && weekdays.length > 1) return weekdays.map(d => DAY_SHORT[d]).join(' + ') + ' förmiddag';
+    return freqHours ? 'var ' + freqHours + ':e timme, förmiddag' : '';
+}
+
 // Visible answer to "checks this link on the right day?" — the cadence sits under the
-// last-checked date, so a Monday migration can be verified at a glance.
+// last-checked date. Inheriting the store schedule is the norm; only OVERRIDES get a
+// marker, so the table stays quiet until something actually deviates.
 function cadenceLabel(r) {
-    if (r.check_weekday != null) {
-        const days = ['måndagar', 'tisdagar', 'onsdagar', 'torsdagar', 'fredagar', 'lördagar', 'söndagar'];
-        return days[r.check_weekday] || '';
-    }
-    return r.check_frequency_hours ? 'var ' + r.check_frequency_hours + ':e timme' : '';
+    const txt = scheduleText(r.effective_check_weekdays, r.effective_check_frequency_hours);
+    return r.schedule_inherited === false ? txt + ' (eget schema)' : txt;
 }
 
 // The rows arrive ALREADY ranked cheapest-per-unit (nulls last) from the service — the domain
@@ -1780,18 +1752,28 @@ function showEditPackagingModal(productStoreId) {
     // The RAW label, not store_name: store_name falls back to the chain name, and
     // prefilling that here would turn "no label" into a saved literal "ICA".
     document.getElementById('edit-store-label').value = (link && link.store_label) || '';
-    // == null, not falsy: weekday 0 IS Monday.
-    const wd = link ? link.check_weekday : null;
-    document.getElementById('edit-weekday').value = wd == null ? '' : String(wd);
+    // Schedule: the standard option names the STORE's schedule so choosing it is an
+    // informed act; the custom fields prefill from the link's own override (or the
+    // effective schedule, as a starting point for a new override).
+    const std = link && link.store_schedule ? link.store_schedule : null;
+    document.getElementById('edit-schedule-standard-opt').textContent = std
+        ? 'Butikens standard (' + scheduleText(std.weekdays, std.frequency_hours) + ')'
+        : 'Butikens standard';
+    const overridden = !!link && link.schedule_inherited === false;
+    document.getElementById('edit-schedule-mode').value = overridden ? 'custom' : '';
+    const prefillDays = (link && (link.check_weekdays || (overridden ? [] : link.effective_check_weekdays))) || [];
+    document.querySelectorAll('#edit-weekdays input').forEach(cb => {
+        cb.checked = prefillDays.includes(parseInt(cb.value));
+    });
     document.getElementById('edit-frequency').value =
-        (link && link.check_frequency_hours) || 72;
-    editWeekdayChanged();
+        (link && (link.check_frequency_hours || link.effective_check_frequency_hours)) || 72;
+    editScheduleModeChanged();
     document.getElementById('modal-edit-packaging').style.display = 'flex';
 }
 
-function editWeekdayChanged() {
-    const fixed = document.getElementById('edit-weekday').value !== '';
-    document.getElementById('edit-frequency-group').style.display = fixed ? 'none' : '';
+function editScheduleModeChanged() {
+    const custom = document.getElementById('edit-schedule-mode').value === 'custom';
+    document.getElementById('edit-schedule-custom').style.display = custom ? '' : 'none';
 }
 
 async function handleEditPackaging(e) {
@@ -1804,22 +1786,31 @@ async function handleEditPackaging(e) {
         // Always sent: '' clears the label back to the chain name (server-side rule).
         store_label: document.getElementById('edit-store-label').value.trim()
     };
-    // Cadence goes through its OWN endpoint, and only when actually changed — the server
-    // reschedules next_check_at on every cadence PUT, so an untouched schedule must not
-    // be re-sent just because the packaging was edited.
+    // The schedule goes through its OWN endpoint, and only when actually changed — the
+    // server reschedules next_check_at on every schedule PUT, so an untouched schedule
+    // must not be re-sent just because the packaging was edited. Wholesale semantics:
+    // standard = both null (inherit); custom with days = weekdays only; custom without
+    // days = interval only.
     const link = (productLinks || []).find(l => l.product_store_id === id);
-    const wdRaw = document.getElementById('edit-weekday').value;
-    const newWeekday = wdRaw === '' ? null : parseInt(wdRaw);
-    const newFrequency = parseInt(document.getElementById('edit-frequency').value) || 72;
+    let newWeekdays = null, newFrequency = null;
+    if (document.getElementById('edit-schedule-mode').value === 'custom') {
+        const days = Array.from(document.querySelectorAll('#edit-weekdays input:checked'))
+            .map(cb => parseInt(cb.value)).sort();
+        if (days.length) {
+            newWeekdays = days;
+        } else {
+            newFrequency = parseInt(document.getElementById('edit-frequency').value) || 72;
+        }
+    }
     const cadenceChanged = link &&
-        (newWeekday !== (link.check_weekday == null ? null : link.check_weekday)
-         || newFrequency !== link.check_frequency_hours);
+        (JSON.stringify(newWeekdays) !== JSON.stringify(link.check_weekdays == null ? null : link.check_weekdays)
+         || newFrequency !== (link.check_frequency_hours == null ? null : link.check_frequency_hours));
     try {
         await apiPut('/product-stores/' + id + '/packaging', body);
         if (cadenceChanged) {
             await apiPut('/product-stores/' + id + '/frequency', {
                 check_frequency_hours: newFrequency,
-                check_weekday: newWeekday
+                check_weekdays: newWeekdays
             });
         }
         closeModal('modal-edit-packaging');

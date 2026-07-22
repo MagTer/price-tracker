@@ -47,8 +47,10 @@ class ProductStoreLink(BaseModel):
 
     store_id: str
     store_url: str
-    check_frequency_hours: int = 72
-    check_weekday: int | None = None  # 0=Monday, 6=Sunday, None=use frequency
+    # Schedule OVERRIDE — None (default) inherits the store's schedule, which is the
+    # normal state. Setting either field takes over wholesale (domain.schedule).
+    check_frequency_hours: int | None = None
+    check_weekdays: list[int] | None = None  # 0=Monday .. 6=Sunday
     package_size: str | None = None  # Human-readable label: "24-pack", "500 ml", "1 kg"
     package_quantity: float | None = None  # In the product's canonical unit: 24, 0.5, 1.0
     # Per-link store display name ("ICA Maxi Sandviken") for chains with per-butik pricing.
@@ -100,8 +102,6 @@ class QuickAddCreate(BaseModel):
     brand: str | None = None
     category: str | None = None
     unit: str | None = None  # canonical comparison unit: "st", "liter", "kg"
-    check_frequency_hours: int = 72
-    check_weekday: int | None = None
     package_size: str | None = None
     package_quantity: float | None = None
     store_label: str | None = None  # per-link store display name ("ICA Maxi Sandviken")
@@ -155,7 +155,9 @@ class ProductResponse(BaseModel):
 
     `bool` is in the value union deliberately: without it, a smart-mode union of
     `str | int | float` coerces `needs_amount=True` to the integer `1` (bool subclasses int),
-    and a flag the UI must render as a warning arrives as a number.
+    and a flag the UI must render as a warning arrives as a number. The nested list/dict
+    arms carry the schedule fields (`check_weekdays` is a weekday LIST, `store_schedule`
+    an object) — v0.13.0.
     """
 
     id: str
@@ -163,7 +165,7 @@ class ProductResponse(BaseModel):
     brand: str | None
     category: str | None
     unit: str | None
-    stores: list[dict[str, str | int | float | bool | None]]
+    stores: list[dict[str, str | int | float | bool | list[int] | dict[str, object] | None]]
 
 
 class PricePointResponse(BaseModel):

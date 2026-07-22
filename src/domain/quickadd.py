@@ -121,19 +121,9 @@ SIBLING_STORE_GROUPS: tuple[frozenset[str], ...] = load_sibling_groups(
     os.getenv("QUICKADD_SIBLING_GROUPS")
 )
 
-# Store slug -> weekday (0=Monday) on which the chain publishes its new weekly offers.
-# A weekly check on that day catches every offer cycle with ONE fetch per link per week —
-# the lightest schedule that misses nothing, which matters because we are guests on these
-# sites. A chain property, not per-instance operator config (unlike the butik tables
-# above), so no env override: every instance tracks the same Swedish chains.
-OFFER_WEEKDAYS: dict[str, int] = {"ica": 0, "willys": 0}
-
-
-def suggest_check_weekday(store_slug: str | None) -> int | None:
-    """Suggested fixed check day for a store (0=Monday), or None to check by interval."""
-    if not store_slug:
-        return None
-    return OFFER_WEEKDAYS.get(store_slug.lower())
+# Offer-cycle weekdays (the old OFFER_WEEKDAYS table) moved to the Store rows themselves
+# in v0.13.0: the schedule is a store property links inherit (domain/schedule.py), so
+# quick-add no longer suggests a per-link check day at all.
 
 
 class StoreLike(Protocol):
