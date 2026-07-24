@@ -237,7 +237,9 @@ class PriceParser:
 
         store_hint = self._store_hints.get(store_slug, "")
 
-        prompt = self._build_prompt(text_content, store_slug, store_hint, product_name)
+        prompt = self._build_prompt(
+            text_content, store_slug, store_hint, product_name, html_content=html_content
+        )
 
         return await self._run_llm_cascade(prompt, product_name=product_name, store_slug=store_slug)
 
@@ -346,6 +348,7 @@ class PriceParser:
         text_content: str,
         store_slug: str,
         product_name: str | None,
+        html_content: str | None = None,
     ) -> PriceExtractionResult:
         """Fill offer/package fields a structured extraction lacks, from the SAME page.
 
@@ -355,7 +358,9 @@ class PriceParser:
         """
         try:
             store_hint = self._store_hints.get(store_slug, "")
-            prompt = self._build_prompt(text_content, store_slug, store_hint, product_name)
+            prompt = self._build_prompt(
+                text_content, store_slug, store_hint, product_name, html_content=html_content
+            )
             result = await self._run_llm_cascade(
                 prompt, product_name=product_name, store_slug=store_slug
             )
@@ -476,9 +481,22 @@ Only output the JSON object, no explanation or markdown."""
         store_slug: str,
         store_hint: str,
         product_name: str | None,
+        *,
+        html_content: str | None = None,
     ) -> str:
-        """Build extraction prompt."""
+        """Build extraction prompt.
+
+        When `html_content` is given, the page content is the identity-signal context
+        (title/meta/JSON-LD + visible text) rather than the stripped text alone — the
+        same SPA-aware input the metadata path uses, so the price LLM fallback can read
+        a page whose data the visible text drops.
+        """
         product_context = f"Product being searched: {product_name}\n" if product_name else ""
+        page = (
+            _build_metadata_context(html_content, text_content)
+            if html_content
+            else text_content[:6000]
+        )
 
         return f"""Extract product price information from this Swedish store page.
 
@@ -488,7 +506,7 @@ Store-specific parsing hints:
 {store_hint}
 
 Page content (truncated):
-{text_content[:6000]}
+{page}
 
 Return a JSON object with exactly these fields:
 - "price": Regular price in SEK as a number (e.g., 29.90), null if not found

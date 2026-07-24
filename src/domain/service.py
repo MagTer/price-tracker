@@ -154,6 +154,7 @@ async def perform_price_check(
                 text_content=fetch_result["text"],
                 store_slug=store.slug,
                 product_name=product.name,
+                html_content=fetch_result.get("html"),
             )
 
     if extraction.price_sek is None:

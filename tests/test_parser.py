@@ -190,6 +190,18 @@ class TestPriceParser:
         assert "x" * 6000 in prompt
         assert len([line for line in prompt.split("\n") if "xxxx" in line][0]) <= 6010
 
+    def test_build_prompt_uses_html_signals_when_given(self) -> None:
+        """The price LLM prompt gets the SPA head/JSON-LD too, not just stripped text."""
+        parser = PriceParser()
+
+        prompt = parser._build_prompt(
+            "sparse visible text", "ica", "", "Falukorv", html_content=_SPA_HTML
+        )
+
+        assert "Title: Falukorv Klassikern 800g Scan" in prompt
+        assert '"@type":"Product"' in prompt
+        assert "Visible text:\nsparse visible text" in prompt
+
     def test_load_store_hints(self) -> None:
         """Test that store hints are loaded on initialization."""
         with patch("domain.stores.get_store_hints") as mock_hints:
