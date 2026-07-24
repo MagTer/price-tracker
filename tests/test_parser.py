@@ -6,7 +6,46 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from domain.parser import PriceExtractionResult, PriceParser
+from domain.parser import PriceExtractionResult, PriceParser, _to_decimal, _to_int
+
+
+class TestNumericCoercion:
+    """_to_decimal / _to_int: an LLM's price/amount survives whatever shape it returns.
+
+    A bare Decimal(str(...)) on "32,90 kr" raised decimal.ConversionSyntax — the failure
+    that killed the old llama price path and would bite any model (deepseek returns the
+    same comma+currency shape). These pin the normalization contract.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (29.90, Decimal("29.90")),
+            (30, Decimal("30")),
+            ("29.90", Decimal("29.90")),
+            ("32,90", Decimal("32.90")),  # Swedish decimal comma
+            ("32,90 kr", Decimal("32.90")),  # comma + currency suffix
+            ("29.90 SEK", Decimal("29.90")),
+            ("0,5 l", Decimal("0.5")),  # amount with unit
+            ("1 234,50", Decimal("1234.50")),  # space thousands + comma decimal
+            ("1 234,50 kr", Decimal("1234.50")),  # NBSP thousands separator
+            ("1,234.50", Decimal("1234.50")),  # US style: comma thousands, dot decimal
+            (Decimal("12.34"), Decimal("12.34")),
+        ],
+    )
+    def test_to_decimal_normalizes(self, value, expected) -> None:
+        assert _to_decimal(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "", "   ", "kr", "n/a", "på lager", True, False])
+    def test_to_decimal_returns_none_for_non_numbers(self, value) -> None:
+        assert _to_decimal(value) is None
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [(24, 24), ("24", 24), ("24-pack", 24), ("24 st", 24), (None, None), ("none", None)],
+    )
+    def test_to_int_extracts_pack_size(self, value, expected) -> None:
+        assert _to_int(value) == expected
 
 
 class TestPriceExtractionResult:
@@ -173,6 +212,51 @@ class TestPriceParser:
             mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_extract_with_model_survives_comma_and_currency_price(self) -> None:
+        """A model that returns "32,90 kr" must not raise — the old bare Decimal() did.
+
+        This is the regression guard for the decimal.ConversionSyntax failure. deepseek
+        (and llama) return Swedish comma + "kr" as readily as a bare number.
+        """
+        parser = PriceParser()
+
+        mock_response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "price": "32,90 kr",
+                                "unit_price": "41,13 kr/kg",
+                                "offer_price": "29,90",
+                                "package_amount": "0,8",
+                                "pack_size": "24-pack",
+                                "in_stock": True,
+                                "confidence": 0.9,
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_response_data
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post.return_value = mock_response
+
+            result = await parser._extract_with_model("test prompt", "ica")
+
+            assert result.price_sek == Decimal("32.90")
+            assert result.store_unit_price_sek == Decimal("41.13")
+            assert result.offer_price_sek == Decimal("29.90")
+            assert result.package_amount == Decimal("0.8")
+            assert result.pack_size == 24
+
+    @pytest.mark.asyncio
     async def test_no_printed_unit_price_is_not_synthesized(self) -> None:
         """A page that prints no unit price yields None — never price / pack_size (D-05).
 
@@ -300,7 +384,7 @@ class TestPriceParser:
 
             # Should call with the primary model first
             mock_extract.assert_called_once()
-            assert "llama-4-scout" in str(mock_extract.call_args)
+            assert "deepseek/deepseek-v4-flash" in str(mock_extract.call_args)
             assert result == mock_result
 
     @pytest.mark.asyncio

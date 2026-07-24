@@ -4,7 +4,8 @@ import dataclasses
 import json
 import logging
 import os
-from decimal import Decimal
+import re
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -18,14 +19,72 @@ __all__ = ["PriceExtractionResult", "PriceParser", "ProductMetadata"]
 
 logger = logging.getLogger(__name__)
 
+# Grabs the first numeric run, tolerating spaces/NBSP as thousands separators and both
+# ',' and '.' as decimal marks: "32,90 kr", "1 234,50", "29.90 SEK", "0,5 l" all match.
+_NUMERIC_RE = re.compile(r"-?\d[\d\s .,]*")
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    """Coerce an LLM's price/amount field to Decimal, or None if there is no number.
+
+    LLMs ignore "as a number" and return "32,90 kr" (Swedish comma + currency) as often
+    as 32.90 — a bare Decimal(str(value)) on that raises decimal.ConversionSyntax, which
+    is exactly what killed the old llama-4-scout price path. This normalizes ONE number
+    out of the value (currency words/symbols stripped, Swedish comma → dot, thousands
+    separators removed) so any model's output survives. Never raises: garbage → None,
+    and the caller's confidence floor / null handling takes over from there.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool is an int subclass — a price is never a boolean
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
+
+    match = _NUMERIC_RE.search(str(value))
+    if match is None:
+        return None
+    # Drop ALL whitespace (ASCII space, NBSP, tabs) — any of them can be a thousands sep.
+    token = re.sub(r"\s", "", match.group(0))
+    if "," in token and "." in token:
+        # Both present: the LAST separator is the decimal mark, the other is thousands.
+        if token.rfind(",") > token.rfind("."):
+            token = token.replace(".", "").replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    elif "," in token:
+        token = token.replace(",", ".")
+    try:
+        return Decimal(token)
+    except InvalidOperation:
+        return None
+
+
+def _to_int(value: object) -> int | None:
+    """Coerce an LLM's pack-size field to int, or None. Tolerates "24-pack", "24 st"."""
+    dec = _to_decimal(value)
+    if dec is None:
+        return None
+    try:
+        return int(dec)
+    except (ValueError, OverflowError):
+        return None
+
 
 class PriceParser:
     """LLM-based price extractor with cascading model strategy."""
 
-    # Cascading model strategy (fast first, then quality fallback)
+    # Cascading model strategy (fast/cheap first, then a cross-vendor fallback). Both
+    # defaults are served by the account's allowed OpenRouter providers (DeepInfra/Novita/
+    # Parasail) — the previous default fell back to anthropic/claude-haiku-4.5, which 404s
+    # under that provider allowlist ("no allowed providers"), so quick-add's metadata path
+    # had no working model at all. Override wholesale via PRICE_PARSER_MODEL_CASCADE.
     MODEL_CASCADE = os.getenv(
         "PRICE_PARSER_MODEL_CASCADE",
-        "meta-llama/llama-4-scout,anthropic/claude-haiku-4.5",
+        "deepseek/deepseek-v4-flash,meta-llama/llama-4-scout",
     ).split(",")
 
     # Acceptance floor: extractions below this confidence are discarded rather
@@ -34,8 +93,8 @@ class PriceParser:
 
     # Model-specific confidence thresholds
     CONFIDENCE_THRESHOLDS = {
-        "meta-llama/llama-4-scout": 0.70,
-        "anthropic/claude-haiku-4.5": MIN_ACCEPT_CONFIDENCE,  # Last resort still honors the floor
+        "deepseek/deepseek-v4-flash": 0.70,
+        "meta-llama/llama-4-scout": MIN_ACCEPT_CONFIDENCE,  # Last resort still honors the floor
     }
 
     CONFIDENCE_THRESHOLD = 0.7
@@ -318,16 +377,14 @@ Only output the JSON object, no explanation or markdown."""
                     name=name,
                     brand=str(data["brand"]).strip() if data.get("brand") else None,
                     category=str(data["category"]).strip() if data.get("category") else None,
-                    price_sek=Decimal(str(data["price"])) if data.get("price") else None,
-                    package_amount=(
-                        Decimal(str(data["package_amount"])) if data.get("package_amount") else None
-                    ),
+                    price_sek=_to_decimal(data.get("price")),
+                    package_amount=_to_decimal(data.get("package_amount")),
                     package_unit=(
                         str(data["package_unit"]).strip().lower()
                         if data.get("package_unit")
                         else None
                     ),
-                    pack_size=int(data["pack_size"]) if data.get("pack_size") else None,
+                    pack_size=_to_int(data.get("pack_size")),
                     confidence=confidence,
                     source="llm",
                 )
@@ -417,12 +474,10 @@ Only output the JSON object, no explanation or markdown."""
         # only what the store printed (D-05), so a page/store mismatch stays detectable
         # instead of being papered over by our own arithmetic. When the page prints nothing
         # it stays None — the computed unit price covers that case.
-        price = Decimal(str(data["price"])) if data.get("price") else None
-        store_unit_price = Decimal(str(data["unit_price"])) if data.get("unit_price") else None
-        pack_size = int(data["pack_size"]) if data.get("pack_size") else None
-        package_amount = (
-            Decimal(str(data["package_amount"])) if data.get("package_amount") else None
-        )
+        price = _to_decimal(data.get("price"))
+        store_unit_price = _to_decimal(data.get("unit_price"))
+        pack_size = _to_int(data.get("pack_size"))
+        package_amount = _to_decimal(data.get("package_amount"))
         package_unit = (
             str(data["package_unit"]).strip().lower() if data.get("package_unit") else None
         )
@@ -430,9 +485,7 @@ Only output the JSON object, no explanation or markdown."""
         return PriceExtractionResult(
             price_sek=price,
             store_unit_price_sek=store_unit_price,
-            offer_price_sek=(
-                Decimal(str(data["offer_price"])) if data.get("offer_price") else None
-            ),
+            offer_price_sek=_to_decimal(data.get("offer_price")),
             offer_type=data.get("offer_type"),
             offer_details=data.get("offer_details"),
             in_stock=data.get("in_stock", True),
