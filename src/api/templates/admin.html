@@ -76,6 +76,32 @@
 </div>
 </section>
 
+<section class="app-page" data-page="loggar">
+<div class="card">
+    <div class="card-header">
+        <div>
+            <div class="card-title">Loggar</div>
+            <!-- What the app actually did: which extraktionsväg vann (API/JSON-LD/LLM),
+                 modellbyten i kaskaden, och när en hämtning blockerades av en butiks WAF.
+                 Läses ur en minnesbuffert — nollställs vid omstart. -->
+            <div class="best-link">Senaste händelser · nollställs vid omstart</div>
+        </div>
+        <div class="header-actions">
+            <select id="log-level" class="search-input" onchange="loadLogs()">
+                <option value="INFO">Info och uppåt</option>
+                <option value="WARNING">Varning och uppåt</option>
+                <option value="ERROR">Endast fel</option>
+                <option value="DEBUG">Allt (debug)</option>
+            </select>
+            <button class="btn" onclick="loadLogs()">↻ Uppdatera</button>
+        </div>
+    </div>
+    <div id="logs-container">
+        <div class="loading">Laddar loggar…</div>
+    </div>
+</div>
+</section>
+
 <!-- Create Product Modal -->
 <div class="modal" id="modal-create-product" style="display:none;">
     <div class="modal-content">
@@ -916,6 +942,56 @@ async function loadDeals() {
         container.innerHTML = html;
     } catch (e) {
         document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div>';
+    }
+}
+
+// --- Loggar: the app's own operational log, tailed from an in-memory ring buffer.
+// Loaded on demand when the page is shown (renderPage) and on the ↻ button — never up
+// front, so it never slows the initial dashboard load. ---
+const LOG_LEVEL_BADGE = { DEBUG: 'badge-muted', INFO: 'badge-success', WARNING: 'badge-warning', ERROR: 'badge-error', CRITICAL: 'badge-error' };
+
+function formatLogTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const pad = n => String(n).padStart(2, '0');
+    const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    return sameDay ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+}
+
+function shortLogger(name) {
+    if (!name) return '';
+    const parts = name.split('.');
+    return parts.length > 1 ? parts.slice(1).join('.') : name;
+}
+
+async function loadLogs() {
+    const container = document.getElementById('logs-container');
+    if (!container) return;
+    try {
+        const level = (document.getElementById('log-level') || {}).value || 'INFO';
+        const data = await apiGet(`/logs?limit=300&level=${encodeURIComponent(level)}`);
+        const logs = (data && data.logs) || [];
+        if (!logs.length) {
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128220;</div><p>Inga loggar på den här nivån ännu — händelser dyker upp när priser kontrolleras eller produkter läggs till.</p></div>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Tid</th><th>Nivå</th><th>Källa</th><th>Meddelande</th></tr></thead><tbody>';
+        for (const r of logs) {
+            const cls = LOG_LEVEL_BADGE[r.level] || 'badge-muted';
+            html += `<tr>
+                <td class="best-link" style="white-space:nowrap">${escapeHtml(formatLogTime(r.ts))}</td>
+                <td><span class="badge ${cls}">${escapeHtml(r.level || '')}</span></td>
+                <td class="best-link" style="white-space:nowrap">${escapeHtml(shortLogger(r.logger))}</td>
+                <td style="word-break:break-word">${escapeHtml(r.message || '')}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda loggar.</p></div>';
     }
 }
 
@@ -2026,7 +2102,8 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
 const PAGES = {
     produkter: 'Produkter',
     erbjudanden: 'Aktuella erbjudanden',
-    bevakningar: 'Prisbevakningar'
+    bevakningar: 'Prisbevakningar',
+    loggar: 'Loggar'
 };
 
 function currentPage() {
@@ -2046,6 +2123,9 @@ function renderPage() {
     }
     const crumb = document.getElementById('breadcrumb-current');
     if (crumb) crumb.textContent = PAGES[page];
+    // Loggar is loaded lazily — only when shown, and re-fetched on each visit so it is
+    // fresh without polling. The other pages preload their (small) data sets up front.
+    if (page === 'loggar') loadLogs();
 }
 
 window.addEventListener('hashchange', renderPage);

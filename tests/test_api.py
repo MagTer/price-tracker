@@ -268,14 +268,14 @@ class TestAdminDashboard:
         assert "Price Tracker v" in r.text
 
     def test_sidebar_has_one_nav_item_per_page(self, client):
-        """The three sections are hash-routed pages picked from the left menu — a long
+        """The sections are hash-routed pages picked from the left menu — a long
         product list must never push the deals out of sight."""
         r = client.get("/")
-        for page in ("produkter", "erbjudanden", "bevakningar"):
+        for page in ("produkter", "erbjudanden", "bevakningar", "loggar"):
             assert f'data-page="{page}"' in r.text, f"nav/page missing for {page}"
             assert f'href="#/{page}"' in r.text
         # The page sections themselves exist for the router to toggle.
-        assert r.text.count('class="app-page"') == 3
+        assert r.text.count('class="app-page"') == 4
 
     def test_schedule_is_store_level_and_hidden_from_add_flows(self, client):
         """The check schedule is a STORE property since v0.13.0: the add flows (quick-add,
@@ -1400,3 +1400,40 @@ class TestValidation:
             json={"product_id": "p1", "email_address": "a@b.se"},
         )
         assert r.status_code == 403
+
+
+class TestLogsEndpoint:
+    """GET /logs surfaces the in-memory ring buffer for the portal's Loggar page."""
+
+    def test_returns_recent_records_newest_first(self, client):
+        import logging
+
+        from infra.logbuffer import get_log_buffer
+
+        get_log_buffer().clear()
+        logging.getLogger("domain.parser").warning("meta extraction failed for X")
+        logging.getLogger("domain.service").info("Price extracted via JSON-LD")
+
+        r = client.get("/logs")
+        assert r.status_code == 200
+        body = r.json()
+        messages = [rec["message"] for rec in body["logs"]]
+        assert body["count"] == len(body["logs"])
+        assert messages[0] == "Price extracted via JSON-LD"  # newest first
+        assert any("meta extraction failed" in m for m in messages)
+
+    def test_level_filter_excludes_below_threshold(self, client):
+        import logging
+
+        from infra.logbuffer import get_log_buffer
+
+        get_log_buffer().clear()
+        logging.getLogger("domain.parser").info("an info line")
+        logging.getLogger("domain.parser").error("a real error")
+
+        messages = [rec["message"] for rec in client.get("/logs?level=ERROR").json()["logs"]]
+        assert messages == ["a real error"]
+
+    def test_limit_is_clamped(self, client):
+        r = client.get("/logs?limit=999999")
+        assert r.status_code == 200  # clamped server-side, never rejected

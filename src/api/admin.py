@@ -51,6 +51,7 @@ from domain.schedule import effective_schedule, is_inherited, next_check_time
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
+from infra.logbuffer import get_log_buffer
 from infra.providers import get_fetcher, get_rate_limiter
 
 LOGGER = logging.getLogger(__name__)
@@ -2412,6 +2413,31 @@ async def scheduler_status(
     return status
 
 
+@router.get("/logs")
+async def get_logs(
+    limit: int = 200,
+    level: str = "INFO",
+    admin_email: str = Depends(require_auth),
+) -> dict[str, Any]:
+    """Recent application log records (newest first) for the portal's Loggar page.
+
+    Reads the in-memory ring buffer (infra.logbuffer) — the extraction path chosen,
+    model fallbacks, WAF blocks, and other operational events the app already logs. The
+    buffer is ephemeral (cleared on restart) and holds the app's own loggers only, not
+    uvicorn access lines.
+
+    Args:
+        limit: Max records to return (1–1000).
+        level: Minimum level — DEBUG / INFO / WARNING / ERROR / CRITICAL.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    limit = max(1, min(limit, 1000))
+    records = get_log_buffer().get_records(limit=limit, min_level=level)
+    return {"logs": records, "count": len(records)}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> str:
     """Server-rendered admin dashboard for price tracking.
@@ -2764,6 +2790,10 @@ def _get_admin_sidebar_html() -> str:
             <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
                 <span class="nav-icon">&#128276;</span>
                 Bevakningar
+            </a>
+            <a href="#/loggar" class="nav-item" data-page="loggar">
+                <span class="nav-icon">&#128220;</span>
+                Loggar
             </a>
         </nav>
         <div class="sidebar-footer">

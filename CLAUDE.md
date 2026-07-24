@@ -74,14 +74,15 @@ src/
 │   ├── admin.py   # portal + REST API (served at root, not /admin)
 │   ├── schemas.py
 │   └── templates/admin.html   # 3 fragments split on <!-- SECTION_SEPARATOR --> — see Gotchas.
-│   │                          # The UI is ONE served page with three hash-routed pages
-│   │                          # (#/produkter, #/erbjudanden, #/bevakningar) picked from the
-│   │                          # sidebar; renderPage() in fragment 3 owns visibility + active
-│   │                          # nav state. "Admin" is gone from all user-visible text (v0.7.1).
+│   │                          # The UI is ONE served page with four hash-routed pages
+│   │                          # (#/produkter, #/erbjudanden, #/bevakningar, #/loggar) picked
+│   │                          # from the sidebar; renderPage() in fragment 3 owns visibility +
+│   │                          # active nav state. "Admin" is gone from all user-visible text (v0.7.1).
 ├── mcp_server/
 │   └── server.py  # FastMCP, bearer auth, 4 tools
 └── infra/
     ├── fetcher.py  # httpx
+    ├── logbuffer.py # in-memory ring buffer of the app's own log records; portal Loggar page reads it via GET /logs (v0.18.0)
     ├── email.py    # Resend HTTP client
     ├── llm.py      # OpenRouter
     └── db.py       # async session factory

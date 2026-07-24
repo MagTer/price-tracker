@@ -14,10 +14,15 @@ from sqlalchemy import text
 from api.admin import router as admin_router
 from domain.scheduler import PriceCheckScheduler
 from infra.db import async_session_factory, engine
+from infra.logbuffer import install as install_log_buffer
 from infra.providers import get_email_service, get_fetcher, get_rate_limiter
 from mcp_server.server import get_mcp_app
 
 logger = logging.getLogger(__name__)
+
+# Tail the app's own log records into the in-memory ring buffer the portal's Loggar page
+# reads. Done at import (before any request) and idempotent, so tests and prod share it.
+install_log_buffer()
 
 mcp_app, mcp_http_app = get_mcp_app()
 
