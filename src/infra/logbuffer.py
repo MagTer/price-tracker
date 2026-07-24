@@ -28,7 +28,7 @@ _DEFAULT_LOGGERS = ("domain", "infra", "api")
 class RingBufferLogHandler(logging.Handler):
     """Keeps the last `capacity` log records as plain dicts, newest appended last."""
 
-    def __init__(self, capacity: int = 500) -> None:
+    def __init__(self, capacity: int = 1000) -> None:
         super().__init__()
         self._records: deque[dict[str, object]] = deque(maxlen=capacity)
         self._lock = Lock()
@@ -81,12 +81,16 @@ def get_log_buffer() -> RingBufferLogHandler:
     return _buffer
 
 
-def install(level: int = logging.INFO, loggers: tuple[str, ...] = _DEFAULT_LOGGERS) -> None:
+def install(level: int = logging.DEBUG, loggers: tuple[str, ...] = _DEFAULT_LOGGERS) -> None:
     """Attach the ring buffer to the app's loggers. Idempotent.
 
-    Also raises each named logger to `level` so its children's INFO records are actually
-    emitted regardless of how the root logger is configured (uvicorn's default is WARNING
-    for app loggers), without touching the root logger or other handlers.
+    Also raises each named logger to `level` so its records are actually emitted regardless
+    of how the root logger is configured, without touching the root logger or other
+    handlers. Capturing at DEBUG matters: several *fallback* events (JSON-LD → LLM,
+    "confidence too low, trying next model") are DEBUG, and the Loggar page's level filter
+    can only show what the buffer holds. These DEBUG records stay OUT of the console — they
+    propagate to the root handler, which filters at its own (INFO+) level; only this
+    buffer, attached directly to the app loggers, keeps them.
     """
     handler = get_log_buffer()
     handler.setLevel(level)

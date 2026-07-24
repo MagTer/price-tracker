@@ -91,3 +91,17 @@ class TestInstall:
         install()
         lg = logging.getLogger("infra")
         assert lg.handlers.count(get_log_buffer()) == 1
+
+    def test_install_captures_debug_fallback_records(self) -> None:
+        """DEBUG is captured (several fallback events log at DEBUG) so the level filter works."""
+        buf = get_log_buffer()
+        buf.clear()
+        install()
+        try:
+            logging.getLogger("domain.parser").debug("No usable JSON-LD Product, falling back")
+            debug_msgs = [r["message"] for r in buf.get_records(min_level="DEBUG")]
+            assert any("falling back" in m for m in debug_msgs)
+            # ...but the default INFO view hides it.
+            assert not any("falling back" in r["message"] for r in buf.get_records())
+        finally:
+            buf.clear()
