@@ -99,7 +99,9 @@ alembic/versions/   # 0001_initial (rewritten in place during 04.1 — see Gotch
 - **`PricePoint.store_unit_price_sek`** is the store's *printed* comparison price. It is displayed beside the computed value and **never sorted on** — stores print in different units, so sorting on it compares kr/kg against kr/st.
 - **`ProductStore.scraped_package_quantity`** is what the page said, kept as *evidence*. Typed input is *intent*. Evidence autofills an empty field and **flags** a conflict; it never overwrites intent.
 - **`ProductStore.store_label` (v0.6.0)** is the link's optional display store name ("ICA Maxi Sandviken") for chains that price per physical butik — two ICA butiker are two links under the ONE chain-level `Store` row (whose slug drives the extractors; never add per-butik Store rows). `domain.models.link_store_name` (label wins, chain name is fallback) is the single display rule; every store-name emission (links, history, deals, emails, MCP) goes through it. Quick-add suggests the label from the URL's `/stores/<id>/` segment (`quickadd.KNOWN_STORE_LABELS`), and for butiker in `quickadd.SIBLING_STORE_GROUPS` it also offers to create the sister-butik links in the same confirm (v0.7.0) — each sibling is verified by its own first fetch and removed again if the page is unreachable. Both tables are per-instance operator config since v0.8.0: env `QUICKADD_STORE_LABELS` / `QUICKADD_SIBLING_GROUPS` (JSON), in-repo defaults are Magnus's butiker, malformed JSON warns and falls back — the repo is public/MIT and a second instance sets its own.
-- **The check schedule is a STORE property (v0.13.0):** `Store.check_weekdays` (JSONB list, 0=måndag — ICA `[0]`, Willys `[0, 4]`) + `Store.check_frequency_hours` (72 for the pharmacies), both modes morning-aligned (06–12). A link's own `check_weekdays`/`check_frequency_hours` are NULL in the normal state = inherit; setting either overrides WHOLESALE. Resolution + next-check time live in `domain/schedule.py` — one definition, used by the scheduler and the admin `/frequency` endpoint alike (its private copy was removed; do not reintroduce one). Quick-add and the add-link dialog ask nothing about scheduling; only the link-edit dialog offers the override. The scheduler also keeps a per-store politeness ledger (min 60 s between requests to one store, across batch and cycle boundaries).
+- **The check schedule is a STORE property (v0.13.0):** `Store.check_weekdays` (JSONB list, 0=måndag — ICA `[0]`, Willys `[0, 4]`) + `Store.check_frequency_hours` (72 for the pharmacies), both modes morning-aligned (06–12). A link's own `check_weekdays`/`check_frequency_hours` are NULL in the normal state = inherit; setting either overrides WHOLESALE. Resolution + next-check time live in `domain/schedule.py` — one definition, used by the scheduler and the admin `/frequency` endpoint alike (its private copy was removed; do not reintroduce one). Quick-add and the add-link dialog ask nothing about scheduling; only the link-edit dialog offers the override.
+- **The politeness ledger is SHARED and lives in `infra/rate_limiter.py` (v0.14.0):** `StoreRateLimiter` (process-wide singleton via `providers.get_rate_limiter`, injected into the scheduler) is THE per-store request throttle — reserve-a-slot, keyed by store id. The scheduler spaces its background checks 60 s apart (`RATE_LIMIT_DELAY`); the **interactive** fetches (quick-add preview, first check, manual re-check in `admin.py`) now go through the SAME ledger with a short interval and a `max_wait` cap (env `QUICKADD_RATE_LIMIT_DELAY`=5 s, `QUICKADD_MAX_WAIT`=10 s) so they can't burst a store's WAF while never stalling a human on a background reservation. Before this they bypassed all throttling — that is what let a handful of quick-add retries + scheduler checks trip ICA's CloudFront edge into HTTP 202/403 blocks. **Do not reintroduce the scheduler's old private `_last_request_at` dict.**
+- **The fetcher fails honestly on a bot wall (v0.14.0):** `WebFetcher.fetch` treats a challenge/rate-limit/empty response (HTTP 202/403/429/5xx, or an empty body) as `ok=False` with a readable error, after a short bounded retry — NOT as a successful fetch. The old `raise_for_status()` let a 202 (a 2xx) through as an empty page, which silently fed the JSON-LD/LLM extractors and surfaced as "metadata extraction failed" instead of "blocked, try again". A hard 4xx (404/410) fails fast without retrying.
 - **`uq_product_store(product_id, store_id)` is DROPPED; `store_url` is globally unique** (`uq_product_stores_store_url`). One product can have several links at the same store (different pack sizes). The URL is the link's natural key. **An AST gate in `tests/test_static_gates.py` fails any query in `src/` that resolves a link by the `(product_id, store_id)` pair** — if that test fires, your query is built on the pre-04.1 model, not on a lint nit.
 
 **MCP surface:** `check_price`, `find_deals`, `compare_stores`, `list_products` — see EXTRACTION.md §5.
@@ -140,6 +142,26 @@ gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -
 **Then tell Magnus the tag is built and needs the deploy bump.** Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml` (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
 
 Docs-only, planning-only, or test-only commits do **not** earn a tag; they ride along with the next real one.
+
+## Prod logs & observability
+
+Prod runs on the home-server platform (Dokploy). Nothing runs locally — `docker ps` here is empty. To read live prod logs, SSH to the **Dokploy VM (`magnus@192.168.10.223`, VMID 200)** and read the container directly; `sudo` is required (magnus isn't in the docker group there):
+
+```bash
+# containers: `price-tracker` (app) and `price-tracker-postgres`
+ssh magnus@192.168.10.223 "sudo docker logs --since 10m --timestamps price-tracker"
+ssh magnus@192.168.10.223 "sudo docker logs --tail 200 -f price-tracker"     # follow
+```
+
+The image is `python:3.12-slim` — **no `curl`**; for in-container HTTP probing use `python -c` with `httpx` (already a dep), e.g. to hit OpenRouter with the live key without it leaving the box:
+```bash
+ssh magnus@192.168.10.223 'sudo docker exec price-tracker python -c "import os,httpx; ..."'
+```
+
+Notes:
+- `home-server`'s `scripts/logs.sh` does the same SSH-to-Dokploy dance but its container allowlist is only `hermes`/`oauth2-proxy` — it does **not** know price-tracker; go direct with the commands above.
+- Server-side apps do **not** ship to the `applogs`/logsink sink (that's for unreachable devices — phones, head units; ADR-011). price-tracker logs live only in Docker/journald on the Dokploy VM.
+- The home-server topology: PVE `192.168.10.220`, ops LXC `.221`, AdGuard `.222`, **Dokploy `.223`**, dev `.224`.
 
 ## Gotchas
 

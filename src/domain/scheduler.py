@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import time
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -21,7 +20,7 @@ from domain.models import (
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
 from domain.pricing import unit_price_py
-from domain.protocols import IEmailService, IFetcher
+from domain.protocols import IEmailService, IFetcher, IRateLimiter
 from domain.schedule import effective_schedule, next_check_time
 from domain.service import PriceCheckOutcome, perform_price_check
 
@@ -40,10 +39,19 @@ class PriceCheckScheduler:
         session_factory: async_sessionmaker[AsyncSession],
         fetcher: IFetcher,
         email_service: IEmailService | None = None,
+        rate_limiter: IRateLimiter | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.fetcher = fetcher
         self.parser = PriceParser()
+        # THE politeness ledger. Injected in prod (app.py passes the process-wide
+        # singleton) so background checks share a store's throttle budget with the
+        # interactive quick-add fetches; a private one when omitted keeps tests isolated.
+        if rate_limiter is None:
+            from infra.rate_limiter import StoreRateLimiter
+
+            rate_limiter = StoreRateLimiter()
+        self.rate_limiter = rate_limiter
         # Create notifier wrapper if email service is provided
         self.notifier: PriceNotifier | None = None
         if email_service is not None:
@@ -51,11 +59,6 @@ class PriceCheckScheduler:
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._last_summary_date: date | None = None
-        # Monotonic time of the last request per store id — the politeness ledger. Kept on
-        # the instance (not per batch) so the RATE_LIMIT_DELAY spacing holds across cycle
-        # boundaries and for non-adjacent same-store items, which the old "compare with the
-        # previous item" check silently missed.
-        self._last_request_at: dict[object, float] = {}
         self._stats: dict[str, int] = {
             "checks_total": 0,
             "checks_success": 0,
@@ -144,13 +147,9 @@ class PriceCheckScheduler:
             try:
                 # Rate limit per store (no session held during the sleep): keep at least
                 # RATE_LIMIT_DELAY between requests to one store, whenever the previous
-                # one happened — earlier in this batch or in a previous cycle.
-                last_request = self._last_request_at.get(product_store.store_id)
-                if last_request is not None:
-                    wait = self.RATE_LIMIT_DELAY - (time.monotonic() - last_request)
-                    if wait > 0:
-                        await asyncio.sleep(wait)
-                self._last_request_at[product_store.store_id] = time.monotonic()
+                # one happened — earlier in this batch, in a previous cycle, OR from an
+                # interactive quick-add fetch, which now shares this same ledger.
+                await self.rate_limiter.acquire(product_store.store_id, self.RATE_LIMIT_DELAY)
 
                 async with self.session_factory() as session:
                     outcome = await self._check_single_product(product_store, session)

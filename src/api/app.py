@@ -14,7 +14,7 @@ from sqlalchemy import text
 from api.admin import router as admin_router
 from domain.scheduler import PriceCheckScheduler
 from infra.db import async_session_factory, engine
-from infra.providers import get_email_service, get_fetcher
+from infra.providers import get_email_service, get_fetcher, get_rate_limiter
 from mcp_server.server import get_mcp_app
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,9 @@ async def lifespan(app: FastAPI):
             session_factory=async_session_factory,
             fetcher=fetcher,
             email_service=email_service if email_service.is_configured() else None,
+            # Share the process-wide politeness ledger so background checks and the
+            # interactive quick-add fetches throttle against ONE per-store budget.
+            rate_limiter=get_rate_limiter(),
         )
         await scheduler.start()
         app.state.scheduler = scheduler

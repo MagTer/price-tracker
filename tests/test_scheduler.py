@@ -762,6 +762,42 @@ class TestWeeklySummary:
 
 class TestCheckDueProducts:
     @pytest.mark.asyncio
+    async def test_throttles_each_item_through_the_shared_ledger(self) -> None:
+        """Every due item is spaced via the injected rate limiter, keyed by store id.
+
+        This is the scheduler half of Fix B: the politeness ledger is no longer a
+        private dict but the shared StoreRateLimiter, so quick-add fetches count against
+        the same per-store budget.
+        """
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+
+        ps1 = _make_product_store(store_id=uuid.uuid4())
+        ps2 = _make_product_store(store_id=uuid.uuid4())
+
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps1, ps2]
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock):
+            await scheduler._check_due_products()
+
+        assert scheduler.rate_limiter.acquire.await_count == 2
+        keys = {call.args[0] for call in scheduler.rate_limiter.acquire.await_args_list}
+        assert keys == {ps1.store_id, ps2.store_id}
+        for call in scheduler.rate_limiter.acquire.await_args_list:
+            assert call.args[1] == scheduler.RATE_LIMIT_DELAY
+
+    @pytest.mark.asyncio
     async def test_each_item_gets_its_own_session(self) -> None:
         """One session loads due items; each item then gets a fresh session
         (rate-limit sleeps must never hold a DB connection)."""

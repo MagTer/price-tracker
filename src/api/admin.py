@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -50,9 +51,17 @@ from domain.schedule import effective_schedule, is_inherited, next_check_time
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
-from infra.providers import get_fetcher
+from infra.providers import get_fetcher, get_rate_limiter
 
 LOGGER = logging.getLogger(__name__)
+
+# Interactive fetches (quick-add preview, first check, manual re-check) go through the
+# SAME per-store politeness ledger as the scheduler so they cannot burst a store's WAF
+# (see infra.rate_limiter). A short spacing — a mashed "förhandsgranska" button or the
+# scheduler landing on the same store a second earlier no longer fires back-to-back —
+# capped so a human never waits on a background reservation more than QUICKADD_MAX_WAIT.
+QUICKADD_RATE_LIMIT_DELAY = float(os.getenv("QUICKADD_RATE_LIMIT_DELAY", "5"))
+QUICKADD_MAX_WAIT = float(os.getenv("QUICKADD_MAX_WAIT", "10"))
 
 _CENT = Decimal("0.01")
 
@@ -507,6 +516,9 @@ async def quick_add_preview(
                 "already_tracked": {"product_id": str(dup[0]), "product_name": dup[1]},
             }
 
+        await get_rate_limiter().acquire(
+            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+        )
         fetch_result = await get_fetcher().fetch(url)
         if not fetch_result.get("ok"):
             raise HTTPException(
@@ -832,6 +844,9 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
             return {"success": False, "reason": "link_not_found"}
 
         product_store, store, product = row
+        await get_rate_limiter().acquire(
+            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+        )
         outcome = await perform_price_check(
             product_store=product_store,
             product=product,
@@ -1443,6 +1458,9 @@ async def trigger_price_check(
 
         product_store, store, product = row
 
+        await get_rate_limiter().acquire(
+            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+        )
         outcome = await perform_price_check(
             product_store=product_store,
             product=product,
