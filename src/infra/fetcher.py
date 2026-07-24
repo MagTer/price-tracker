@@ -54,6 +54,16 @@ class WebFetcher:
     """Simple async web fetcher with browser headers and HTML text extraction."""
 
     def __init__(self) -> None:
+        # Headers of a real top-level Chrome navigation. A WAF/CDN's bot-detection
+        # fingerprints requests, and a "Chrome" User-Agent arriving WITHOUT the client
+        # hints (Sec-Ch-Ua) and Sec-Fetch-* headers a real Chrome always sends is an
+        # inconsistency that reads as automated — which is what invites the JS challenge
+        # (the empty HTTP 202 we saw from ICA's CloudFront). Keeping the UA version and
+        # the Sec-Ch-Ua brand list in step, plus the navigation Sec-Fetch-* set, makes us
+        # look like a browser. This does NOT beat a genuine per-IP rate limit (that is the
+        # politeness ledger's job) — it just lowers how often we trip the bot challenge.
+        # Bump CHROME_MAJOR periodically; a stale major version is itself a mild bot tell.
+        chrome_major = "133"
         self._client = httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(15.0, connect=5.0),
@@ -61,13 +71,25 @@ class WebFetcher:
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
+                    f"Chrome/{chrome_major}.0.0.0 Safari/537.36"
                 ),
                 "Accept": (
                     "text/html,application/xhtml+xml,application/xml;q=0.9,"
                     "image/avif,image/webp,image/apng,*/*;q=0.8"
                 ),
                 "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": (
+                    f'"Chromium";v="{chrome_major}", '
+                    f'"Google Chrome";v="{chrome_major}", '
+                    '"Not(A:Brand";v="24"'
+                ),
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "none",
+                "sec-fetch-user": "?1",
+                "upgrade-insecure-requests": "1",
             },
         )
 

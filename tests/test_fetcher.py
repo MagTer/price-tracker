@@ -34,6 +34,26 @@ def _no_sleep():
         yield sleep_mock
 
 
+class TestBrowserHeaders:
+    def test_sends_a_consistent_browser_fingerprint(self) -> None:
+        """A Chrome UA WITH the matching client hints + Sec-Fetch-* — inconsistency here
+        is what invites a WAF's bot challenge (the empty 202 from ICA)."""
+        headers = WebFetcher()._client.headers  # httpx lowercases keys
+
+        ua = headers["user-agent"]
+        assert "Chrome/" in ua
+        # UA major version and the Sec-Ch-Ua brand version agree — the tell a WAF checks.
+        major = ua.split("Chrome/")[1].split(".")[0]
+        assert f'"Google Chrome";v="{major}"' in headers["sec-ch-ua"]
+        for h in (
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "sec-fetch-site",
+            "upgrade-insecure-requests",
+        ):
+            assert h in headers
+
+
 class TestSuccess:
     async def test_real_page_returns_ok_with_html_and_text(self) -> None:
         html = "<html><body><p>Hej</p><script>ignored</script></body></html>"
