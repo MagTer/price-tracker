@@ -543,8 +543,10 @@ async def quick_add_preview(
         guess = parse_package_from_name(name)
 
         if name is None:
+            # Pass the raw HTML too: for a JS SPA the identity lives in <title>/<meta>/
+            # JSON-LD that the stripped text drops, so text alone yields an all-null result.
             llm_meta = await PriceParser().extract_product_metadata(
-                fetch_result.get("text", ""), store.slug
+                fetch_result.get("text", ""), store.slug, html_content=html
             )
             if llm_meta is not None:
                 name = llm_meta.name

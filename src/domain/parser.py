@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from decimal import Decimal, InvalidOperation
+from html import unescape
 
 import httpx
 
@@ -72,6 +73,66 @@ def _to_int(value: object) -> int | None:
         return int(dec)
     except (ValueError, OverflowError):
         return None
+
+
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_META_TAG_RE = re.compile(r"<meta\b[^>]*?>", re.IGNORECASE)
+_ATTR_RE = re.compile(r"""([\w:-]+)\s*=\s*("[^"]*"|'[^']*')""")
+_LDJSON_RE = re.compile(
+    r"""<script[^>]*type\s*=\s*["']application/ld\+json["'][^>]*>(.*?)</script>""",
+    re.IGNORECASE | re.DOTALL,
+)
+# The identity signals of a page live in its <head> and <script> tags, which the
+# fetcher's visible-text extraction strips out. For a JS SPA (ICA, Willys) that leaves
+# the LLM fallback with almost nothing — it returns all-nulls on a real product. So when
+# the structured JSON-LD parse has ALREADY failed (that is the only time this fallback
+# runs), lead the LLM with the head/JSON-LD signals it can still read.
+_LDJSON_BUDGET = 3000
+
+
+def _clean_signal(text: str) -> str:
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def _meta_attrs(tag: str) -> dict[str, str]:
+    return {k.lower(): v[1:-1] for k, v in _ATTR_RE.findall(tag)}
+
+
+def _build_metadata_context(html_content: str, fallback_text: str, *, budget: int = 6000) -> str:
+    """Assemble the richest possible LLM context from raw HTML + stripped visible text.
+
+    Leads with <title>, the description/og meta tags, and any raw JSON-LD blocks (the
+    exact data a SPA hides from visible text), then appends the visible text. Truncated
+    to `budget`. If the HTML carries no signals (e.g. a blocked/empty page), this is just
+    the visible text — no regression over the old text-only behaviour.
+    """
+    parts: list[str] = []
+
+    title_match = _TITLE_RE.search(html_content)
+    if title_match:
+        title = _clean_signal(title_match.group(1))
+        if title:
+            parts.append(f"Title: {title}")
+
+    seen: set[str] = set()
+    for tag in _META_TAG_RE.findall(html_content):
+        attrs = _meta_attrs(tag)
+        key = (attrs.get("name") or attrs.get("property") or "").lower()
+        content = attrs.get("content")
+        if key in ("description", "og:title", "og:description") and content and key not in seen:
+            seen.add(key)
+            parts.append(f"{key}: {_clean_signal(content)}")
+
+    blocks = [b.strip() for b in _LDJSON_RE.findall(html_content) if b.strip()]
+    if blocks:
+        parts.append("Structured data (JSON-LD):\n" + "\n".join(blocks)[:_LDJSON_BUDGET])
+
+    head = "\n".join(parts)
+    if head and fallback_text:
+        context = f"{head}\n\nVisible text:\n{fallback_text}"
+    else:
+        context = head or fallback_text
+    return context[:budget]
 
 
 class PriceParser:
@@ -329,7 +390,7 @@ class PriceParser:
         return dataclasses.replace(base, **updates)
 
     async def extract_product_metadata(
-        self, text_content: str, store_slug: str
+        self, text_content: str, store_slug: str, *, html_content: str | None = None
     ) -> ProductMetadata | None:
         """Identify the product on a page (name/brand/category/package) for quick-add.
 
@@ -337,13 +398,22 @@ class PriceParser:
         order and acceptance floor as price extraction; returns None instead of raising —
         quick-add degrades to asking the user to type the name, it never errors out on
         an extraction failure.
+
+        When `html_content` is given, the prompt is built from the page's identity signals
+        (title, meta, raw JSON-LD) plus the visible text rather than the visible text alone
+        — the difference between the LLM seeing a product and seeing an empty SPA shell.
         """
+        page = (
+            _build_metadata_context(html_content, text_content)
+            if html_content
+            else text_content[:6000]
+        )
         prompt = f"""Identify the product being sold on this Swedish store page.
 
 Store: {store_slug}
 
 Page content (truncated):
-{text_content[:6000]}
+{page}
 
 Return a JSON object with exactly these fields:
 - "name": The product's name WITHOUT package size suffixes (e.g. "Lambi Toalettpapper 3-lager",

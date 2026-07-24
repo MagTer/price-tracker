@@ -6,7 +6,44 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from domain.parser import PriceExtractionResult, PriceParser, _to_decimal, _to_int
+from domain.parser import (
+    PriceExtractionResult,
+    PriceParser,
+    _build_metadata_context,
+    _to_decimal,
+    _to_int,
+)
+
+_SPA_HTML = """<!doctype html><html><head>
+<title>Falukorv Klassikern 800g Scan &ndash; online</title>
+<meta name="description" content="Falukorv Klassikern 800g Scan &amp; hemleverans">
+<meta property="og:title" content="Falukorv Klassikern 800g Scan">
+<script type="application/ld+json">{"@type":"Product","name":"Falukorv"}</script>
+</head><body><div id="root"></div></body></html>"""
+
+
+class TestMetadataContext:
+    """_build_metadata_context: give the LLM the head/JSON-LD a SPA hides from visible text."""
+
+    def test_leads_with_title_meta_and_jsonld(self) -> None:
+        ctx = _build_metadata_context(_SPA_HTML, "sparse visible text")
+        assert "Title: Falukorv Klassikern 800g Scan" in ctx  # entities unescaped
+        assert "description: Falukorv Klassikern 800g Scan & hemleverans" in ctx
+        assert "og:title: Falukorv Klassikern 800g Scan" in ctx
+        assert '"@type":"Product"' in ctx  # raw JSON-LD carried through
+        assert "Visible text:\nsparse visible text" in ctx
+        # Head signals come before the visible text.
+        assert ctx.index("Title:") < ctx.index("Visible text:")
+
+    def test_no_signals_falls_back_to_visible_text(self) -> None:
+        """A blocked/empty page (no head signals) must not regress below text-only."""
+        assert _build_metadata_context("<html><body></body></html>", "just text") == "just text"
+        assert _build_metadata_context("", "just text") == "just text"
+
+    def test_truncates_to_budget(self) -> None:
+        big_html = f"<title>{'x' * 100}</title>"
+        ctx = _build_metadata_context(big_html, "y" * 10000, budget=200)
+        assert len(ctx) == 200
 
 
 class TestNumericCoercion:
@@ -822,3 +859,43 @@ class TestEnrichWithLlm:
         assert enriched.raw_response["source"] == "jsonld"
         assert enriched.raw_response["enriched"] is True
         assert enriched.raw_response["enrichment_confidence"] == 0.85
+
+
+class TestExtractProductMetadataHtml:
+    """extract_product_metadata feeds the SPA head/JSON-LD signals to the model (D)."""
+
+    @pytest.mark.asyncio
+    async def test_html_signals_reach_the_prompt(self) -> None:
+        parser = PriceParser()
+        captured: dict[str, str] = {}
+
+        async def fake_call(prompt: str, model: str) -> dict:
+            captured["prompt"] = prompt
+            return {"name": "Falukorv Klassikern", "brand": "Scan", "confidence": 0.95}
+
+        with patch.object(parser, "_call_model_json", side_effect=fake_call):
+            meta = await parser.extract_product_metadata(
+                "sparse visible text", "ica", html_content=_SPA_HTML
+            )
+
+        # The prompt carried the title/JSON-LD the stripped text lacked.
+        assert "Falukorv Klassikern 800g Scan" in captured["prompt"]
+        assert '"@type":"Product"' in captured["prompt"]
+        assert meta is not None
+        assert meta.name == "Falukorv Klassikern"
+        assert meta.brand == "Scan"
+
+    @pytest.mark.asyncio
+    async def test_without_html_uses_visible_text_only(self) -> None:
+        parser = PriceParser()
+        captured: dict[str, str] = {}
+
+        async def fake_call(prompt: str, model: str) -> dict:
+            captured["prompt"] = prompt
+            return {"name": "X", "confidence": 0.9}
+
+        with patch.object(parser, "_call_model_json", side_effect=fake_call):
+            await parser.extract_product_metadata("only visible text", "med24")
+
+        assert "only visible text" in captured["prompt"]
+        assert "JSON-LD" not in captured["prompt"]
