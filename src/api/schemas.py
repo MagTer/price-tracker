@@ -105,10 +105,18 @@ class QuickAddCreate(BaseModel):
     package_size: str | None = None
     package_quantity: float | None = None
     store_label: str | None = None  # per-link store display name ("ICA Maxi Sandviken")
-    run_first_check: bool = True  # fetch the first price (and D-07 autofill) immediately
+    # Default False: adding a product must not fetch. A new link is immediately due
+    # (next_check_at is NULL), so the scheduler takes its first price on the next cycle,
+    # through the SAME per-store politeness ledger — no burst of same-host requests during
+    # add, which is what tripped ICA's WAF. Set True only for a deliberate immediate check
+    # of a store that does not rate-limit.
+    run_first_check: bool = False
     # Also create the link(s) for the pasted butik's sibling stores (SIBLING_STORE_GROUPS),
-    # derived server-side from `url`. Each sibling is verified by its own first check and
-    # removed again if its page cannot be fetched — a candidate, not a blind write.
+    # derived server-side from `url`. Siblings are created optimistically — the scheduler
+    # checks them like any link. (They are NOT fetched during add: same-store_id sister
+    # butiker share one WAF/host, so verifying each inline was exactly the burst to avoid,
+    # and under the block-aware fetcher a rate-limited fetch is indistinguishable from a
+    # genuinely absent page, so inline verification would wrongly delete valid siblings.)
     add_siblings: bool = False
 
 

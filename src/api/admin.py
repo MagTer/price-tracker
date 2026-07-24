@@ -762,13 +762,16 @@ async def _add_sibling_links(
     """Create the sister-butik links for a just-confirmed quick-add (best-effort).
 
     A sibling is a CANDIDATE, not a fact: the URL swap almost always holds (chain-wide
-    product ids, verified live), but the assortment may differ per butik. So each created
-    sibling is verified by its own first check, and a link whose page cannot be fetched is
-    removed again — a dead link would otherwise fail on every scheduler tick forever.
-    ``no_price`` keeps the link (the page exists; extraction gets retried like any link).
+    product ids, verified live), but the assortment may differ per butik. Siblings are
+    created optimistically and left for the scheduler to check like any other link — they
+    are NOT fetched here. Sister butiker share one store_id (one host + WAF), so verifying
+    each inline was the very same-host burst that tripped the rate limit; and now that the
+    fetcher reports a WAF block as a failed fetch, an inline check could not tell "this
+    butik lacks the product" from "we are momentarily blocked", so it would wrongly delete
+    valid siblings. A truly absent sibling simply keeps failing its scheduled checks.
 
     Never raises: the primary link is the task, siblings report their own outcome —
-    ``created`` / ``already_tracked`` / ``removed_not_found`` / ``error`` per entry.
+    ``created`` / ``already_tracked`` / ``error`` per entry.
     """
     store_name_row = (
         await session.execute(select(Store.name).where(Store.id == uuid.UUID(data.store_id)))
@@ -802,13 +805,6 @@ async def _add_sibling_links(
             )
             entry["product_store_id"] = str(product_store.id)
             entry["status"] = "created"
-
-            if data.run_first_check:
-                check = await _run_first_check(session, product_store.id)
-                entry["check"] = check
-                if not check.get("success") and check.get("reason") == "fetch_failed":
-                    await _remove_link(session, product_store.id)
-                    entry["status"] = "removed_not_found"
         except IntegrityError:
             entry["status"] = "already_tracked"
         except Exception:

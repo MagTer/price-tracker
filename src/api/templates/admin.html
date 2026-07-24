@@ -218,8 +218,8 @@
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
             <!-- Sister-butik links (same product, /stores/<id>/ swapped). Pre-checked but
-                 visible — each accepted sibling is verified by fetch on the server and
-                 dropped again if the product is not carried at that butik. -->
+                 visible — accepted siblings are created optimistically and left for the
+                 scheduler to price; they are not fetched during add. -->
             <div class="form-group" id="qa-sibling-row" style="display:none;">
                 <label>
                     <input type="checkbox" id="qa-add-siblings" checked>
@@ -269,7 +269,7 @@
                  The info line below says so; an override lives in the link-edit dialog. -->
             <div id="qa-price-info" class="best-link" style="padding-bottom:12px;"></div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary" id="qa-confirm-btn">Lägg till och hämta pris</button>
+                <button type="submit" class="btn btn-primary" id="qa-confirm-btn">Lägg till</button>
                 <button type="button" class="btn" onclick="closeModal('modal-quick-add')">Avbryt</button>
             </div>
         </form>
@@ -1371,7 +1371,10 @@ async function handleQuickAddConfirm(e) {
         unit: existingId ? null : (document.getElementById('qa-unit').value || null),
         package_size: document.getElementById('qa-pkg-label').value.trim() || null,
         package_quantity: pkgQuantity('qa'),
-        run_first_check: true,
+        // Adding does NOT fetch — a new link is immediately due, so the scheduler takes
+        // its first price on the next cycle through the per-store throttle. This is what
+        // stops the add flow from bursting a store's WAF.
+        run_first_check: false,
         add_siblings: document.getElementById('qa-sibling-row').style.display !== 'none'
             && document.getElementById('qa-add-siblings').checked
     };
@@ -1380,24 +1383,11 @@ async function handleQuickAddConfirm(e) {
     btn.textContent = 'Lägger till…';
     try {
         const res = await apiPost('/quick-add', body);
-        let msg = 'Produkt tillagd';
-        if (res.check && res.check.success) {
-            msg = 'Tillagd — pris just nu ' + formatSek(res.check.price_sek) + ' kr';
-        } else if (res.check) {
-            msg = 'Tillagd — priset kunde inte hämtas nu, schemaläggaren försöker igen';
-        }
-        for (const s of (res.sibling_links || [])) {
-            const label = s.store_label || 'syskonbutiken';
-            if (s.status === 'created') {
-                msg += ' · ' + label + (s.check && s.check.success
-                    ? ': ' + formatSek(s.check.price_sek) + ' kr' : ': tillagd');
-            } else if (s.status === 'already_tracked') {
-                msg += ' · ' + label + ': bevakades redan';
-            } else if (s.status === 'removed_not_found') {
-                msg += ' · ' + label + ': sidan hittades inte — ej tillagd';
-            } else {
-                msg += ' · ' + label + ': kunde inte läggas till';
-            }
+        let msg = 'Tillagd — priset hämtas av schemaläggaren inom kort';
+        const sibs = (res.sibling_links || []).filter(s => s.status === 'created');
+        if (sibs.length) {
+            const names = sibs.map(s => s.store_label || 'syskonbutik').join(', ');
+            msg += ' · även ' + names;
         }
         showToast(msg);
         closeModal('modal-quick-add');
@@ -1407,7 +1397,7 @@ async function handleQuickAddConfirm(e) {
         showToast('Fel: ' + err.message, 'error');
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Lägg till och hämta pris';
+        btn.textContent = 'Lägg till';
     }
 }
 

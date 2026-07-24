@@ -331,69 +331,41 @@ class TestSiblingLinkCreation:
         assert mock_service.link_product_store.await_count == 1  # primary only
         assert r.json()["sibling_links"][0]["status"] == "already_tracked"
 
-    def test_unfetchable_sibling_is_removed_again(self, client, mock_session, mock_service):
-        """The URL swap is a candidate: a butik that does not carry the product must not
-        leave a dead link behind to fail on every scheduler tick."""
-        from domain.result import PriceExtractionResult
-
-        store = _store()
-        product = Product(id=uuid.uuid4(), tenant_id=uuid.uuid4(), name="Potatissallad", unit="kg")
-        sibling_url = ICA_MAXI_URL.replace("/stores/1003396/", "/stores/1004503/")
-        link_primary = _link(store, label="ICA Maxi Sandviken")
-        link_sibling = _link(store, label="ICA Supermarket Björksätra", url=sibling_url)
-
-        def row(link):
-            m = MagicMock()
-            m.one_or_none.return_value = (link, store, product)
-            return m
-
-        remove_load = MagicMock()
-        remove_load.scalar_one_or_none.return_value = link_sibling
+    def test_sibling_is_created_optimistically_and_never_fetched(
+        self, client, mock_session, mock_service
+    ):
+        """Adding a product does not fetch — siblings included. Sister butiker share one
+        store_id (one host + WAF), so verifying each inline was the very burst that tripped
+        the rate limit; and a WAF block is now indistinguishable from an absent page, so an
+        inline check would wrongly delete a valid sibling. So the sibling is created and
+        left for the scheduler — no fetch, no deletion — even a truly absent one."""
+        link_primary = _link(_store(), label="ICA Maxi Sandviken")
+        link_sibling = _link(
+            _store(),
+            label="ICA Supermarket Björksätra",
+            url=ICA_MAXI_URL.replace("/stores/1003396/", "/stores/1004503/"),
+        )
         mock_session.execute.side_effect = [
             _result(first=None),  # primary dup check
-            row(link_primary),  # primary first-check row
-            _result(first=("ICA",)),  # store-name lookup
+            _result(first=("ICA",)),  # store-name lookup for the label fallback
             _result(first=None),  # sibling dup check
-            row(link_sibling),  # sibling first-check row
-            remove_load,  # _remove_link load
         ]
-
-        two_links = [MagicMock(id=link_primary.id), MagicMock(id=link_sibling.id)]
-        mock_service.link_product_store = AsyncMock(side_effect=two_links)
-
-        extraction = PriceExtractionResult(
-            price_sek=Decimal("13.20"),
-            store_unit_price_sek=None,
-            offer_price_sek=None,
-            offer_type=None,
-            offer_details=None,
-            in_stock=True,
-            confidence=0.95,
-            pack_size=None,
-            package_amount=None,
-            package_unit=None,
-            raw_response={"source": "llm"},
+        mock_service.link_product_store = AsyncMock(
+            side_effect=[MagicMock(id=link_primary.id), MagicMock(id=link_sibling.id)]
         )
+
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(
-            side_effect=lambda url: {"ok": True, "text": "page", "html": ""}
-            if url == ICA_MAXI_URL
-            else {"ok": False, "text": "", "html": "", "error": "404 Not Found"}
-        )
-        parser = MagicMock()
-        parser.extract_price = AsyncMock(return_value=extraction)
+        fetcher.fetch = AsyncMock()
 
-        with (
-            patch("api.admin.get_fetcher", return_value=fetcher),
-            patch("api.admin.PriceParser", return_value=parser),
-        ):
-            r = self._confirm(client, run_first_check=True)
+        with patch("api.admin.get_fetcher", return_value=fetcher):
+            r = self._confirm(client)  # run_first_check defaults False
 
         assert r.status_code == 201
         body = r.json()
-        assert body["check"]["success"] is True  # the primary got its Maxi price
-        assert body["sibling_links"][0]["status"] == "removed_not_found"
-        mock_session.delete.assert_called_once_with(link_sibling)
+        assert body["check"] is None  # nothing fetched on add
+        assert body["sibling_links"][0]["status"] == "created"
+        fetcher.fetch.assert_not_called()
+        mock_session.delete.assert_not_called()
 
 
 class TestHistorySeriesAreDistinguishable:
