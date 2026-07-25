@@ -206,3 +206,23 @@ def test_no_link_lookup_by_product_store_pair() -> None:
         + ". That pair is no longer unique — the query raises MultipleResultsFound (HTTP 500) "
         "as soon as a product has two pack sizes at one store. Key on ProductStore.id."
     )
+
+
+def test_category_selects_use_the_injected_placeholder() -> None:
+    """The three category dialogs must render from the ONE canonical list, not a free-text box.
+
+    render_admin injects domain.categories.PRODUCT_CATEGORIES into a <!--CATEGORY_OPTIONS-->
+    placeholder, so there is no second copy of the list to drift. If someone reverts a <select>
+    back to a free-text <input name="category">, or drops the placeholder, the field silently
+    goes back to accepting arbitrary strings — this catches that.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+
+    assert html.count("<!--CATEGORY_OPTIONS-->") == 3, (
+        "Expected exactly 3 <!--CATEGORY_OPTIONS--> placeholders (create / edit / quick-add). "
+        "A category <select> lost its placeholder, so render_admin injects nothing into it."
+    )
+    assert 'name="category"' not in html or 'type="text" name="category"' not in html, (
+        'A free-text <input name="category"> is back — category must be a <select> fed by the '
+        "canonical taxonomy, not an open string field."
+    )

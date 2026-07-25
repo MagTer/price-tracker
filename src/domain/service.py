@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from domain.categories import normalize_category
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
 from domain.pricing import (
@@ -697,8 +698,10 @@ class PriceTrackerService:
             product = Product(
                 tenant_id=tenant_id,
                 name=name,
+                # Coerce to the canonical taxonomy (or None) at the single create chokepoint —
+                # both POST /products and quick-add land here. See domain.categories.
+                category=normalize_category(category),
                 brand=brand,
-                category=category,
                 unit=unit,
             )
 

@@ -34,6 +34,7 @@ from api.schemas import (
     QuickAddPreview,
     StoreResponse,
 )
+from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
@@ -1029,7 +1030,7 @@ async def update_product(
         if data.brand is not None:
             product.brand = data.brand if data.brand else None
         if data.category is not None:
-            product.category = data.category if data.category else None
+            product.category = normalize_category(data.category)
         # `unit` is NOT updatable (locked in the schema): every link's package_quantity and
         # the whole kr/unit history are expressed in it — changing unit = delete + recreate.
         # Package data is edited on the LINK — see PUT /product-stores/{id}/packaging.
@@ -2232,7 +2233,7 @@ async def import_data(
             if product:
                 # Update existing product. Package data is NOT a product attribute any more —
                 # an import entry carries it on each store link instead.
-                product.category = prod_data.get("category") or product.category
+                product.category = normalize_category(prod_data.get("category")) or product.category
                 product.unit = prod_data.get("unit") or product.unit
                 products_updated += 1
             else:
@@ -2241,7 +2242,7 @@ async def import_data(
                     tenant_id=tenant_id,
                     name=name,
                     brand=brand,
-                    category=prod_data.get("category"),
+                    category=normalize_category(prod_data.get("category")),
                     unit=prod_data.get("unit"),
                 )
                 session.add(product)
@@ -2446,6 +2447,16 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
     parts = template_path.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")
 
     content = parts[0] if len(parts) > 0 else ""
+    # Inject the category <select> options from the ONE canonical list so the three dialogs
+    # (create / edit / quick-add) can never drift from domain.categories. The forms carry a
+    # <!--CATEGORY_OPTIONS--> placeholder; escape() covers the "&" in names like "Bröd & Bageri".
+    import html as html_module
+
+    category_options = '<option value="">— ingen —</option>' + "".join(
+        f'<option value="{html_module.escape(c)}">{html_module.escape(c)}</option>'
+        for c in PRODUCT_CATEGORIES
+    )
+    content = content.replace("<!--CATEGORY_OPTIONS-->", category_options)
     extra_css = parts[1] if len(parts) > 1 else ""
     extra_js = parts[2] if len(parts) > 2 else ""
 

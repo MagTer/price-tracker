@@ -10,6 +10,7 @@ from html import unescape
 
 import httpx
 
+from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.base import PriceExtractor
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.extractors.willys_api import WillysApiExtractor
@@ -424,8 +425,8 @@ Return a JSON object with exactly these fields:
 - "name": The product's name WITHOUT package size suffixes (e.g. "Lambi Toalettpapper 3-lager",
   not "Lambi Toalettpapper 3-lager 24-pack"). Null if you cannot tell.
 - "brand": The brand name (e.g. "Lambi"), null if not clear.
-- "category": A short product category in Swedish, one or two words
-  (e.g. "toalettpapper", "tandkräm", "kosttillskott"). Null if unclear.
+- "category": The store section this product belongs to. Choose EXACTLY ONE from this
+  list, copied verbatim, or null if none fits: {", ".join(PRODUCT_CATEGORIES)}.
 - "price": Current price in SEK as a number, null if not found.
 - "pack_size": Number of items in the pack from patterns like "24-pack", "16 st". Null if
   not a multi-pack product.
@@ -451,7 +452,9 @@ Only output the JSON object, no explanation or markdown."""
                 return ProductMetadata(
                     name=name,
                     brand=str(data["brand"]).strip() if data.get("brand") else None,
-                    category=str(data["category"]).strip() if data.get("category") else None,
+                    category=normalize_category(
+                        str(data["category"]) if data.get("category") else None
+                    ),
                     price_sek=_to_decimal(data.get("price")),
                     package_amount=_to_decimal(data.get("package_amount")),
                     package_unit=(

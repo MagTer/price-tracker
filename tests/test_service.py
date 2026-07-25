@@ -345,14 +345,15 @@ class TestPriceTrackerService:
             tenant_id=tenant_id,
             name="Smör Bregott",
             brand="Arla",
-            category="Mejeri",
+            category="Mejeri",  # legacy free text — normalised to the canonical section
             unit="kg",
         )
 
         assert product.tenant_id == tenant_id
         assert product.name == "Smör Bregott"
         assert product.brand == "Arla"
-        assert product.category == "Mejeri"
+        # create_product is the single write chokepoint and coerces category to the taxonomy.
+        assert product.category == "Mejeri & Ost"
         assert product.unit == "kg"
         assert mock_session.add.called
         assert mock_session.commit.called

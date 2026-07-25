@@ -474,7 +474,7 @@ class TestProductsEndpoints:
         assert r.status_code == 200
         assert product.name == "Nytt namn"  # trimmed
         assert product.brand is None  # '' clears an optional field
-        assert product.category == "Mejeri"
+        assert product.category == "Mejeri & Ost"  # legacy free text → canonical section
 
     def test_update_product_cannot_change_unit(self, client, mock_session):
         """Unit is LOCKED: every link amount and the whole kr/unit history are expressed
