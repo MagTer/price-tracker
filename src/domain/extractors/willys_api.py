@@ -120,7 +120,15 @@ class WillysApiExtractor:
             else:
                 logger.debug("Could not parse compare price: %s", compare_price_str)
 
-        # Check for offers
+        # Check for offers. `priceValue` is the ORDINARIE (pre-campaign) price and
+        # `savingsAmount` is the per-unit discount, so the price you actually pay during the
+        # campaign is priceValue - savingsAmount. Verified live (Bearnaise 101283524_ST,
+        # 2026-07-25): priceValue 21.29, savingsAmount 3.39, and 21.29 - 3.39 = 17.90 matches
+        # the campaign price in potentialPromotions[].price exactly.
+        #
+        # The earlier code did the reverse — treated priceValue as the offer and ADDED the
+        # saving to invent a "regular" price (24.68) that appears nowhere in the API — which
+        # is how a campaign product recorded two wrong numbers and hid the real 17.90.
         offer_price_sek: Decimal | None = None
         offer_type: str | None = None
         offer_details: str | None = None
@@ -129,8 +137,7 @@ class WillysApiExtractor:
         if savings and price_sek:
             savings_dec = Decimal(str(savings))
             if savings_dec > 0:
-                offer_price_sek = price_sek  # Current price IS the offer price
-                price_sek = price_sek + savings_dec  # Reconstruct regular price
+                offer_price_sek = price_sek - savings_dec  # what you pay during the campaign
                 offer_type = "kampanj"
                 offer_details = f"Spara {savings} kr"
 

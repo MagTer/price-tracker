@@ -99,11 +99,15 @@ class TestExtract:
 
     @pytest.mark.asyncio
     async def test_extract_with_savings(self) -> None:
-        """Response with savingsAmount sets offer fields and reconstructs regular price."""
+        """savingsAmount: priceValue is ordinarie, offer = priceValue - savings.
+
+        Live shape (Bearnaise 101283524_ST, 2026-07-25): priceValue 21.29 is the ordinarie
+        price, savingsAmount 3.39 is the per-unit discount, so the campaign price you pay is
+        21.29 - 3.39 = 17.90 (which equals potentialPromotions[].price on the live page).
+        """
         extractor = _make_extractor()
-        url = "https://www.willys.se/produkt/Toalettpapper-100014716_ST"
-        # Current (offer) price is 19.90, savings are 10.00 -> regular = 29.90
-        api_data = _valid_api_response(price_value=19.90, savings_amount=10.0)
+        url = "https://www.willys.se/produkt/Bearnaise-Original-101283524_ST"
+        api_data = _valid_api_response(price_value=21.29, savings_amount=3.39)
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, api_data))
@@ -115,11 +119,11 @@ class TestExtract:
             result = await extractor.extract(url)
 
         assert result is not None
-        assert result.offer_price_sek == Decimal("19.9")
-        assert result.price_sek == Decimal("29.9")  # reconstructed regular price
+        assert result.price_sek == Decimal("21.29")  # ordinarie, unchanged
+        assert result.offer_price_sek == Decimal("17.90")  # campaign price you pay now
         assert result.offer_type == "kampanj"
         assert result.offer_details is not None
-        assert "10.0" in result.offer_details
+        assert "3.39" in result.offer_details
 
     @pytest.mark.asyncio
     async def test_extract_out_of_stock(self) -> None:
