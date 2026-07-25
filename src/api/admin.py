@@ -65,6 +65,9 @@ LOGGER = logging.getLogger(__name__)
 # capped so a human never waits on a background reservation more than QUICKADD_MAX_WAIT.
 QUICKADD_RATE_LIMIT_DELAY = float(os.getenv("QUICKADD_RATE_LIMIT_DELAY", "5"))
 QUICKADD_MAX_WAIT = float(os.getenv("QUICKADD_MAX_WAIT", "10"))
+# Random 0..this on top of the interactive spacing so even the manual path isn't clockwork-even.
+# Small — it only moves the NEXT slot out, never the current caller's wait (max_wait still holds).
+QUICKADD_RATE_LIMIT_JITTER = float(os.getenv("QUICKADD_RATE_LIMIT_JITTER", "3"))
 
 # While the operator sits adding products, the background scheduler is silenced for a window
 # that each add (preview or confirm) pushes forward — the manual preview fetches plus the
@@ -539,7 +542,10 @@ async def quick_add_preview(
             }
 
         await get_rate_limiter().acquire(
-            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+            store.id,
+            QUICKADD_RATE_LIMIT_DELAY,
+            max_wait=QUICKADD_MAX_WAIT,
+            jitter=QUICKADD_RATE_LIMIT_JITTER,
         )
         fetch_result = await get_fetcher().fetch(url)
         if not fetch_result.get("ok"):
@@ -876,7 +882,10 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
 
         product_store, store, product = row
         await get_rate_limiter().acquire(
-            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+            store.id,
+            QUICKADD_RATE_LIMIT_DELAY,
+            max_wait=QUICKADD_MAX_WAIT,
+            jitter=QUICKADD_RATE_LIMIT_JITTER,
         )
         outcome = await perform_price_check(
             product_store=product_store,
@@ -1494,7 +1503,10 @@ async def trigger_price_check(
         product_store, store, product = row
 
         await get_rate_limiter().acquire(
-            store.id, QUICKADD_RATE_LIMIT_DELAY, max_wait=QUICKADD_MAX_WAIT
+            store.id,
+            QUICKADD_RATE_LIMIT_DELAY,
+            max_wait=QUICKADD_MAX_WAIT,
+            jitter=QUICKADD_RATE_LIMIT_JITTER,
         )
         outcome = await perform_price_check(
             product_store=product_store,

@@ -31,7 +31,11 @@ class PriceCheckScheduler:
     """Background scheduler for periodic price checks."""
 
     CHECK_INTERVAL_SECONDS = 300  # Check for due items every 5 minutes
-    RATE_LIMIT_DELAY = 60.0  # Seconds between requests to same store
+    RATE_LIMIT_DELAY = 60.0  # Minimum seconds between requests to same store
+    # Random 0..this added on top of RATE_LIMIT_DELAY so background checks don't hit a store
+    # on a clockwork 60 s beat — even spacing is itself a mild bot tell. Background cadence has
+    # slack to spare, so the extra wait costs nothing operationally.
+    RATE_LIMIT_JITTER = 30.0
     BATCH_SIZE = 10  # Max items to check per cycle
 
     def __init__(
@@ -173,7 +177,11 @@ class PriceCheckScheduler:
                 # RATE_LIMIT_DELAY between requests to one store, whenever the previous
                 # one happened — earlier in this batch, in a previous cycle, OR from an
                 # interactive quick-add fetch, which now shares this same ledger.
-                await self.rate_limiter.acquire(product_store.store_id, self.RATE_LIMIT_DELAY)
+                await self.rate_limiter.acquire(
+                    product_store.store_id,
+                    self.RATE_LIMIT_DELAY,
+                    jitter=self.RATE_LIMIT_JITTER,
+                )
 
                 async with self.session_factory() as session:
                     outcome = await self._check_single_product(product_store, session)

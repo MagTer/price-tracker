@@ -17,6 +17,7 @@ store serialize into evenly spaced slots without ever holding a lock across the 
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 
 
@@ -38,7 +39,12 @@ class StoreRateLimiter:
         return lock
 
     async def acquire(
-        self, key: object, min_interval: float, *, max_wait: float | None = None
+        self,
+        key: object,
+        min_interval: float,
+        *,
+        max_wait: float | None = None,
+        jitter: float = 0.0,
     ) -> float:
         """Block until it is polite to make a request to ``key``'s store; return slept secs.
 
@@ -50,6 +56,12 @@ class StoreRateLimiter:
         fetcher's block-retry, not a minute-long UI stall. The store's future budget is
         never pulled *earlier* than already reserved, so cutting in never lets a later
         request fire sooner than the ledger intended.
+
+        ``jitter`` adds a uniform random 0..jitter seconds ON TOP of ``min_interval`` when
+        reserving the NEXT slot, so a store sees irregular spacing instead of a clockwork
+        cadence (machine-even timing is itself a mild bot tell). It never shortens the
+        interval below the politeness floor, and never lengthens the CURRENT caller's wait
+        — only the next slot moves out — so an interactive caller's ``max_wait`` still holds.
         """
         async with self._lock_for(key):
             now = time.monotonic()
@@ -57,8 +69,10 @@ class StoreRateLimiter:
             start = max(now, prev_free)
             if max_wait is not None and start - now > max_wait:
                 start = now + max_wait
+            # Timing jitter, not crypto — a predictable PRNG is fine here.
+            interval = min_interval + (random.uniform(0.0, jitter) if jitter > 0 else 0.0)  # noqa: S311
             # max(prev_free, ...) so a capped interactive caller cannot rewind the clock.
-            self._next_free[key] = max(prev_free, start + min_interval)
+            self._next_free[key] = max(prev_free, start + interval)
 
         delay = start - time.monotonic()
         if delay > 0:

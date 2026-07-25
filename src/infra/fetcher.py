@@ -63,7 +63,7 @@ class WebFetcher:
         # look like a browser. This does NOT beat a genuine per-IP rate limit (that is the
         # politeness ledger's job) — it just lowers how often we trip the bot challenge.
         # Bump CHROME_MAJOR periodically; a stale major version is itself a mild bot tell.
-        chrome_major = "133"
+        chrome_major = "143"
         self._client = httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(15.0, connect=5.0),

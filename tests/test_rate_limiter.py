@@ -118,3 +118,48 @@ class TestRealConcurrency:
         elapsed = time.monotonic() - start
 
         assert elapsed < 0.05
+
+
+class TestJitter:
+    """Random spacing on top of the floor, so a store isn't hit on a clockwork beat."""
+
+    async def test_jitter_extends_the_next_slot_by_the_random_amount(self) -> None:
+        limiter = StoreRateLimiter()
+        clock = _Clock()
+        with (
+            patch("infra.rate_limiter.time.monotonic", clock),
+            patch("infra.rate_limiter.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("infra.rate_limiter.random.uniform", return_value=7.0),
+        ):
+            await limiter.acquire("store-a", 60, jitter=30)  # reserves next slot at +67
+            delay = await limiter.acquire("store-a", 60, jitter=30)  # clock frozen
+
+        assert delay == 67  # the first reservation's jittered interval: 60 + 7
+        sleep.assert_awaited_once_with(67)
+
+    async def test_a_zero_draw_is_exactly_the_floor(self) -> None:
+        limiter = StoreRateLimiter()
+        clock = _Clock()
+        with (
+            patch("infra.rate_limiter.time.monotonic", clock),
+            patch("infra.rate_limiter.asyncio.sleep", new_callable=AsyncMock),
+            patch("infra.rate_limiter.random.uniform", return_value=0.0),
+        ):
+            await limiter.acquire("store-a", 60, jitter=30)
+            delay = await limiter.acquire("store-a", 60, jitter=30)
+
+        assert delay == 60  # jitter never shortens below min_interval
+
+    async def test_default_no_jitter_never_calls_random(self) -> None:
+        limiter = StoreRateLimiter()
+        clock = _Clock()
+        with (
+            patch("infra.rate_limiter.time.monotonic", clock),
+            patch("infra.rate_limiter.asyncio.sleep", new_callable=AsyncMock),
+            patch("infra.rate_limiter.random.uniform") as uniform,
+        ):
+            await limiter.acquire("store-a", 60)
+            delay = await limiter.acquire("store-a", 60)
+
+        assert delay == 60
+        uniform.assert_not_called()
