@@ -22,7 +22,8 @@ class ProductMetadata:
     package_unit: str | None
     pack_size: int | None
     confidence: float
-    source: str  # "jsonld" | "llm"
+    source: str  # "jsonld" | "llm" | "willys_api"
+    in_stock: bool | None = None  # availability when the source states it (store APIs do)
 
 
 @dataclass

@@ -6,7 +6,8 @@ from decimal import Decimal
 
 import httpx
 
-from domain.result import PriceExtractionResult
+from domain.quickadd import parse_package_from_name
+from domain.result import PriceExtractionResult, ProductMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,52 @@ class WillysApiExtractor:
 
         Returns None on any error to allow LLM fallback.
         """
+        data = await self._fetch_product(store_url)
+        if data is None:
+            return None
+        return self._parse_response(data)
+
+    async def extract_metadata(self, store_url: str) -> ProductMetadata | None:
+        """Identity + package for quick-add — the same structured API, read for the fields a
+        price check ignores (name, brand, package size).
+
+        Willys is a client-rendered SPA: its product HTML carries no JSON-LD and no price, so
+        quick-add's HTML/LLM ladder sees an empty shell. The public REST API is the only
+        reliable source, exactly as it is for the price-check path. Returns None on any error
+        so the preview can still fall back to the HTML ladder.
+        """
+        data = await self._fetch_product(store_url)
+        if data is None:
+            return None
+
+        name = data.get("name")
+        if not name:
+            return None
+
+        # displayVolume ("1,1kg", "500 g", "6-pack") is the printed pack label — read it with
+        # the same coded parser quick-add uses on a title, so amount/unit/pack_size land the
+        # way the preview form expects.
+        guess = parse_package_from_name(str(data.get("displayVolume") or ""))
+
+        price_value = data.get("priceValue")
+        return ProductMetadata(
+            name=str(name),
+            brand=str(data["manufacturer"]) if data.get("manufacturer") else None,
+            category=None,  # Willys breadcrumbs aren't the app's taxonomy — leave it to the user.
+            price_sek=Decimal(str(price_value)) if price_value is not None else None,
+            package_amount=guess.amount,
+            package_unit=guess.entry_unit,
+            pack_size=guess.pack_size,
+            confidence=0.99,
+            source="willys_api",
+            in_stock=not data.get("outOfStock", False),
+        )
+
+    async def _fetch_product(self, store_url: str) -> dict[str, object] | None:
+        """GET the product JSON from the Willys REST API, or None on any error.
+
+        Shared by the price and metadata paths so the URL→code→GET dance lives in one place.
+        """
         code = self._extract_product_code(store_url)
         if not code:
             logger.debug("Could not extract product code from URL: %s", store_url)
@@ -42,13 +89,9 @@ class WillysApiExtractor:
                 if resp.status_code != 200:
                     logger.debug("Willys API returned %d for %s", resp.status_code, code)
                     return None
-
-                data = resp.json()
-
-            return self._parse_response(data)
-
+                return resp.json()
         except Exception:
-            logger.debug("Willys API extraction failed for %s", store_url, exc_info=True)
+            logger.debug("Willys API request failed for %s", store_url, exc_info=True)
             return None
 
     def _extract_product_code(self, url: str) -> str | None:

@@ -437,6 +437,59 @@ class TestQuickAddPreview:
         # is interval mode; the preview reports it for the confirm step's info line.
         assert body["store_schedule"] == {"weekdays": [], "frequency_hours": 72}
 
+    def test_willys_api_fills_the_preview_without_fetch(self, client, mock_session):
+        """A store with a structured API (Willys) is read straight off the API.
+
+        Willys is a client-rendered SPA: its product HTML has no JSON-LD and no price, so the
+        HTML/LLM ladder saw an empty shell and the preview came back blank. The API-first tier
+        reads identity + package from the REST API and never touches the HTML fetcher.
+        """
+        from domain.result import ProductMetadata
+
+        mock_session.execute.side_effect = [
+            _result(scalars_all=[_store(slug="willys", base_url="https://www.willys.se")]),
+            _result(first=None),
+            _result(scalars_all=[]),
+        ]
+        api_extractor = MagicMock()
+        api_extractor.extract_metadata = AsyncMock(
+            return_value=ProductMetadata(
+                name="Pasta Bolognes Fryst",
+                brand="Findus",
+                category=None,
+                price_sek=Decimal("66.15"),
+                package_amount=Decimal("1.1"),
+                package_unit="kg",
+                pack_size=None,
+                confidence=0.99,
+                source="willys_api",
+                in_stock=True,
+            )
+        )
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+        with (
+            patch("api.admin.get_api_extractor", return_value=api_extractor),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+        ):
+            r = client.post(
+                "/quick-add/preview",
+                json={"url": "https://www.willys.se/produkt/Pasta-Bolognes-Fryst-101548096_ST"},
+            )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "Pasta Bolognes Fryst"
+        assert body["brand"] == "Findus"
+        assert body["source"] == "willys_api"
+        assert body["price_sek"] == pytest.approx(66.15)
+        assert body["in_stock"] is True
+        # displayVolume "1,1kg" → kg comparison unit, 1.1.
+        assert body["suggested_unit"] == "kg"
+        assert body["package_quantity"] == pytest.approx(1.1)
+        # The API answered — the HTML fetcher and its SPA shell were never consulted.
+        fetcher.fetch.assert_not_called()
+
     def test_fetch_failure_is_502(self, client, mock_session):
         mock_session.execute.side_effect = [
             _result(scalars_all=[_store()]),

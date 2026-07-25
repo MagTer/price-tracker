@@ -1330,7 +1330,7 @@ function qaRenderPreview(p) {
         p.package_quantity != null ? p.package_quantity : '', p.package_size || '');
     const info = [];
     if (p.price_sek != null) info.push('Pris just nu: ' + formatSek(p.price_sek) + ' kr');
-    if (p.source) info.push('källa: ' + (p.source === 'jsonld' ? 'strukturerad sidodata' : 'AI-tolkning'));
+    if (p.source) info.push('källa: ' + (p.source === 'llm' ? 'AI-tolkning' : 'strukturerad sidodata'));
     // The link inherits the store's schedule — say so instead of asking about it.
     if (p.store_schedule) info.push('kontrolleras ' + scheduleText(p.store_schedule.weekdays, p.store_schedule.frequency_hours));
     if (p.name == null) info.push('Ingen produktinfo hittades — fyll i namnet själv');

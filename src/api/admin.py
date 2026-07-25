@@ -37,7 +37,7 @@ from api.schemas import (
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
-from domain.parser import PriceParser
+from domain.parser import PriceParser, get_api_extractor
 from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
 from domain.quickadd import (
     PackageGuess,
@@ -547,50 +547,84 @@ async def quick_add_preview(
             max_wait=QUICKADD_MAX_WAIT,
             jitter=QUICKADD_RATE_LIMIT_JITTER,
         )
-        fetch_result = await get_fetcher().fetch(url)
-        if not fetch_result.get("ok"):
-            raise HTTPException(
-                status_code=502,
-                detail=f"Kunde inte hämta sidan: {fetch_result.get('error')}",
-            )
 
-        html = fetch_result.get("html") or ""
-        extractor = JsonLdExtractor()
-        meta = extractor.extract_product_metadata(html) if html else None
-        # No product_name yet, so the name-overlap sanity check is skipped — acceptable
-        # because this price is preview display only; the recorded first price comes from
-        # perform_price_check after confirm.
-        price_result = extractor.extract_from_html(html) if html else None
-
-        name = meta.get("name") if meta else None
-        brand = meta.get("brand") if meta else None
+        name: str | None = None
+        brand: str | None = None
         category: str | None = None
-        price = price_result.price_sek if price_result else None
-        in_stock = price_result.in_stock if price_result else None
-        source = "jsonld" if name else None
-        guess = parse_package_from_name(name)
+        price: Any = None
+        in_stock: bool | None = None
+        source: str | None = None
+        guess = parse_package_from_name(None)
+
+        # API-FIRST, mirroring the price-check ladder: a store with a structured API (Willys)
+        # is a client-rendered SPA whose HTML carries no JSON-LD and no price — the HTML/LLM
+        # ladder below sees an empty shell. Read identity + package straight off the API.
+        api_extractor = get_api_extractor(store.slug)
+        if api_extractor is not None:
+            api_meta = await api_extractor.extract_metadata(url)
+            if api_meta is not None:
+                name = api_meta.name
+                brand = api_meta.brand
+                category = api_meta.category
+                price = api_meta.price_sek
+                in_stock = api_meta.in_stock
+                source = api_meta.source
+                if api_meta.package_amount is not None:
+                    guess = PackageGuess(
+                        amount=api_meta.package_amount,
+                        entry_unit=api_meta.package_unit,
+                        pack_size=api_meta.pack_size,
+                        label=(f"{api_meta.package_amount} {api_meta.package_unit or ''}".strip()),
+                    )
 
         if name is None:
-            # Pass the raw HTML too: for a JS SPA the identity lives in <title>/<meta>/
-            # JSON-LD that the stripped text drops, so text alone yields an all-null result.
-            llm_meta = await PriceParser().extract_product_metadata(
-                fetch_result.get("text", ""), store.slug, html_content=html
-            )
-            if llm_meta is not None:
-                name = llm_meta.name
-                brand = brand or llm_meta.brand
-                category = llm_meta.category
-                price = price if price is not None else llm_meta.price_sek
-                source = "llm"
-                guess = parse_package_from_name(name)
-                if guess.amount is None and llm_meta.package_amount is not None:
-                    # The LLM read the package off the PAGE — better evidence than the title.
-                    guess = PackageGuess(
-                        amount=llm_meta.package_amount,
-                        entry_unit=llm_meta.package_unit,
-                        pack_size=llm_meta.pack_size,
-                        label=(f"{llm_meta.package_amount} {llm_meta.package_unit or ''}".strip()),
-                    )
+            # No structured API (the four JSON-LD stores), or the API missed: fetch the page
+            # and walk the JSON-LD → LLM ladder.
+            fetch_result = await get_fetcher().fetch(url)
+            if not fetch_result.get("ok"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Kunde inte hämta sidan: {fetch_result.get('error')}",
+                )
+
+            html = fetch_result.get("html") or ""
+            extractor = JsonLdExtractor()
+            meta = extractor.extract_product_metadata(html) if html else None
+            # No product_name yet, so the name-overlap sanity check is skipped — acceptable
+            # because this price is preview display only; the recorded first price comes from
+            # perform_price_check after confirm.
+            price_result = extractor.extract_from_html(html) if html else None
+
+            name = meta.get("name") if meta else None
+            brand = meta.get("brand") if meta else None
+            price = price_result.price_sek if price_result else None
+            in_stock = price_result.in_stock if price_result else None
+            source = "jsonld" if name else None
+            guess = parse_package_from_name(name)
+
+            if name is None:
+                # Pass the raw HTML too: for a JS SPA the identity lives in <title>/<meta>/
+                # JSON-LD that the stripped text drops, so text alone yields an all-null result.
+                llm_meta = await PriceParser().extract_product_metadata(
+                    fetch_result.get("text", ""), store.slug, html_content=html
+                )
+                if llm_meta is not None:
+                    name = llm_meta.name
+                    brand = brand or llm_meta.brand
+                    category = llm_meta.category
+                    price = price if price is not None else llm_meta.price_sek
+                    source = "llm"
+                    guess = parse_package_from_name(name)
+                    if guess.amount is None and llm_meta.package_amount is not None:
+                        # The LLM read the package off the PAGE — better than the title.
+                        guess = PackageGuess(
+                            amount=llm_meta.package_amount,
+                            entry_unit=llm_meta.package_unit,
+                            pack_size=llm_meta.pack_size,
+                            label=(
+                                f"{llm_meta.package_amount} {llm_meta.package_unit or ''}".strip()
+                            ),
+                        )
 
         # The suggested name is the abstract good — strip a brand the source (JSON-LD title or
         # LLM) folded into it, so it does not double-print beside the brand column. The operator

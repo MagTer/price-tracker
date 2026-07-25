@@ -136,6 +136,17 @@ def _build_metadata_context(html_content: str, fallback_text: str, *, budget: in
     return context[:budget]
 
 
+# THE registry of store-API extractors — structured store endpoints that beat HTML scraping.
+# Shared by the price-check ladder (PriceParser) AND quick-add preview (api/admin.py) so a
+# store with a real API is read the same way everywhere. One definition; do not make a second.
+_API_EXTRACTORS: dict[str, WillysApiExtractor] = {"willys": WillysApiExtractor()}
+
+
+def get_api_extractor(store_slug: str) -> WillysApiExtractor | None:
+    """The store-API extractor for this slug, or None if the store has no structured API."""
+    return _API_EXTRACTORS.get(store_slug)
+
+
 class PriceParser:
     """LLM-based price extractor with cascading model strategy."""
 
@@ -164,9 +175,10 @@ class PriceParser:
     def __init__(self) -> None:
         self._store_hints: dict[str, str] = {}
         self._load_store_hints()
-        self._api_extractors: dict[str, PriceExtractor] = {
-            "willys": WillysApiExtractor(),
-        }
+        # A working COPY of the shared registry: the module-level dict stays the one canonical
+        # list (get_api_extractor reads it), while a test swapping in a mock on an instance
+        # cannot leak into every other consumer.
+        self._api_extractors: dict[str, PriceExtractor] = dict(_API_EXTRACTORS)
         self._jsonld_extractor = JsonLdExtractor()
 
     def _load_store_hints(self) -> None:
