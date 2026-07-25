@@ -66,7 +66,21 @@ LOGGER = logging.getLogger(__name__)
 QUICKADD_RATE_LIMIT_DELAY = float(os.getenv("QUICKADD_RATE_LIMIT_DELAY", "5"))
 QUICKADD_MAX_WAIT = float(os.getenv("QUICKADD_MAX_WAIT", "10"))
 
+# While the operator sits adding products, the background scheduler is silenced for a window
+# that each add (preview or confirm) pushes forward — the manual preview fetches plus the
+# scheduler grabbing the freshly-due new links are exactly the same-store burst that trips
+# ICA's WAF. Auto-resumes this many minutes after the last add; no button to remember.
+SCHEDULER_ADD_PAUSE_MINUTES = float(os.getenv("SCHEDULER_ADD_PAUSE_MINUTES", "60"))
+
 _CENT = Decimal("0.01")
+
+
+def _extend_scheduler_pause(request: Request) -> None:
+    """Push the scheduler's background-check pause forward on an add. No-op if no scheduler is
+    wired (tests, health probes). See SCHEDULER_ADD_PAUSE_MINUTES."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None:
+        scheduler.pause_for(timedelta(minutes=SCHEDULER_ADD_PAUSE_MINUTES))
 
 
 def _read_app_version() -> str:
@@ -470,6 +484,7 @@ async def create_product(
 
 @router.post("/quick-add/preview")
 async def quick_add_preview(
+    request: Request,
     data: QuickAddPreview,
     session: AsyncSession = Depends(get_db),
     admin_email: str = Depends(require_auth),
@@ -492,6 +507,10 @@ async def quick_add_preview(
     url = (data.url or "").strip()
     if not url.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Ange en fullständig produkt-URL (https://…)")
+
+    # An adding session has begun: silence the background scheduler so its checks do not race
+    # this preview's fetch (and the soon-to-be-due new links) into the store's WAF.
+    _extend_scheduler_pause(request)
 
     try:
         stores_stmt = select(Store).where(Store.is_active.is_(True))
@@ -634,6 +653,7 @@ async def quick_add_preview(
 
 @router.post("/quick-add", status_code=201)
 async def quick_add(
+    request: Request,
     data: QuickAddCreate,
     session: AsyncSession = Depends(get_db),
     service: PriceTrackerService = Depends(get_price_tracker_service),
@@ -672,6 +692,11 @@ async def quick_add(
     url = (data.url or "").strip()
     if not url.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Ange en fullständig produkt-URL (https://…)")
+
+    # Keep the background scheduler silent while the operator is adding (extends the window the
+    # preview opened) — the new link is immediately due, and the scheduler grabbing it mid-session
+    # is the same-store burst to avoid.
+    _extend_scheduler_pause(request)
 
     try:
         # Duplicate check BEFORE creating the product, so a duplicate URL cannot leave an
@@ -1055,6 +1080,7 @@ async def update_product(
     status_code=201,
 )
 async def link_product_to_store(
+    request: Request,
     product_id: str,
     data: ProductStoreLink,
     service: PriceTrackerService = Depends(get_price_tracker_service),
@@ -1094,6 +1120,9 @@ async def link_product_to_store(
         raise HTTPException(status_code=400, detail="package_quantity måste vara positiv")
 
     package_qty = Decimal(str(data.package_quantity)) if data.package_quantity else None
+
+    # Adding a link (the scheduler will grab it immediately) — extend the background pause.
+    _extend_scheduler_pause(request)
 
     try:
         product_store = await service.link_product_store(

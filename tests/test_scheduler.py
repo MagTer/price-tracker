@@ -134,6 +134,52 @@ class TestGetStatus:
         assert stats["summaries_sent"] == 0
 
 
+class TestPause:
+    """The auto-pause the add flows drive so a burst of manual adds doesn't race the
+    scheduler into a store's WAF."""
+
+    def test_status_exposes_paused_until(self) -> None:
+        scheduler, _, _ = _make_scheduler()
+        assert scheduler.get_status()["paused_until"] is None
+
+        until = scheduler.pause_for(timedelta(hours=1))
+        assert scheduler.get_status()["paused_until"] == until.isoformat()
+
+    def test_pause_for_resets_the_clock_forward(self) -> None:
+        scheduler, _, _ = _make_scheduler()
+        first = scheduler.pause_for(timedelta(minutes=10))
+        second = scheduler.pause_for(timedelta(hours=1))
+        # Each call re-bases the window to now+duration — a later add pushes it further out.
+        assert second > first
+
+    @pytest.mark.asyncio
+    async def test_paused_cycle_skips_without_touching_the_db(self) -> None:
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.pause_for(timedelta(hours=1))
+
+        await scheduler._check_due_products()
+
+        # Returned BEFORE opening a session — no query, so no store fetch either.
+        session_factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_elapsed_pause_is_cleared_and_the_cycle_runs(self) -> None:
+        scheduler, session_factory, _ = _make_scheduler()
+        # A pause already in the past must not wedge the scheduler forever.
+        scheduler._paused_until = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)
+
+        result = MagicMock()
+        result.unique.return_value.scalars.return_value.all.return_value = []
+        session_factory.return_value.__aenter__.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        await scheduler._check_due_products()
+
+        assert scheduler._paused_until is None
+        session_factory.assert_called()  # proceeded to load due items
+
+
 # ---------------------------------------------------------------------------
 # _check_single_product
 # ---------------------------------------------------------------------------

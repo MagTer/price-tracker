@@ -58,6 +58,10 @@ class PriceCheckScheduler:
             self.notifier = PriceNotifier(email_service)
         self._running = False
         self._task: asyncio.Task[None] | None = None
+        # When set, background checks are skipped until this time (auto-cleared once it passes).
+        # The add flows push it forward so a burst of manual adds does not race the scheduler
+        # into a store's WAF. See pause_for / _check_due_products.
+        self._paused_until: datetime | None = None
         self._last_summary_date: date | None = None
         self._stats: dict[str, int] = {
             "checks_total": 0,
@@ -91,6 +95,19 @@ class PriceCheckScheduler:
                 pass
         logger.info("Price check scheduler stopped")
 
+    def pause_for(self, duration: timedelta) -> datetime:
+        """Silence background checks until now + duration; each call resets the clock.
+
+        The add flows call this so a burst of manual quick-adds — each of which also fetches for
+        its preview and leaves a due link the scheduler would grab — does not race the scheduler
+        into a store's WAF. No manual resume: checks restart on the first cycle after the window
+        lapses (see _check_due_products). In-memory on purpose (single-process app); a restart
+        just resumes, which is harmless.
+        """
+        self._paused_until = datetime.now(UTC).replace(tzinfo=None) + duration
+        logger.info("Scheduler paused until %s (background checks held)", self._paused_until)
+        return self._paused_until
+
     async def _run_loop(self) -> None:
         """Main scheduler loop."""
         while self._running:
@@ -115,6 +132,13 @@ class PriceCheckScheduler:
         failure rolls back only its own transaction.
         """
         now = datetime.now(UTC).replace(tzinfo=None)
+
+        if self._paused_until is not None:
+            if now < self._paused_until:
+                logger.debug("Scheduler paused until %s — skipping cycle", self._paused_until)
+                return
+            logger.info("Scheduler pause elapsed — resuming background checks")
+            self._paused_until = None
 
         async with self.session_factory() as session:
             # Find product-stores where:
@@ -548,6 +572,7 @@ class PriceCheckScheduler:
         """Get scheduler status and statistics."""
         return {
             "running": self._running,
+            "paused_until": self._paused_until.isoformat() if self._paused_until else None,
             "last_summary_date": (
                 self._last_summary_date.isoformat() if self._last_summary_date else None
             ),
