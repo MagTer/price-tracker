@@ -738,7 +738,9 @@ async function loadStats() {
         // Paused (auto-set while you add products) overrides the PÅ/AV state — it's why the
         // background prices aren't refreshing, so say so instead of showing a misleading "PÅ".
         const schedEl = document.getElementById('stat-scheduler');
-        const pausedUntil = sched.paused_until ? new Date(sched.paused_until) : null;
+        // parseUtc, NOT new Date(): paused_until is naive UTC, and a bare timestamp parses as
+        // LOCAL time — in CEST that read the pause 2h in the past, so it always showed PÅ.
+        const pausedUntil = parseUtc(sched.paused_until);
         if (pausedUntil && pausedUntil > new Date()) {
             const t = pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
             schedEl.textContent = 'PAUSAD';
