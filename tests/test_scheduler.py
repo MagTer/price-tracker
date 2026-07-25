@@ -9,6 +9,7 @@ import pytest
 
 from domain.result import PriceExtractionResult
 from domain.scheduler import PriceCheckScheduler
+from domain.service import PriceCheckOutcome
 
 
 def _make_extraction(
@@ -1063,3 +1064,81 @@ class TestCheckDueProducts:
         mock_compute.assert_called_once()
         params = self._update_params(sessions[1].execute.call_args)
         assert params["next_check_at"] == sentinel
+
+
+class TestStoreCircuitBreaker:
+    """A bot-wall answer cools the WHOLE store down so we stop poking a challenging WAF (A)."""
+
+    def _due_session(self, session_factory, due_items) -> None:
+        result = MagicMock()
+        result.unique.return_value.scalars.return_value.all.return_value = due_items
+        session_factory.return_value.__aenter__.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+    @pytest.mark.asyncio
+    async def test_block_trips_cooldown_and_skips_the_rest_of_the_store(self) -> None:
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        ps1 = _make_product_store(store_id=store_id)
+        ps2 = _make_product_store(store_id=store_id)  # same store, second due link
+        self._due_session(session_factory, [ps1, ps2])
+
+        blocked = PriceCheckOutcome(
+            success=False,
+            failure_reason="fetch_failed",
+            fetch_error="blocked (HTTP 202)",
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+            blocked=True,
+        )
+        scheduler._check_single_product = AsyncMock(return_value=blocked)
+
+        await scheduler._check_due_products()
+
+        assert store_id in scheduler._store_cooldown_until
+        # Only the FIRST link was fetched; the breaker skipped the second same-store link.
+        assert scheduler._check_single_product.await_count == 1
+        assert scheduler.rate_limiter.acquire.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_cooled_store_is_skipped_without_fetching(self) -> None:
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        scheduler._store_cooldown_until[store_id] = datetime.now(UTC).replace(
+            tzinfo=None
+        ) + timedelta(minutes=30)
+        self._due_session(session_factory, [_make_product_store(store_id=store_id)])
+        scheduler._check_single_product = AsyncMock()
+
+        await scheduler._check_due_products()
+
+        scheduler._check_single_product.assert_not_awaited()
+        scheduler.rate_limiter.acquire.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_elapsed_cooldown_is_cleared_and_the_store_checked(self) -> None:
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        scheduler._store_cooldown_until[store_id] = datetime.now(UTC).replace(
+            tzinfo=None
+        ) - timedelta(minutes=1)  # already elapsed
+        self._due_session(session_factory, [_make_product_store(store_id=store_id)])
+        ok = PriceCheckOutcome(
+            success=True,
+            failure_reason=None,
+            fetch_error=None,
+            extraction=_make_extraction(),
+            price_point=None,
+            mismatch=None,
+        )
+        scheduler._check_single_product = AsyncMock(return_value=ok)
+
+        await scheduler._check_due_products()
+
+        assert store_id not in scheduler._store_cooldown_until
+        scheduler._check_single_product.assert_awaited_once()

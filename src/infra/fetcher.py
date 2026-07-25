@@ -9,20 +9,22 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Statuses that mean "a bot wall answered, not the page". A store's WAF/CDN (ICA sits
-# behind CloudFront) returns these under load: 202 is a challenge/queue placeholder with
-# an empty body, 403 is CloudFront's "Request blocked", 429 is an explicit rate-limit,
-# and 5xx are transient origin failures. NONE of them carry product data, so treating
-# them as a *successful* fetch — which is what raise_for_status() did for 202, since 202
-# is a 2xx — silently fed an empty page to the JSON-LD/LLM extractors. That is precisely
-# how a transient ICA block surfaced as "Product metadata extraction failed" instead of
-# an honest "blocked, try again". These are retried a couple of times, then reported ok=False.
-_RETRYABLE_BLOCK_STATUSES = frozenset({202, 403, 429, 500, 502, 503, 504})
+# A bot wall answered, not the page. ICA sits behind CloudFront + AWS WAF: 202 is a WAF JS
+# CHALLENGE (its body is an awsWafCookieDomainList/gokuProps proof-of-work that needs a real
+# browser to mint an `aws-waf-token` cookie), 403 is CloudFront's "Request blocked", 429 an
+# explicit rate-limit. These FAIL FAST — retrying within a few seconds cannot solve a JS
+# challenge and only adds load to an already-flagged IP — and are reported blocked=True so the
+# scheduler can cool the whole store down (a per-store circuit breaker) instead of working
+# through its other due links. (Treating a 202 as a *successful* 2xx is what raise_for_status
+# once did, silently feeding an empty page to the extractors — that trap stays fixed.)
+_WAF_BLOCK_STATUSES = frozenset({202, 403, 429})
 
-# Short, bounded backoff. Bounded on purpose: an interactive quick-add caller is waiting
-# on this, and a store's short rate-limit window usually reopens within a few seconds
-# (verified against ICA — full pages returned again seconds after a block). Worst added
-# latency ≈ sum of these delays; after the last one we give up and report the block.
+# Transient origin failures — worth a short bounded retry, unlike a WAF wall.
+_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
+
+# Short, bounded backoff for the transient path. Bounded on purpose: an interactive quick-add
+# caller is waiting, and an origin blip usually clears within seconds. Worst added latency ≈
+# sum of these delays; after the last one we give up and report the failure.
 _RETRY_DELAYS_SECONDS = (1.5, 4.0)
 
 
@@ -94,28 +96,40 @@ class WebFetcher:
         )
 
     async def fetch(self, url: str) -> dict[str, Any]:
-        """Fetch a page, returning {ok, text, html, error}.
+        """Fetch a page, returning {ok, text, html, error, blocked}.
 
-        ok is True ONLY for a real page: a 2xx with a non-empty body. A bot-wall
-        response (see _RETRYABLE_BLOCK_STATUSES) or an empty body is a soft failure —
-        retried a few times, then reported ok=False with a human-readable error — so
-        callers surface "blocked, try again" instead of extracting from an empty page.
+        ok is True ONLY for a real page: a 2xx with a non-empty body. A WAF wall
+        (_WAF_BLOCK_STATUSES) fails FAST with blocked=True — no retry, since retrying can't
+        clear a JS challenge. A transient failure (5xx, network, empty body) is retried a few
+        times, then reported ok=False. Either way callers surface "blocked/failed, try again"
+        instead of extracting from an empty page.
         """
         last_error = "unknown error"
         for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
-            blocked = False
+            transient = False
             try:
                 response = await self._client.get(url)
             except Exception as e:  # network error / timeout — transient, worth a retry
                 last_error = str(e)
-                blocked = True
+                transient = True
             else:
                 status = response.status_code
                 body = response.text
-                if status in _RETRYABLE_BLOCK_STATUSES or not body.strip():
-                    # A challenge/rate-limit/empty response — retry, do not trust it.
-                    last_error = f"blocked or empty response (HTTP {status}, {len(body)} bytes)"
-                    blocked = True
+                if status in _WAF_BLOCK_STATUSES:
+                    # Bot wall — fail fast and tell the caller it was a block (not a dead page),
+                    # so the scheduler cools the whole store down instead of poking it further.
+                    return {
+                        "url": url,
+                        "ok": False,
+                        "text": "",
+                        "html": "",
+                        "error": f"blocked (HTTP {status})",
+                        "blocked": True,
+                    }
+                elif status in _TRANSIENT_STATUSES or not body.strip():
+                    # A transient origin error or an empty body — retry, do not trust it.
+                    last_error = f"transient or empty response (HTTP {status}, {len(body)} bytes)"
+                    transient = True
                 elif status >= 400:
                     # A hard client error (404, 410, …) — a real answer, not a wall;
                     # retrying will not change it, so fail immediately.
@@ -132,10 +146,10 @@ class WebFetcher:
                     # lives in <script> tags, which _extract_text strips out).
                     return {"url": url, "ok": True, "text": text, "html": body, "error": None}
 
-            if blocked and attempt < len(_RETRY_DELAYS_SECONDS):
+            if transient and attempt < len(_RETRY_DELAYS_SECONDS):
                 delay = _RETRY_DELAYS_SECONDS[attempt]
                 logger.info(
-                    "Fetch of %s blocked (%s); retry %d/%d in %.1fs",
+                    "Fetch of %s failed (%s); retry %d/%d in %.1fs",
                     url,
                     last_error,
                     attempt + 1,

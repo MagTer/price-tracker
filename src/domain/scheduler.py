@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -37,6 +38,11 @@ class PriceCheckScheduler:
     # slack to spare, so the extra wait costs nothing operationally.
     RATE_LIMIT_JITTER = 30.0
     BATCH_SIZE = 10  # Max items to check per cycle
+    # When a store answers with a bot wall (HTTP 202/403/429), cool the WHOLE store down this
+    # long: skip its due links without fetching, so we don't keep poking a WAF that's already
+    # challenging us. Generous by default — an AWS WAF / IP flag can take many minutes to relax
+    # (observed against ICA) — and env-tunable for a stubborn store.
+    STORE_BLOCK_COOLDOWN_MINUTES = float(os.getenv("SCHEDULER_STORE_BLOCK_COOLDOWN_MINUTES", "30"))
 
     def __init__(
         self,
@@ -66,6 +72,10 @@ class PriceCheckScheduler:
         # The add flows push it forward so a burst of manual adds does not race the scheduler
         # into a store's WAF. See pause_for / _check_due_products.
         self._paused_until: datetime | None = None
+        # store_id -> instant its block cooldown lifts. A per-store circuit breaker: a bot-wall
+        # answer trips it, and while it's open the store's due links are skipped (see
+        # _check_due_products). In-memory, single-process, like the add-pause.
+        self._store_cooldown_until: dict[object, datetime] = {}
         self._last_summary_date: date | None = None
         self._stats: dict[str, int] = {
             "checks_total": 0,
@@ -172,6 +182,33 @@ class PriceCheckScheduler:
         logger.info(f"Checking {len(due_items)} products")
 
         for product_store in due_items:
+            # Per-store circuit breaker: if this store block-throttled us recently, skip its
+            # links WITHOUT fetching — poking a WAF that's challenging us only reinforces the
+            # flag — and defer them past the cooldown so they leave the front of the ASC due
+            # queue instead of starving other stores.
+            cooled_until = self._store_cooldown_until.get(product_store.store_id)
+            if cooled_until is not None:
+                if datetime.now(UTC).replace(tzinfo=None) < cooled_until:
+                    logger.info(
+                        "Store %s cooling down until %s — skipping %s",
+                        product_store.store.name,
+                        cooled_until,
+                        product_store.id,
+                    )
+                    try:
+                        async with self.session_factory() as skip_session:
+                            await skip_session.execute(
+                                update(ProductStore)
+                                .where(ProductStore.id == product_store.id)
+                                .values(next_check_at=cooled_until)
+                            )
+                            await skip_session.commit()
+                    except Exception as skip_error:
+                        logger.error("Failed to defer %s: %s", product_store.id, skip_error)
+                    continue
+                # Cooldown elapsed — clear it and check this store normally again.
+                del self._store_cooldown_until[product_store.store_id]
+
             try:
                 # Rate limit per store (no session held during the sleep): keep at least
                 # RATE_LIMIT_DELAY between requests to one store, whenever the previous
@@ -186,12 +223,27 @@ class PriceCheckScheduler:
                 async with self.session_factory() as session:
                     outcome = await self._check_single_product(product_store, session)
 
+                    now_utc = datetime.now(UTC).replace(tzinfo=None)
+
+                    # A bot-wall answer trips the breaker for the WHOLE store: its other due
+                    # links this cycle hit the skip above and stand down, turning "poke all N
+                    # links during a challenge" into a single probe. (B already cut each blocked
+                    # fetch from 3 requests to 1.)
+                    if outcome is not None and outcome.blocked:
+                        self._store_cooldown_until[product_store.store_id] = now_utc + timedelta(
+                            minutes=self.STORE_BLOCK_COOLDOWN_MINUTES
+                        )
+                        logger.warning(
+                            "Store %s returned a block — cooling it down for %.0f min",
+                            product_store.store.name,
+                            self.STORE_BLOCK_COOLDOWN_MINUTES,
+                        )
+
                     # Update timestamps with the next check time via an explicit
                     # UPDATE — product_store is detached here. A FAILED check on a
                     # weekday-scheduled link retries in 24h instead of waiting a
                     # full week; frequency-based links keep their jittered
                     # schedule, and success keeps current behavior exactly.
-                    now_utc = datetime.now(UTC).replace(tzinfo=None)
                     weekdays, frequency = effective_schedule(product_store, product_store.store)
                     if outcome is not None and not outcome.success and weekdays:
                         next_check = now_utc + timedelta(hours=24)

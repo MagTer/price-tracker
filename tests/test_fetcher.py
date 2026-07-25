@@ -69,40 +69,56 @@ class TestSuccess:
 
 
 class TestBlockDetection:
-    async def test_202_empty_body_is_a_soft_failure_not_success(self) -> None:
-        """The exact ICA CloudFront challenge shape: 202 + empty body."""
+    async def test_202_waf_challenge_fails_fast_and_is_flagged_blocked(self) -> None:
+        """The exact ICA shape: a 202 AWS WAF challenge. No retry (retrying can't solve a JS
+        challenge), and blocked=True so the scheduler can cool the whole store down."""
         fetcher = _make_fetcher([_response(202, ""), _response(202, ""), _response(202, "")])
 
         result = await fetcher.fetch("https://handlaprivatkund.ica.se/p")
 
         assert result["ok"] is False
+        assert result["blocked"] is True
         assert result["html"] == ""
         assert "HTTP 202" in result["error"]
+        assert fetcher._client.get.await_count == 1  # failed fast, no retry burst at the WAF
 
-    async def test_403_request_blocked_is_a_soft_failure(self) -> None:
+    async def test_403_request_blocked_fails_fast(self) -> None:
         fetcher = _make_fetcher([_response(403, "Request blocked")] * 3)
 
         result = await fetcher.fetch("https://handlaprivatkund.ica.se/p")
 
         assert result["ok"] is False
+        assert result["blocked"] is True
         assert "HTTP 403" in result["error"]
+        assert fetcher._client.get.await_count == 1
 
-    async def test_200_but_empty_body_is_a_soft_failure(self) -> None:
+    async def test_429_rate_limit_fails_fast(self) -> None:
+        fetcher = _make_fetcher([_response(429, "slow down")] * 3)
+
+        result = await fetcher.fetch("https://example.test/p")
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert fetcher._client.get.await_count == 1
+
+    async def test_200_but_empty_body_is_a_transient_failure(self) -> None:
+        """Empty body carries no status tell, so it is transient (retried), not a WAF block."""
         fetcher = _make_fetcher([_response(200, "   ")] * 3)
 
         result = await fetcher.fetch("https://example.test/p")
 
         assert result["ok"] is False
+        assert not result.get("blocked")
         assert "0 bytes" in result["error"] or "3 bytes" in result["error"]
 
 
 class TestRetry:
-    async def test_transient_block_then_success_recovers(self, _no_sleep) -> None:
-        """A 202 that clears on the next attempt yields a real page — no error surfaced."""
+    async def test_transient_5xx_then_success_recovers(self, _no_sleep) -> None:
+        """A 503 (transient origin blip) that clears on the next attempt yields a real page."""
         html = "<html><body>Falukorv</body></html>"
-        fetcher = _make_fetcher([_response(202, ""), _response(200, html)])
+        fetcher = _make_fetcher([_response(503, ""), _response(200, html)])
 
-        result = await fetcher.fetch("https://handlaprivatkund.ica.se/p")
+        result = await fetcher.fetch("https://example.test/p")
 
         assert result["ok"] is True
         assert "Falukorv" in result["text"]
@@ -119,8 +135,8 @@ class TestRetry:
         assert fetcher._client.get.await_count == 2
 
     async def test_gives_up_after_bounded_retries(self, _no_sleep) -> None:
-        """Three total attempts (initial + two backoffs), then reports the block."""
-        fetcher = _make_fetcher([_response(429, "slow down")] * 5)
+        """Three total attempts (initial + two backoffs) on a transient failure, then gives up."""
+        fetcher = _make_fetcher([_response(503, "origin down")] * 5)
 
         result = await fetcher.fetch("https://example.test/p")
 

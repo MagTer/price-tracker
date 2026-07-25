@@ -73,6 +73,9 @@ class PriceCheckOutcome:
     extraction: PriceExtractionResult | None
     price_point: PricePoint | None
     mismatch: str | None
+    # True when the fetch failed on a bot-wall / rate-limit answer (HTTP 202/403/429) rather than
+    # a dead page — the scheduler cools the whole STORE down on this, not just the one link.
+    blocked: bool = False
 
 
 async def perform_price_check(
@@ -100,6 +103,7 @@ async def perform_price_check(
             extraction=None,
             price_point=None,
             mismatch=None,
+            blocked=bool(fetch_result.get("blocked")),
         )
 
     extraction = await parser.extract_price(
