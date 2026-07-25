@@ -12,8 +12,7 @@ def test_taxonomy_is_the_ten_agreed_sections_in_walk_order() -> None:
     # Order IS the contract — it is the aisle-walk order a future shopping list sorts by.
     assert PRODUCT_CATEGORIES == (
         "Bröd & Bageri",
-        "Chark & Deli",
-        "Kött & Fisk",
+        "Kött, Chark & Deli",
         "Mejeri & Ost",
         "Frukt & Grönt",
         "Fryst",
@@ -45,7 +44,9 @@ def test_legacy_free_text_folds_into_the_right_section() -> None:
     assert normalize_category("tandkräm") == "Hushåll, Hygien & Apotek"
     assert normalize_category("mjölk") == "Mejeri & Ost"
     assert normalize_category("Drycker") == "Dryck"
-    assert normalize_category("färsk lax") == "Kött & Fisk"
+    assert normalize_category("färsk lax") == "Kött, Chark & Deli"
+    assert normalize_category("falukorv") == "Kött, Chark & Deli"
+    assert normalize_category("köttfärs") == "Kött, Chark & Deli"
     assert normalize_category("glass") == "Fryst"
 
 
@@ -65,7 +66,7 @@ def test_short_substrings_do_not_swallow_more_specific_words() -> None:
 
 def test_korvbrod_lands_in_bread_not_chark() -> None:
     # The ordering trap the keyword list is built around: "korvbröd" contains both "bröd"
-    # (Bröd & Bageri) and "korv" (Chark & Deli); "bröd" must win.
+    # (Bröd & Bageri) and "korv" (Kött, Chark & Deli); "bröd" must win.
     assert normalize_category("korvbröd") == "Bröd & Bageri"
 
 
