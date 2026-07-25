@@ -23,10 +23,46 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
+    strip_brand_from_name,
     suggest_existing_products,
 )
 
 # --- Pure tier -------------------------------------------------------------------------
+
+
+class TestStripBrandFromName:
+    def test_trailing_brand_is_removed(self):
+        assert strip_brand_from_name("Falukorv Klassikern Scan", "Scan") == "Falukorv Klassikern"
+
+    def test_leading_brand_is_removed(self):
+        # The JSON-LD shape: "Lambi Toalettpapper", brand "Lambi".
+        assert strip_brand_from_name("Lambi Toalettpapper", "Lambi") == "Toalettpapper"
+
+    def test_trailing_brand_with_separator(self):
+        assert strip_brand_from_name("Ketchup Original - Felix", "Felix") == "Ketchup Original"
+
+    def test_package_size_between_name_and_brand_is_left_alone(self):
+        # Only the brand is stripped; the size stays (it belongs on the link, cleaned elsewhere).
+        assert strip_brand_from_name("Falukorv Klassikern 800g Scan", "Scan") == (
+            "Falukorv Klassikern 800g"
+        )
+
+    def test_brand_in_the_middle_is_not_touched(self):
+        assert strip_brand_from_name("Delica Räksallad", "Ica") == "Delica Räksallad"
+
+    def test_case_insensitive_match(self):
+        assert strip_brand_from_name("Russin Kärnfria ICA", "ica") == "Russin Kärnfria"
+
+    def test_name_equal_to_brand_keeps_original(self):
+        # Never return an empty name.
+        assert strip_brand_from_name("Zoégas", "Zoégas") == "Zoégas"
+
+    def test_no_brand_is_a_noop(self):
+        assert strip_brand_from_name("Falukorv Klassikern", None) == "Falukorv Klassikern"
+        assert strip_brand_from_name("Falukorv Klassikern", "") == "Falukorv Klassikern"
+
+    def test_none_name_is_a_noop(self):
+        assert strip_brand_from_name(None, "Scan") is None
 
 
 def _stores():
@@ -383,7 +419,9 @@ class TestQuickAddPreview:
 
         assert r.status_code == 200
         body = r.json()
-        assert body["name"] == "Lambi Toalettpapper 3-lager 24-pack"
+        # The brand ("Lambi") is stripped from the JSON-LD title so it does not double-print
+        # beside the brand column — the name is the abstract good. (v0.22.0)
+        assert body["name"] == "Toalettpapper 3-lager 24-pack"
         assert body["brand"] == "Lambi"
         assert body["price_sek"] == pytest.approx(89.90)
         assert body["source"] == "jsonld"

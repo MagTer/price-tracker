@@ -44,6 +44,7 @@ from domain.quickadd import (
     derive_unit,
     match_store_by_url,
     parse_package_from_name,
+    strip_brand_from_name,
     suggest_existing_products,
     suggest_sibling_links,
     suggest_store_label,
@@ -565,6 +566,11 @@ async def quick_add_preview(
                         pack_size=llm_meta.pack_size,
                         label=(f"{llm_meta.package_amount} {llm_meta.package_unit or ''}".strip()),
                     )
+
+        # The suggested name is the abstract good — strip a brand the source (JSON-LD title or
+        # LLM) folded into it, so it does not double-print beside the brand column. The operator
+        # still sees and can edit it in the confirm dialog.
+        name = strip_brand_from_name(name, brand)
 
         suggested_unit = derive_unit(guess.entry_unit, guess.pack_size)
         package_quantity = normalize_amount(guess.amount, guess.entry_unit, suggested_unit)

@@ -422,8 +422,9 @@ Page content (truncated):
 {page}
 
 Return a JSON object with exactly these fields:
-- "name": The product's name WITHOUT package size suffixes (e.g. "Lambi Toalettpapper 3-lager",
-  not "Lambi Toalettpapper 3-lager 24-pack"). Null if you cannot tell.
+- "name": The product's name WITHOUT the brand and WITHOUT package size suffixes — both are
+  separate fields, so do not repeat them here. E.g. for "Lambi Toalettpapper 3-lager 24-pack":
+  name is "Toalettpapper 3-lager", brand is "Lambi". Null if you cannot tell.
 - "brand": The brand name (e.g. "Lambi"), null if not clear.
 - "category": The store section this product belongs to. Choose EXACTLY ONE from this
   list, copied verbatim, or null if none fits: {", ".join(PRODUCT_CATEGORIES)}.

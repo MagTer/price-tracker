@@ -219,6 +219,41 @@ def derive_unit(entry_unit: str | None, pack_size: int | None) -> str | None:
     return None
 
 
+# Separators a brand tends to hang off the name by, trimmed after the brand token is removed.
+_BRAND_EDGE_CHARS = " -–—,·|/"
+
+
+def strip_brand_from_name(name: str | None, brand: str | None) -> str | None:
+    """Drop the brand when it is a leading or trailing token of the name.
+
+    The product name is the ABSTRACT good; the brand lives in its own field. A name that also
+    carries the brand ("Falukorv Klassikern Scan", brand "Scan" — or the JSON-LD "Lambi
+    Toalettpapper", brand "Lambi") double-prints it in the table and MCP. This removes the brand
+    only when it sits at an edge on a word boundary, and never returns an empty string (a product
+    whose name IS just its brand keeps the original). Middle-of-name matches are left alone —
+    "Ica" inside "Delica" must not be clipped.
+    """
+    if not name or not brand:
+        return name
+    n = name.strip()
+    b = brand.strip()
+    if not b:
+        return n
+    low_n, low_b = n.lower(), b.lower()
+
+    if low_n.endswith(low_b):
+        cut = len(n) - len(b)
+        if cut == 0 or not n[cut - 1].isalnum():
+            stripped = n[:cut].strip(_BRAND_EDGE_CHARS).strip()
+            return stripped or name
+    if low_n.startswith(low_b):
+        cut = len(b)
+        if cut == len(n) or not n[cut].isalnum():
+            stripped = n[cut:].strip(_BRAND_EDGE_CHARS).strip()
+            return stripped or name
+    return n
+
+
 def suggest_store_label(url: str, store_name: str) -> str | None:
     """A per-butik display label suggested from the URL's /stores/<id>/ segment.
 
