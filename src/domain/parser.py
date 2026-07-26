@@ -257,7 +257,12 @@ class PriceParser:
         return await self._run_llm_cascade(prompt, product_name=product_name, store_slug=store_slug)
 
     async def _run_llm_cascade(
-        self, prompt: str, *, product_name: str | None, store_slug: str
+        self,
+        prompt: str,
+        *,
+        product_name: str | None,
+        store_slug: str,
+        purpose: str = "price",
     ) -> PriceExtractionResult:
         """THE model cascade — the only place it exists (extract_price and enrich_with_llm
         both route through here).
@@ -265,6 +270,13 @@ class PriceParser:
         Returns the accepted result, or a discarded (price_sek=None) result when the best
         confidence is below the acceptance floor. Raises RuntimeError only when every model
         raised — callers that must never fail (enrich_with_llm) catch that themselves.
+
+        `purpose` exists ONLY so the log says which caller this was. Both callers used to log
+        "Price extracted with <model>", so a post-check enrichment — which runs AFTER a
+        successful JSON-LD extraction and cannot touch the price — read in the log exactly
+        like a JSON-LD failure that fell back to the LLM. That misreading is expensive: it
+        looks like the store blocked us or the structured parse broke, when the price is
+        already recorded and correct.
         """
         # Try models in cascade order (cheapest to most expensive)
         last_result = None
@@ -275,7 +287,7 @@ class PriceParser:
 
             try:
                 logger.debug(
-                    f"Trying {model_name} (threshold: {threshold})",
+                    f"Trying {model_name} for {purpose} (threshold: {threshold})",
                     extra={"product": product_name, "store": store_slug},
                 )
 
@@ -283,8 +295,14 @@ class PriceParser:
                 last_result = result
 
                 if result.confidence >= threshold:
+                    message = (
+                        f"Price extracted with {model_name}"
+                        if purpose == "price"
+                        else f"Enrichment answered with {model_name} "
+                        f"(price already extracted; enrichment cannot change it)"
+                    )
                     logger.info(
-                        f"Price extracted with {model_name}",
+                        message,
                         extra={
                             "confidence": result.confidence,
                             "product": product_name,
@@ -375,7 +393,10 @@ class PriceParser:
                 text_content, store_slug, store_hint, product_name, html_content=html_content
             )
             result = await self._run_llm_cascade(
-                prompt, product_name=product_name, store_slug=store_slug
+                prompt,
+                product_name=product_name,
+                store_slug=store_slug,
+                purpose="enrichment",
             )
         except Exception as e:
             logger.warning(

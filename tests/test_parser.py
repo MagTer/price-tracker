@@ -772,6 +772,53 @@ def _llm_result(
     )
 
 
+class TestCascadeLogsSayWhichCallerRan:
+    """A price extraction and a post-check enrichment must not read the same in the log.
+
+    Both callers share _run_llm_cascade, which logged "Price extracted with <model>" for
+    each. So a successful JSON-LD check followed by routine enrichment logged:
+
+        Price extracted via JSON-LD ... store=ica
+        Trying deepseek/deepseek-v4-flash ...
+        Price extracted with deepseek/deepseek-v4-flash ... confidence=0.95
+
+    which reads as "the structured parse failed and we fell back to an LLM" — it sent a real
+    debugging session after a store block that had not happened, while the price was already
+    recorded and correct.
+    """
+
+    @pytest.mark.asyncio
+    async def test_enrichment_is_not_logged_as_a_price_extraction(self, caplog) -> None:
+        parser = PriceParser()
+        base = _jsonld_base(price="108.95")
+        llm = _llm_result(confidence=0.9, pack_size=16)
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            with caplog.at_level("INFO", logger="domain.parser"):
+                await parser.enrich_with_llm(
+                    base, text_content="page", store_slug="ica", product_name="Lambi"
+                )
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Enrichment answered with" in m for m in messages), messages
+        assert not any("Price extracted with" in m for m in messages), messages
+
+    @pytest.mark.asyncio
+    async def test_a_real_price_extraction_still_says_price_extracted(self, caplog) -> None:
+        """The other half of the contract: don't fix the confusion by muting the real one."""
+        parser = PriceParser()
+        llm = _llm_result(price="49.90", confidence=0.9)
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            with caplog.at_level("INFO", logger="domain.parser"):
+                await parser.extract_price("page text", "ica", product_name="Lambi")
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Price extracted with" in m for m in messages), messages
+
+
 class TestEnrichWithLlm:
     """enrich_with_llm: JSON-LD stays the price authority, the LLM only fills gaps."""
 
