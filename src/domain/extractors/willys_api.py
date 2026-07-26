@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 _PRODUCT_CODE_RE = re.compile(r"-(\d+_ST)(?:\?|$|#)")
 
 
+# The API answers on the SAME host as the product pages, so a WAF wall here is the same wall.
+# Statuses kept in step with infra.fetcher._WAF_BLOCK_STATUSES on purpose.
+_WAF_BLOCK_STATUSES = frozenset({202, 403, 429})
+
+# The politeness key for this endpoint. The ledger is keyed by store id everywhere else, but
+# this extractor never sees one — and it must be throttled regardless, because a Willys price
+# check makes TWO requests to www.willys.se (the page fetch in perform_price_check, then this
+# API call from the extraction ladder) and only the first one used to spend a slot.
+_LEDGER_KEY = "host:www.willys.se"
+# Short spacing: this is a public JSON endpoint, not a rendered page, and both callers
+# (background check, quick-add preview) have already waited on the store's own slot.
+_MIN_INTERVAL_SECONDS = 3.0
+_MAX_WAIT_SECONDS = 10.0
+
+
 class WillysApiExtractor:
     """Extract prices from Willys public REST API."""
 
@@ -80,18 +95,36 @@ class WillysApiExtractor:
             logger.debug("Could not extract product code from URL: %s", store_url)
             return None
 
+        # Spend a slot on the SHARED ledger. Imported here rather than at module scope so the
+        # domain layer keeps its lazy dependency on infra (same shape as the scheduler's).
+        from infra.providers import get_rate_limiter
+
+        await get_rate_limiter().acquire(
+            _LEDGER_KEY, _MIN_INTERVAL_SECONDS, max_wait=_MAX_WAIT_SECONDS
+        )
+
         try:
             async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
                 resp = await client.get(
                     f"{self.API_BASE}/{code}",
                     headers={"Accept": "application/json"},
                 )
+                if resp.status_code in _WAF_BLOCK_STATUSES:
+                    # A bot wall, not a missing product. It was logged at DEBUG alongside every
+                    # ordinary 404, so a Willys block was invisible in prod and quietly became
+                    # "the API missed" — a silent, pointless fall-through to the LLM.
+                    logger.warning(
+                        "Willys API bot wall — HTTP %d for %s; falling back (do not retry)",
+                        resp.status_code,
+                        code,
+                    )
+                    return None
                 if resp.status_code != 200:
-                    logger.debug("Willys API returned %d for %s", resp.status_code, code)
+                    logger.warning("Willys API returned %d for %s", resp.status_code, code)
                     return None
                 return resp.json()
         except Exception:
-            logger.debug("Willys API request failed for %s", store_url, exc_info=True)
+            logger.warning("Willys API request failed for %s", store_url, exc_info=True)
             return None
 
     def _extract_product_code(self, url: str) -> str | None:

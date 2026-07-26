@@ -1,7 +1,7 @@
 [project]
 name = "price-tracker"
 # The released tag, kept in step with it on purpose: this said 0.1.0 while prod ran v0.3.2.
-version = "0.27.1"
+version = "0.28.0"
 description = "Standalone Swedish grocery and pharmacy price tracker (extracted from ai-agent-platform)"
 authors = [{ name = "Magnus Ternstrom", email = "magnus.ternstrom@gmail.com" }]
 readme = "README.md"
@@ -10,7 +10,10 @@ dependencies = [
     "sqlalchemy[asyncio] (>=2.0,<3.0)",
     "alembic (>=1.13,<2.0)",
     "asyncpg (>=0.29,<0.30)",
-    "httpx (>=0.28,<0.29)",
+    # [http2] pulls in `h2`. Not optional: WebFetcher negotiates HTTP/2 because a client that
+    # claims to be Chrome and then speaks HTTP/1.1 to a CDN is a fingerprint mismatch every
+    # bot-detection layer checks first (see infra/fetcher.py).
+    "httpx[http2] (>=0.28,<0.29)",
     "pydantic (>=2.7,<3.0)",
     "fastapi (>=0.111,<0.112)",
     "uvicorn[standard] (>=0.30,<0.31)",

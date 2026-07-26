@@ -54,7 +54,7 @@ from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
 from infra.logbuffer import get_log_buffer
-from infra.providers import get_fetcher, get_rate_limiter
+from infra.providers import get_block_registry, get_fetcher, get_rate_limiter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +76,51 @@ QUICKADD_RATE_LIMIT_JITTER = float(os.getenv("QUICKADD_RATE_LIMIT_JITTER", "3"))
 SCHEDULER_ADD_PAUSE_MINUTES = float(os.getenv("SCHEDULER_ADD_PAUSE_MINUTES", "60"))
 
 _CENT = Decimal("0.01")
+
+
+def _guard_store_not_blocked(store: Store) -> None:
+    """Refuse an interactive fetch while the store's circuit breaker is open.
+
+    The breaker used to be scheduler-private, so a bot wall silenced only background checks
+    while the portal's buttons kept firing at the store — and those are exactly the requests a
+    human repeats when a page says "kunde inte hämta sidan". Against a WAF that flags IPs,
+    retrying during a challenge is what keeps the flag alive. Checked BEFORE the politeness
+    ledger so a blocked store costs no wait either.
+
+    Raises 503 with Retry-After so the browser (and any future MCP caller) gets a machine-
+    readable "come back later" rather than a generic failure.
+    """
+    until = get_block_registry().blocked_until(store.id)
+    if until is None:
+        return
+    retry_after = max(1, int((until - datetime.now(UTC).replace(tzinfo=None)).total_seconds()))
+    minutes = max(1, round(retry_after / 60))
+    LOGGER.info(
+        "Refusing interactive fetch to %s — circuit breaker open until %s",
+        store.name,
+        until,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"{store.name} blockerar oss just nu (botskydd). "
+            f"Vi pausar alla anrop dit i ca {minutes} min — försök igen efter det."
+        ),
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _record_store_outcome(store: Store, *, blocked: bool, success: bool, source: str) -> None:
+    """Feed an interactive fetch's result back into the SHARED circuit breaker.
+
+    Without this the breaker only ever learned about blocks the scheduler found, so a manual
+    re-check that hit a wall left the scheduler poking the same store a minute later.
+    """
+    registry = get_block_registry()
+    if blocked:
+        registry.record_block(store.id, store_name=store.name, source=source)
+    elif success:
+        registry.record_success(store.id, store_name=store.name)
 
 
 def _extend_scheduler_pause(request: Request) -> None:
@@ -541,6 +586,8 @@ async def quick_add_preview(
                 "already_tracked": {"product_id": str(dup[0]), "product_name": dup[1]},
             }
 
+        # Circuit breaker BEFORE the ledger: a walled store costs neither a request nor a wait.
+        _guard_store_not_blocked(store)
         await get_rate_limiter().acquire(
             store.id,
             QUICKADD_RATE_LIMIT_DELAY,
@@ -582,10 +629,19 @@ async def quick_add_preview(
             # and walk the JSON-LD → LLM ladder.
             fetch_result = await get_fetcher().fetch(url)
             if not fetch_result.get("ok"):
+                if fetch_result.get("blocked"):
+                    # Feed the wall back into the SHARED breaker and say so in Swedish: the old
+                    # "Kunde inte hämta sidan: blocked (HTTP 202)" invited a retry, which is the
+                    # single worst response to a WAF challenge.
+                    _record_store_outcome(
+                        store, blocked=True, success=False, source="quick-add-preview"
+                    )
+                    _guard_store_not_blocked(store)
                 raise HTTPException(
                     status_code=502,
                     detail=f"Kunde inte hämta sidan: {fetch_result.get('error')}",
                 )
+            _record_store_outcome(store, blocked=False, success=True, source="quick-add-preview")
 
             html = fetch_result.get("html") or ""
             extractor = JsonLdExtractor()
@@ -915,6 +971,15 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
             return {"success": False, "reason": "link_not_found"}
 
         product_store, store, product = row
+        # Best-effort by contract, so a live block is reported as a skipped check rather than
+        # raised: the link already exists and the scheduler will pick it up once the wall lifts.
+        if get_block_registry().blocked_until(store.id) is not None:
+            LOGGER.info(
+                "Skipping first check for %s — %s is cooling down after a block",
+                product_store_id,
+                store.name,
+            )
+            return {"success": False, "reason": "store_blocked"}
         await get_rate_limiter().acquire(
             store.id,
             QUICKADD_RATE_LIMIT_DELAY,
@@ -928,6 +993,15 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
             session=session,
             fetcher=get_fetcher(),
             parser=PriceParser(),
+        )
+        # "Reached the store" — NOT outcome.success: a page that loaded fine but had no
+        # extractable price still proves the store is answering us, and must reset the
+        # breaker's escalation. Only a fetch failure leaves the strike count standing.
+        _record_store_outcome(
+            store,
+            blocked=outcome.blocked,
+            success=outcome.failure_reason != "fetch_failed",
+            source="quick-add-first-check",
         )
         if not outcome.success:
             return {"success": False, "reason": outcome.failure_reason}
@@ -1536,6 +1610,9 @@ async def trigger_price_check(
 
         product_store, store, product = row
 
+        # "Kolla nu" is the button a human mashes when a price looks stale — the exact traffic
+        # that reinforces a WAF flag. Refuse it while the store's breaker is open.
+        _guard_store_not_blocked(store)
         await get_rate_limiter().acquire(
             store.id,
             QUICKADD_RATE_LIMIT_DELAY,
@@ -1550,8 +1627,18 @@ async def trigger_price_check(
             fetcher=get_fetcher(),
             parser=PriceParser(),
         )
+        _record_store_outcome(
+            store,
+            blocked=outcome.blocked,
+            success=outcome.failure_reason != "fetch_failed",
+            source="manual-check",
+        )
 
         if outcome.failure_reason == "fetch_failed":
+            if outcome.blocked:
+                # _record_store_outcome just tripped the breaker, so this re-raises as the same
+                # 503 + Retry-After the next click would get — one message for one condition.
+                _guard_store_not_blocked(store)
             raise HTTPException(
                 status_code=502, detail=f"Failed to fetch page: {outcome.fetch_error}"
             )

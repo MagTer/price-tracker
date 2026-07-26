@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
-import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,7 +21,7 @@ from domain.models import (
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
 from domain.pricing import unit_price_py
-from domain.protocols import IEmailService, IFetcher, IRateLimiter
+from domain.protocols import IBlockRegistry, IEmailService, IFetcher, IRateLimiter
 from domain.schedule import effective_schedule, next_check_time
 from domain.service import PriceCheckOutcome, perform_price_check
 
@@ -38,11 +38,6 @@ class PriceCheckScheduler:
     # slack to spare, so the extra wait costs nothing operationally.
     RATE_LIMIT_JITTER = 30.0
     BATCH_SIZE = 10  # Max items to check per cycle
-    # When a store answers with a bot wall (HTTP 202/403/429), cool the WHOLE store down this
-    # long: skip its due links without fetching, so we don't keep poking a WAF that's already
-    # challenging us. Generous by default — an AWS WAF / IP flag can take many minutes to relax
-    # (observed against ICA) — and env-tunable for a stubborn store.
-    STORE_BLOCK_COOLDOWN_MINUTES = float(os.getenv("SCHEDULER_STORE_BLOCK_COOLDOWN_MINUTES", "30"))
 
     def __init__(
         self,
@@ -50,6 +45,7 @@ class PriceCheckScheduler:
         fetcher: IFetcher,
         email_service: IEmailService | None = None,
         rate_limiter: IRateLimiter | None = None,
+        block_registry: IBlockRegistry | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.fetcher = fetcher
@@ -62,6 +58,14 @@ class PriceCheckScheduler:
 
             rate_limiter = StoreRateLimiter()
         self.rate_limiter = rate_limiter
+        # THE circuit breaker, shared for the same reason the ledger is: a bot wall found by an
+        # interactive fetch must silence background checks too, and vice versa. Injected in prod
+        # (app.py passes the process-wide singleton); a private one when omitted isolates tests.
+        if block_registry is None:
+            from infra.store_block import StoreBlockRegistry
+
+            block_registry = StoreBlockRegistry()
+        self.block_registry = block_registry
         # Create notifier wrapper if email service is provided
         self.notifier: PriceNotifier | None = None
         if email_service is not None:
@@ -72,10 +76,6 @@ class PriceCheckScheduler:
         # The add flows push it forward so a burst of manual adds does not race the scheduler
         # into a store's WAF. See pause_for / _check_due_products.
         self._paused_until: datetime | None = None
-        # store_id -> instant its block cooldown lifts. A per-store circuit breaker: a bot-wall
-        # answer trips it, and while it's open the store's due links are skipped (see
-        # _check_due_products). In-memory, single-process, like the add-pause.
-        self._store_cooldown_until: dict[object, datetime] = {}
         self._last_summary_date: date | None = None
         self._stats: dict[str, int] = {
             "checks_total": 0,
@@ -186,28 +186,26 @@ class PriceCheckScheduler:
             # links WITHOUT fetching — poking a WAF that's challenging us only reinforces the
             # flag — and defer them past the cooldown so they leave the front of the ASC due
             # queue instead of starving other stores.
-            cooled_until = self._store_cooldown_until.get(product_store.store_id)
+            cooled_until = self.block_registry.blocked_until(product_store.store_id)
             if cooled_until is not None:
-                if datetime.now(UTC).replace(tzinfo=None) < cooled_until:
-                    logger.info(
-                        "Store %s cooling down until %s — skipping %s",
-                        product_store.store.name,
-                        cooled_until,
-                        product_store.id,
-                    )
-                    try:
-                        async with self.session_factory() as skip_session:
-                            await skip_session.execute(
-                                update(ProductStore)
-                                .where(ProductStore.id == product_store.id)
-                                .values(next_check_at=cooled_until)
-                            )
-                            await skip_session.commit()
-                    except Exception as skip_error:
-                        logger.error("Failed to defer %s: %s", product_store.id, skip_error)
-                    continue
-                # Cooldown elapsed — clear it and check this store normally again.
-                del self._store_cooldown_until[product_store.store_id]
+                logger.info(
+                    "Store %s cooling down until %s — skipping %s (%s) without fetching",
+                    product_store.store.name,
+                    cooled_until,
+                    product_store.id,
+                    product_store.product.name,
+                )
+                try:
+                    async with self.session_factory() as skip_session:
+                        await skip_session.execute(
+                            update(ProductStore)
+                            .where(ProductStore.id == product_store.id)
+                            .values(next_check_at=cooled_until)
+                        )
+                        await skip_session.commit()
+                except Exception as skip_error:
+                    logger.error("Failed to defer %s: %s", product_store.id, skip_error)
+                continue
 
             try:
                 # Rate limit per store (no session held during the sleep): keep at least
@@ -228,15 +226,20 @@ class PriceCheckScheduler:
                     # A bot-wall answer trips the breaker for the WHOLE store: its other due
                     # links this cycle hit the skip above and stand down, turning "poke all N
                     # links during a challenge" into a single probe. (B already cut each blocked
-                    # fetch from 3 requests to 1.)
+                    # fetch from 3 requests to 1.) The breaker is the SHARED registry, so the
+                    # interactive paths stand down too — and each consecutive block doubles the
+                    # cooldown, so a store that keeps walling us is left alone for longer.
                     if outcome is not None and outcome.blocked:
-                        self._store_cooldown_until[product_store.store_id] = now_utc + timedelta(
-                            minutes=self.STORE_BLOCK_COOLDOWN_MINUTES
+                        self.block_registry.record_block(
+                            product_store.store_id,
+                            store_name=product_store.store.name,
+                            source="scheduler",
                         )
-                        logger.warning(
-                            "Store %s returned a block — cooling it down for %.0f min",
-                            product_store.store.name,
-                            self.STORE_BLOCK_COOLDOWN_MINUTES,
+                    elif outcome is not None and outcome.success:
+                        # A real page ends the escalation — otherwise the strike count would
+                        # ratchet up across unrelated blocks days apart.
+                        self.block_registry.record_success(
+                            product_store.store_id, store_name=product_store.store.name
                         )
 
                     # Update timestamps with the next check time via an explicit
@@ -305,7 +308,24 @@ class PriceCheckScheduler:
         )
 
         if outcome.failure_reason == "fetch_failed":
-            logger.warning(f"Failed to fetch {product_store.store_url}")
+            # Say WHICH kind of failure. A bot wall and a dead page both used to log the same
+            # "Failed to fetch <url>", so reading back an evening of ICA logs could not tell
+            # "they are challenging us" from "that product page is gone" — opposite responses.
+            if outcome.blocked:
+                logger.warning(
+                    "Blocked while checking %s at %s: %s",
+                    product_store.product.name,
+                    product_store.store.name,
+                    outcome.fetch_error,
+                )
+            else:
+                logger.warning(
+                    "Failed to fetch %s (%s at %s): %s",
+                    product_store.store_url,
+                    product_store.product.name,
+                    product_store.store.name,
+                    outcome.fetch_error,
+                )
             return outcome
 
         if outcome.failure_reason == "no_price":
@@ -628,11 +648,14 @@ class PriceCheckScheduler:
 
         self._last_summary_date = today
 
-    def get_status(self) -> dict[str, bool | str | date | dict[str, int] | None]:
+    def get_status(self) -> dict[str, Any]:
         """Get scheduler status and statistics."""
         return {
             "running": self._running,
             "paused_until": self._paused_until.isoformat() if self._paused_until else None,
+            # Which stores are currently walled off, and how deep into the escalation they are.
+            # Without this the only evidence of a live block is a log line that scrolls away.
+            "blocked_stores": self.block_registry.snapshot(),
             "last_summary_date": (
                 self._last_summary_date.isoformat() if self._last_summary_date else None
             ),

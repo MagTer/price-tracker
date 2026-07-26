@@ -1,5 +1,6 @@
 """Tests for WillysApiExtractor."""
 
+import logging
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -524,3 +525,70 @@ class TestJsonLdNameSanity:
         result = JsonLdExtractor().extract_from_html(html, product_name="Rågbröd grov")
         assert result is not None
         assert result.price_sek == Decimal("32")
+
+
+class TestWillysApiIsThrottledAndBlockAware:
+    """The Willys REST call is a real outgoing request and must be treated as one.
+
+    It used to fire straight out of `httpx` with no politeness slot and DEBUG-only logging —
+    so a Willys price check made TWO requests to www.willys.se (the page fetch, then this) on
+    ONE reserved slot, and a bot wall was indistinguishable from a missing product.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_api_call_spends_a_slot_on_the_shared_ledger(self) -> None:
+        extractor = _make_extractor()
+        url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+
+        limiter = AsyncMock()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            return_value=_mock_httpx_response(200, _valid_api_response(price_value=29.90))
+        )
+
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=limiter),
+            patch("httpx.AsyncClient") as mock_cls,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+            await extractor.extract(url, "Mjolk")
+
+        limiter.acquire.assert_awaited_once()
+        # Keyed on the HOST, not a store id — the extractor never sees one, and the host is
+        # what a WAF actually rate-limits.
+        assert limiter.acquire.await_args.args[0] == "host:www.willys.se"
+        # Interactive-grade cap: a background reservation must not stall a quick-add preview.
+        assert limiter.acquire.await_args.kwargs["max_wait"] > 0
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_url_costs_no_slot(self) -> None:
+        """No product code means no request — do not spend politeness budget on nothing."""
+        extractor = _make_extractor()
+        limiter = AsyncMock()
+
+        with patch("infra.providers.get_rate_limiter", return_value=limiter):
+            result = await extractor.extract("https://www.willys.se/produkt/no-code-here", None)
+
+        assert result is None
+        limiter.acquire.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_bot_wall_is_logged_as_a_block(self, caplog) -> None:
+        extractor = _make_extractor()
+        url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_mock_httpx_response(403, {}))
+
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("httpx.AsyncClient") as mock_cls,
+            caplog.at_level(logging.WARNING, logger="domain.extractors.willys_api"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+            result = await extractor.extract(url, "Mjolk")
+
+        assert result is None
+        assert any("bot wall" in r.message.lower() for r in caplog.records), caplog.text

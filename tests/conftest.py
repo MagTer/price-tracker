@@ -170,3 +170,22 @@ async def db_session(
 ) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_wide_state():
+    """Drop the provider singletons between tests.
+
+    `infra.providers` hands out ONE rate limiter and ONE block registry per process — correct
+    in prod (a store's budget and its breaker must be global) and poisonous in a test suite:
+    a reservation or an open breaker left by one test silently changes the next one, and a
+    3-second politeness slot claimed in test A makes test B actually sleep. Autouse so no
+    test has to remember.
+    """
+    import infra.providers as providers
+
+    providers._rate_limiter_instance = None
+    providers._block_registry_instance = None
+    yield
+    providers._rate_limiter_instance = None
+    providers._block_registry_instance = None

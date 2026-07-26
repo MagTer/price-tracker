@@ -1,10 +1,12 @@
 from infra.email import ResendEmailService
 from infra.fetcher import WebFetcher
 from infra.rate_limiter import StoreRateLimiter
+from infra.store_block import StoreBlockRegistry
 
 _fetcher_instance: WebFetcher | None = None
 _email_service_instance: ResendEmailService | None = None
 _rate_limiter_instance: StoreRateLimiter | None = None
+_block_registry_instance: StoreBlockRegistry | None = None
 
 
 def get_fetcher() -> WebFetcher:
@@ -24,6 +26,19 @@ def get_rate_limiter() -> StoreRateLimiter:
     if _rate_limiter_instance is None:
         _rate_limiter_instance = StoreRateLimiter()
     return _rate_limiter_instance
+
+
+def get_block_registry() -> StoreBlockRegistry:
+    """The process-wide circuit breaker shared by the scheduler and every interactive path.
+
+    A single instance so a bot wall found by ANY caller silences the store for ALL of them.
+    It lived inside the scheduler until v0.28.0, which meant a human mashing "Kolla nu" kept
+    hitting a store that was actively challenging us (see StoreBlockRegistry).
+    """
+    global _block_registry_instance
+    if _block_registry_instance is None:
+        _block_registry_instance = StoreBlockRegistry()
+    return _block_registry_instance
 
 
 def get_email_service() -> ResendEmailService:

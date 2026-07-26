@@ -66,7 +66,7 @@ class WebFetcher:
         # politeness ledger's job) — it just lowers how often we trip the bot challenge.
         # Bump CHROME_MAJOR periodically; a stale major version is itself a mild bot tell.
         chrome_major = "143"
-        self._client = httpx.AsyncClient(
+        client_kwargs: dict[str, Any] = dict(
             follow_redirects=True,
             timeout=httpx.Timeout(15.0, connect=5.0),
             headers={
@@ -95,6 +95,23 @@ class WebFetcher:
             },
         )
 
+        # HTTP/2, because the headers above are only half a fingerprint. Real Chrome ALWAYS
+        # negotiates h2 with a modern CDN, so a client that claims to be Chrome and then speaks
+        # HTTP/1.1 contradicts itself at the connection layer — before a single header is read.
+        # This does NOT reproduce Chrome's exact h2 SETTINGS/priority fingerprint (only
+        # curl_cffi or a real browser does, and those remain the un-built next levers); it
+        # removes one free tell. `h2` is a declared dependency via httpx[http2]; the fallback
+        # exists so a broken install degrades to HTTP/1.1 instead of a fetcher that cannot be
+        # constructed at all — a no-price app is worse than a slightly more detectable one.
+        try:
+            self._client = httpx.AsyncClient(http2=True, **client_kwargs)
+        except ImportError:
+            logger.warning(
+                "h2 is not installed — falling back to HTTP/1.1, which is a bot tell "
+                "for a client sending Chrome headers. Install httpx[http2]."
+            )
+            self._client = httpx.AsyncClient(**client_kwargs)
+
     async def fetch(self, url: str) -> dict[str, Any]:
         """Fetch a page, returning {ok, text, html, error, blocked}.
 
@@ -118,6 +135,16 @@ class WebFetcher:
                 if status in _WAF_BLOCK_STATUSES:
                     # Bot wall — fail fast and tell the caller it was a block (not a dead page),
                     # so the scheduler cools the whole store down instead of poking it further.
+                    # Log it HERE, at the point of detection: this is the only place that knows
+                    # the status code and the body size, and a WAF challenge used to produce no
+                    # log line at all — the first evidence was a caller's generic "fetch failed".
+                    logger.warning(
+                        "Bot wall from %s — HTTP %d, %d-byte body; failing fast (no retry) "
+                        "and reporting blocked",
+                        url,
+                        status,
+                        len(body),
+                    )
                     return {
                         "url": url,
                         "ok": False,
@@ -133,6 +160,7 @@ class WebFetcher:
                 elif status >= 400:
                     # A hard client error (404, 410, …) — a real answer, not a wall;
                     # retrying will not change it, so fail immediately.
+                    logger.warning("Fetch of %s failed with HTTP %d — not retrying", url, status)
                     return {
                         "url": url,
                         "ok": False,
@@ -158,6 +186,12 @@ class WebFetcher:
                 )
                 await asyncio.sleep(delay)
 
+        logger.warning(
+            "Fetch of %s gave up after %d attempts: %s",
+            url,
+            len(_RETRY_DELAYS_SECONDS) + 1,
+            last_error,
+        )
         return {"url": url, "ok": False, "text": "", "html": "", "error": last_error}
 
     async def close(self) -> None:

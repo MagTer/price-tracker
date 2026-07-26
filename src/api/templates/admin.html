@@ -792,7 +792,20 @@ async function loadStats() {
         // parseUtc, NOT new Date(): paused_until is naive UTC, and a bare timestamp parses as
         // LOCAL time — in CEST that read the pause 2h in the past, so it always showed PÅ.
         const pausedUntil = parseUtc(sched.paused_until);
-        if (pausedUntil && pausedUntil > new Date()) {
+        // A blocked store outranks a pause: a pause is something you caused by adding products
+        // and it lapses on its own, while a block means a butik is actively refusing us and
+        // its prices will simply stop updating. Without this the only trace was a log line.
+        const blocked = Array.isArray(sched.blocked_stores) ? sched.blocked_stores : [];
+        if (blocked.length) {
+            const lines = blocked.map(function (b) {
+                const until = parseUtc(b.blocked_until);
+                const t = until ? until.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'}) : '?';
+                return b.store + ' till ' + t + ' (' + b.consecutive_blocks + ' i rad)';
+            });
+            schedEl.textContent = 'BLOCKERAD';
+            schedEl.style.color = 'var(--error)';
+            schedEl.title = 'Butiker som blockerar oss (botskydd) — alla anrop dit pausas:\n' + lines.join('\n');
+        } else if (pausedUntil && pausedUntil > new Date()) {
             const t = pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
             schedEl.textContent = 'PAUSAD';
             schedEl.style.color = 'var(--warning)';

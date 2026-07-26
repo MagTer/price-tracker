@@ -1098,7 +1098,7 @@ class TestStoreCircuitBreaker:
 
         await scheduler._check_due_products()
 
-        assert store_id in scheduler._store_cooldown_until
+        assert scheduler.block_registry.blocked_until(store_id) is not None
         # Only the FIRST link was fetched; the breaker skipped the second same-store link.
         assert scheduler._check_single_product.await_count == 1
         assert scheduler.rate_limiter.acquire.await_count == 1
@@ -1108,9 +1108,7 @@ class TestStoreCircuitBreaker:
         scheduler, session_factory, _ = _make_scheduler()
         scheduler.rate_limiter = AsyncMock()
         store_id = uuid.uuid4()
-        scheduler._store_cooldown_until[store_id] = datetime.now(UTC).replace(
-            tzinfo=None
-        ) + timedelta(minutes=30)
+        scheduler.block_registry.record_block(store_id, store_name="ICA", source="test")
         self._due_session(session_factory, [_make_product_store(store_id=store_id)])
         scheduler._check_single_product = AsyncMock()
 
@@ -1124,9 +1122,11 @@ class TestStoreCircuitBreaker:
         scheduler, session_factory, _ = _make_scheduler()
         scheduler.rate_limiter = AsyncMock()
         store_id = uuid.uuid4()
-        scheduler._store_cooldown_until[store_id] = datetime.now(UTC).replace(
+        scheduler.block_registry.record_block(store_id, store_name="ICA", source="test")
+        # Rewind the cooldown so it has already elapsed.
+        scheduler.block_registry._until[store_id] = datetime.now(UTC).replace(
             tzinfo=None
-        ) - timedelta(minutes=1)  # already elapsed
+        ) - timedelta(minutes=1)
         self._due_session(session_factory, [_make_product_store(store_id=store_id)])
         ok = PriceCheckOutcome(
             success=True,
@@ -1140,5 +1140,7 @@ class TestStoreCircuitBreaker:
 
         await scheduler._check_due_products()
 
-        assert store_id not in scheduler._store_cooldown_until
+        assert scheduler.block_registry.blocked_until(store_id) is None
         scheduler._check_single_product.assert_awaited_once()
+        # A successful probe also resets the escalation, so the NEXT block starts at base again.
+        assert scheduler.block_registry._strikes.get(store_id, 0) == 0

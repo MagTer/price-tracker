@@ -1520,3 +1520,127 @@ class TestLogsEndpoint:
     def test_limit_is_clamped(self, client):
         r = client.get("/logs?limit=999999")
         assert r.status_code == 200  # clamped server-side, never rejected
+
+
+class TestInteractiveFetchesRespectTheCircuitBreaker:
+    """A bot wall must silence EVERY caller against that store, not just the scheduler.
+
+    The breaker lived inside PriceCheckScheduler until v0.28.0, so a blocked store only
+    stopped background checks. "Kolla nu" and the quick-add preview kept firing at a WAF that
+    was actively challenging us — which is exactly the traffic that keeps an IP flag alive,
+    and exactly what a human does when the page says the fetch failed.
+    """
+
+    def _registry(self):
+        from infra.store_block import StoreBlockRegistry
+
+        # A private instance per test: get_block_registry() is a process-wide singleton and
+        # leaked block state would make these tests order-dependent.
+        return StoreBlockRegistry()
+
+    def _link_row(self, mock_session):
+        product, store = _product(unit="st"), _store()
+        link = _ps(product, store, package_quantity="24")
+        row = MagicMock()
+        row.one_or_none.return_value = (link, store, product)
+        mock_session.execute.return_value = row
+        return link, product, store
+
+    def test_manual_check_is_refused_while_the_store_is_blocked(self, client, mock_session):
+        link, _product_obj, store = self._link_row(mock_session)
+        registry = self._registry()
+        registry.record_block(store.id, store_name=store.name, source="scheduler")
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+        ):
+            r = client.post(f"/check/{link.id}")
+
+        assert r.status_code == 503
+        # No request left the process — that is the whole point.
+        fetcher.fetch.assert_not_awaited()
+        assert "Retry-After" in r.headers
+        assert int(r.headers["Retry-After"]) > 0
+        assert store.name in r.json()["detail"]
+
+    def test_a_manual_check_that_hits_a_wall_trips_the_shared_breaker(self, client, mock_session):
+        """The scheduler must learn about a block the operator discovered."""
+        link, _product_obj, store = self._link_row(mock_session)
+        registry = self._registry()
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(
+            return_value={
+                "ok": False,
+                "text": "",
+                "html": "",
+                "error": "blocked (HTTP 202)",
+                "blocked": True,
+            }
+        )
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+        ):
+            r = client.post(f"/check/{link.id}")
+
+        # A block answers 503 (come back later), not 502 (the page is broken).
+        assert r.status_code == 503
+        assert registry.blocked_until(store.id) is not None
+
+    def test_a_successful_manual_check_clears_the_breaker(self, client, mock_session):
+        link, _product_obj, store = self._link_row(mock_session)
+        registry = self._registry()
+        registry.record_block(store.id, store_name=store.name, source="scheduler")
+        # Pretend the cooldown lapsed so the guard lets this probe through.
+        registry._until.pop(store.id)
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(return_value={"ok": True, "text": "page", "html": "<html>"})
+        parser = MagicMock()
+        parser.extract_price = AsyncMock(return_value=_extraction())
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+            patch("api.admin.PriceParser", return_value=parser),
+        ):
+            r = client.post(f"/check/{link.id}")
+
+        assert r.status_code == 200
+        # The strike count is reset, so a later block starts over at the base cooldown
+        # instead of doubling off a stale count.
+        assert registry._strikes.get(store.id, 0) == 0
+
+    def test_quick_add_preview_is_refused_while_the_store_is_blocked(self, client, mock_session):
+        store = _store(name="ICA", slug="ica")
+        stores_result = MagicMock()
+        stores_result.scalars.return_value.all.return_value = [store]
+        # The same mock answers the duplicate-URL probe; None = "not tracked yet", so the
+        # request reaches the guard instead of short-circuiting on already_tracked.
+        stores_result.first.return_value = None
+        mock_session.execute = AsyncMock(return_value=stores_result)
+
+        registry = self._registry()
+        registry.record_block(store.id, store_name=store.name, source="scheduler")
+
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+            patch("api.admin.match_store_by_url", return_value=store),
+        ):
+            r = client.post(
+                "/quick-add/preview",
+                json={"url": "https://www.ica.se/handla/produkt/nagot-123"},
+            )
+
+        assert r.status_code == 503
+        fetcher.fetch.assert_not_awaited()

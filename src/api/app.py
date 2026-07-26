@@ -15,7 +15,12 @@ from api.admin import router as admin_router
 from domain.scheduler import PriceCheckScheduler
 from infra.db import async_session_factory, engine
 from infra.logbuffer import install as install_log_buffer
-from infra.providers import get_email_service, get_fetcher, get_rate_limiter
+from infra.providers import (
+    get_block_registry,
+    get_email_service,
+    get_fetcher,
+    get_rate_limiter,
+)
 from mcp_server.server import get_mcp_app
 
 logger = logging.getLogger(__name__)
@@ -48,6 +53,9 @@ async def lifespan(app: FastAPI):
             # Share the process-wide politeness ledger so background checks and the
             # interactive quick-add fetches throttle against ONE per-store budget.
             rate_limiter=get_rate_limiter(),
+            # Share the process-wide circuit breaker too: a bot wall found by the scheduler
+            # must silence the "Kolla nu" button and quick-add as well, and vice versa.
+            block_registry=get_block_registry(),
         )
         await scheduler.start()
         app.state.scheduler = scheduler
