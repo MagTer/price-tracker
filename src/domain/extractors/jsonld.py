@@ -14,6 +14,8 @@ Shapes handled (all observed in the wild):
 - lists of typed objects and ``@graph`` arrays (Med24, Kronans Apotek)
 - ``offers`` as a list of Offer dicts (Apohem)
 - ``price`` as JSON number or string, with either dot or comma decimals
+- a struck-through ordinarie in ``priceSpecification`` (ListPrice / StrikethroughPrice):
+  read as the campaign's regular price, so a sale is flagged like the Willys extractor does
 """
 
 from __future__ import annotations
@@ -86,14 +88,30 @@ class JsonLdExtractor:
         if price is None:
             return None
 
+        # Campaign handling, harmonized with the Willys extractor: when the offer carries a
+        # struck-through ordinarie (a ListPrice / StrikethroughPrice priceSpecification) that
+        # is higher than the current price, this is a sale. Record ordinarie as price_sek and
+        # the current price as the offer, so the deal surfaces in "Erbjudanden" and kr/unit
+        # (which ranks on effective_price = coalesce(offer, price)) stays on the price paid —
+        # unchanged from when we took the current price as price_sek and discarded ordinarie.
+        offer_price_sek: Decimal | None = None
+        offer_type: str | None = None
+        offer_details: str | None = None
+        regular = self._regular_price_from_spec(offer)
+        if regular is not None and regular > price:
+            offer_price_sek = price  # what you pay now
+            offer_type = "kampanj"
+            offer_details = f"Spara {regular - price} kr"
+            price = regular  # price_sek is the ordinarie
+
         in_stock = self._parse_availability(offer.get("availability"))
 
         return PriceExtractionResult(
             price_sek=price,
             store_unit_price_sek=None,
-            offer_price_sek=None,
-            offer_type=None,
-            offer_details=None,
+            offer_price_sek=offer_price_sek,
+            offer_type=offer_type,
+            offer_details=offer_details,
             in_stock=in_stock,
             confidence=self.CONFIDENCE,
             pack_size=None,
@@ -103,6 +121,7 @@ class JsonLdExtractor:
                 "source": "jsonld",
                 "name": name,
                 "price": float(price),
+                "offer_price": float(offer_price_sek) if offer_price_sek is not None else None,
                 "currency": currency or "SEK",
                 "in_stock": in_stock,
             },
@@ -174,6 +193,27 @@ class JsonLdExtractor:
         if isinstance(node_type, list):
             return type_name in node_type
         return node_type == type_name
+
+    def _regular_price_from_spec(self, offer: dict[str, Any]) -> Decimal | None:
+        """The ordinarie (pre-campaign) price from an offer's priceSpecification, if any.
+
+        Sale pages relegate the regular price to a ``priceSpecification`` with priceType
+        ``ListPrice`` (Apohem) or ``StrikethroughPrice`` (Kronans) — a dict or a list of them,
+        and the schema.org URI is http or https. A ``UnitPriceSpecification`` carrying the
+        jfr-pris (kr/kg) has neither priceType and is skipped. Returns None when no ordinarie
+        marker is present (the non-sale case).
+        """
+        spec = offer.get("priceSpecification")
+        specs = spec if isinstance(spec, list) else [spec] if isinstance(spec, dict) else []
+        for entry in specs:
+            if not isinstance(entry, dict):
+                continue
+            price_type = str(entry.get("priceType", ""))
+            if "ListPrice" in price_type or "StrikethroughPrice" in price_type:
+                parsed = self._parse_price(entry.get("price"))
+                if parsed is not None:
+                    return parsed
+        return None
 
     def _first_offer(self, offers: Any) -> dict[str, Any] | None:
         """Return the first Offer/AggregateOffer dict from an offers value."""

@@ -310,9 +310,9 @@ class TestJsonLdExtractor:
         assert result.price_sek == Decimal("133")
 
     def test_offer_list_with_price_specification(self) -> None:
-        """Apohem shape (verified 2026-07-22): offers is a LIST of Offer dicts, string
-        price, ord.pris relegated to a ListPrice priceSpecification we deliberately
-        ignore."""
+        """Apohem shape (verified 2026-07-22): offers is a LIST of Offer dicts, string price,
+        ord.pris in a ListPrice priceSpecification (dict). Harmonized with Willys (v0.25.3):
+        the ordinarie is price_sek, the current price is the flagged offer."""
         html = _wrap_ldjson(
             '{"@context":"http://schema.org/","@type":"Product",'
             '"name":"Elexir Pharma Omega-3 Forte 1000 mg 132 kapslar",'
@@ -325,13 +325,16 @@ class TestJsonLdExtractor:
         )
         result = JsonLdExtractor().extract_from_html(html)
         assert result is not None
-        assert result.price_sek == Decimal("97")
+        assert result.price_sek == Decimal("129")  # ordinarie
+        assert result.offer_price_sek == Decimal("97")  # campaign price paid
+        assert result.offer_type == "kampanj"
+        assert result.offer_details == "Spara 32 kr"
         assert result.in_stock is True
 
     def test_top_level_list_of_typed_objects(self) -> None:
         """Kronans Apotek shape (verified 2026-07-22): one block holding a LIST of typed
-        objects, Product first, campaign price in offers.price with the ord.pris relegated
-        to a StrikethroughPrice priceSpecification we deliberately ignore."""
+        objects, Product first, campaign price in offers.price with the ord.pris in a
+        StrikethroughPrice priceSpecification (list). Harmonized with Willys (v0.25.3)."""
         html = _wrap_ldjson(
             '[{"@context":"https://schema.org","@type":"Product","@id":"#product",'
             '"name":"Elexir Pharma Omega-3 forte Kapslar 132 st",'
@@ -345,8 +348,43 @@ class TestJsonLdExtractor:
         )
         result = JsonLdExtractor().extract_from_html(html)
         assert result is not None
-        assert result.price_sek == Decimal("102.75")
+        assert result.price_sek == Decimal("137")  # ordinarie
+        assert result.offer_price_sek == Decimal("102.75")  # campaign price paid
+        assert result.offer_type == "kampanj"
+        assert result.offer_details == "Spara 34.25 kr"
         assert result.in_stock is True
+
+    def test_list_price_not_higher_is_not_a_sale(self) -> None:
+        """A ListPrice equal to (or below) the current price is not a campaign — no offer.
+
+        Guards against flagging every product with a priceSpecification as on sale."""
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x",'
+            '"offers":{"@type":"Offer","price":"129","priceCurrency":"SEK",'
+            '"priceSpecification":{"priceType":"https://schema.org/ListPrice",'
+            '"price":"129","priceCurrency":"SEK"}}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("129")
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+
+    def test_unit_price_specification_is_not_treated_as_ordinarie(self) -> None:
+        """A UnitPriceSpecification carrying the jfr-pris (kr/kg) has no ListPrice/
+        StrikethroughPrice priceType and must not be read as a struck-through ordinarie."""
+        html = _wrap_ldjson(
+            '{"@type":"Product","name":"x",'
+            '"offers":{"@type":"Offer","price":"50","priceCurrency":"SEK",'
+            '"priceSpecification":{"@type":"UnitPriceSpecification",'
+            '"price":"200","priceCurrency":"SEK","referenceQuantity":'
+            '{"@type":"QuantitativeValue","unitCode":"KGM"}}}}'
+        )
+        result = JsonLdExtractor().extract_from_html(html)
+        assert result is not None
+        assert result.price_sek == Decimal("50")
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
 
     def test_product_among_multiple_blocks(self) -> None:
         """Med24 shape: Product after non-Product blocks."""
