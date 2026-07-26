@@ -81,17 +81,52 @@ def get_log_buffer() -> RingBufferLogHandler:
     return _buffer
 
 
+def ensure_console_logging(level: int = logging.INFO) -> None:
+    """Give the ROOT logger a stderr handler if nothing else has. Idempotent.
+
+    This is not decoration — without it the app is silent in `docker logs`, and it is
+    `install()` below that makes it so. The mechanism is a genuine Python trap:
+
+    Nothing in this app or in uvicorn configures the root logger (uvicorn only configures its
+    own `uvicorn*` loggers), so root ends up with NO handlers. Python covers that case with
+    `logging.lastResort`, which prints WARNING+ to stderr — but `Logger.callHandlers` only
+    falls back to `lastResort` when it found **zero** handlers anywhere up the chain. The
+    moment `install()` attaches the ring buffer to `domain`/`infra`/`api`, a handler IS found,
+    `lastResort` is skipped, and every app record now terminates in the in-memory buffer and
+    reaches stdout never. The portal's Loggar page kept working, which is precisely why this
+    went unnoticed: v0.18.0 traded `docker logs` for the Loggar page without anyone choosing
+    to. Seven days of prod logs contained no app line at all — only uvicorn access logs.
+
+    Attaching to root (not to the app loggers) keeps one console handler for the whole
+    process instead of one per logger, so nothing is printed three times.
+    """
+    root = logging.getLogger()
+    if any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    # Root defaults to WARNING; INFO records would be dropped before reaching the handler.
+    if root.level == logging.NOTSET or root.level > level:
+        root.setLevel(level)
+
+
 def install(level: int = logging.DEBUG, loggers: tuple[str, ...] = _DEFAULT_LOGGERS) -> None:
     """Attach the ring buffer to the app's loggers. Idempotent.
 
     Also raises each named logger to `level` so its records are actually emitted regardless
-    of how the root logger is configured, without touching the root logger or other
-    handlers. Capturing at DEBUG matters: several *fallback* events (JSON-LD → LLM,
+    of how the root logger is configured, without touching the root logger's level or its
+    other handlers. Capturing at DEBUG matters: several *fallback* events (JSON-LD → LLM,
     "confidence too low, trying next model") are DEBUG, and the Loggar page's level filter
     can only show what the buffer holds. These DEBUG records stay OUT of the console — they
     propagate to the root handler, which filters at its own (INFO+) level; only this
     buffer, attached directly to the app loggers, keeps them.
+
+    Calls ensure_console_logging() FIRST: attaching this handler is what suppresses Python's
+    lastResort fallback, so the console handler must exist before that happens. See there.
     """
+    ensure_console_logging()
     handler = get_log_buffer()
     handler.setLevel(level)
     for name in loggers:

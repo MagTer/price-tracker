@@ -105,3 +105,81 @@ class TestInstall:
             assert not any("falling back" in r["message"] for r in buf.get_records())
         finally:
             buf.clear()
+
+
+class TestConsoleLoggingSurvivesTheRingBuffer:
+    """Attaching the buffer must not silence stdout — v0.18.0 silently did exactly that.
+
+    Nothing configures the root logger (uvicorn only configures its own), so root has no
+    handlers and Python's `lastResort` printed WARNING+ to stderr. `callHandlers` skips
+    lastResort as soon as it finds ANY handler up the chain — so the moment the ring buffer
+    attached to `domain`/`infra`/`api`, every app record terminated in memory and reached
+    stdout never. The Loggar page kept working, which is why seven days of prod logs held
+    no app line at all.
+    """
+
+    def _clean_root(self):
+        import logging
+
+        root = logging.getLogger()
+        saved = list(root.handlers), root.level
+        root.handlers.clear()
+        root.setLevel(logging.WARNING)
+        return saved
+
+    def _restore_root(self, saved):
+        import logging
+
+        handlers, level = saved
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.handlers.extend(handlers)
+        root.setLevel(level)
+
+    def test_install_gives_root_a_console_handler(self):
+        import logging
+
+        from infra.logbuffer import install
+
+        saved = self._clean_root()
+        try:
+            install()
+            root = logging.getLogger()
+            assert any(isinstance(h, logging.StreamHandler) for h in root.handlers), (
+                "install() attached the buffer without leaving anything that writes to stdout"
+            )
+            # INFO must survive root's default WARNING level, or "Checking price" never prints.
+            assert root.level <= logging.INFO
+        finally:
+            self._restore_root(saved)
+
+    def test_an_app_warning_reaches_the_console(self, capsys):
+        import logging
+
+        from infra.logbuffer import install
+
+        saved = self._clean_root()
+        try:
+            install()
+            logging.getLogger("infra.fetcher").warning("Bot wall from ica.se")
+            err = capsys.readouterr().err
+            assert "Bot wall from ica.se" in err, f"nothing reached stderr: {err!r}"
+        finally:
+            self._restore_root(saved)
+
+    def test_ensure_console_logging_is_idempotent(self):
+        import logging
+
+        from infra.logbuffer import ensure_console_logging
+
+        saved = self._clean_root()
+        try:
+            ensure_console_logging()
+            ensure_console_logging()
+            ensure_console_logging()
+            root = logging.getLogger()
+            streams = [h for h in root.handlers if isinstance(h, logging.StreamHandler)]
+            # Three console handlers would print every line three times.
+            assert len(streams) == 1
+        finally:
+            self._restore_root(saved)
