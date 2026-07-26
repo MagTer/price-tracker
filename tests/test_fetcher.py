@@ -225,3 +225,67 @@ class TestFetchJson:
         assert result["ok"] is False
         assert result["blocked"] is False
         assert "timed out" in result["error"]
+
+
+class TestNegotiatedProtocolLogging:
+    """One line per host per process settles "did we actually speak h2 to ICA today" —
+    the h2 half of the fingerprint was verified manually but had no prod evidence at all."""
+
+    def _versioned(self, status_code: int, text: str, http_version: str) -> SimpleNamespace:
+        return SimpleNamespace(status_code=status_code, text=text, http_version=http_version)
+
+    async def test_h2_is_logged_once_per_host(self, caplog) -> None:
+        import logging
+
+        fetcher = _make_fetcher(
+            [
+                self._versioned(200, "<html>a</html>", "HTTP/2"),
+                self._versioned(200, "<html>b</html>", "HTTP/2"),
+            ]
+        )
+
+        with caplog.at_level(logging.INFO, logger="infra.fetcher"):
+            await fetcher.fetch("https://example.test/p1")
+            await fetcher.fetch("https://example.test/p2")
+
+        lines = [r for r in caplog.records if "Negotiated" in r.message]
+        assert len(lines) == 1  # once per HOST, not per request
+        assert "HTTP/2" in lines[0].getMessage()
+        assert "example.test" in lines[0].getMessage()
+
+    async def test_a_1_1_downgrade_is_a_warning(self, caplog) -> None:
+        """HTTP/1.1 under Chrome headers IS the fingerprint contradiction http2 was added
+        to remove — it must stand out in the log, not blend in as routine INFO."""
+        import logging
+
+        fetcher = _make_fetcher([self._versioned(200, "<html>a</html>", "HTTP/1.1")])
+
+        with caplog.at_level(logging.INFO, logger="infra.fetcher"):
+            await fetcher.fetch("https://example.test/p1")
+
+        [line] = [r for r in caplog.records if "Negotiated" in r.message]
+        assert line.levelno == logging.WARNING
+
+    async def test_fetch_json_also_logs_the_protocol(self, caplog) -> None:
+        import logging
+
+        resp = SimpleNamespace(status_code=200, content=b"{}", http_version="HTTP/2")
+        resp.json = lambda: {}
+        fetcher = _make_fetcher([resp])
+
+        with caplog.at_level(logging.INFO, logger="infra.fetcher"):
+            await fetcher.fetch_json("https://api.example.test/p/1")
+
+        assert any("Negotiated HTTP/2" in r.getMessage() for r in caplog.records)
+
+    async def test_a_wall_response_still_reveals_its_protocol(self, caplog) -> None:
+        """A 202 challenge is an answer too — whether the WAF spoke h2 to us is evidence."""
+        import logging
+
+        fetcher = _make_fetcher([self._versioned(202, "", "HTTP/2")])
+
+        with caplog.at_level(logging.INFO, logger="infra.fetcher"):
+            result = await fetcher.fetch("https://example.test/p1")
+
+        assert result["blocked"] is True
+        assert any("Negotiated HTTP/2" in r.getMessage() for r in caplog.records)

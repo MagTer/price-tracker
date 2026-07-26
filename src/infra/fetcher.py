@@ -4,6 +4,7 @@ import asyncio
 import logging
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -112,6 +113,37 @@ class WebFetcher:
             )
             self._client = httpx.AsyncClient(**client_kwargs)
 
+        # Hosts whose negotiated protocol has been logged. h2 was verified manually against
+        # the stores, but prod evidence must live in prod logs: one line per host per process
+        # settles "did we actually speak h2 to ICA today" without a line per request.
+        self._protocol_logged_hosts: set[str] = set()
+
+    def _log_negotiated_protocol(self, response: Any, url: str) -> None:
+        """Log the negotiated HTTP version once per host — WARNING when it is not h2.
+
+        HTTP/1.1 against a store is worth a WARNING, not an INFO: the client claims to be
+        Chrome, and real Chrome always negotiates h2 with a modern CDN, so a 1.1 downgrade
+        IS the fingerprint contradiction we added http2 to remove. Reads via getattr because
+        tests stub responses minimally; a stub without http_version simply logs nothing.
+        """
+        host = urlsplit(url).netloc
+        if not host or host in self._protocol_logged_hosts:
+            return
+        version = getattr(response, "http_version", None)
+        if not version:
+            return
+        self._protocol_logged_hosts.add(host)
+        if version == "HTTP/2":
+            logger.info("Negotiated %s with %s", version, host)
+        else:
+            logger.warning(
+                "Negotiated %s with %s — a client sending Chrome headers over %s "
+                "contradicts its own fingerprint (real Chrome speaks h2 to a modern CDN)",
+                version,
+                host,
+                version,
+            )
+
     async def fetch(self, url: str) -> dict[str, Any]:
         """Fetch a page, returning {ok, text, html, error, blocked}.
 
@@ -130,6 +162,7 @@ class WebFetcher:
                 last_error = str(e)
                 transient = True
             else:
+                self._log_negotiated_protocol(response, url)
                 status = response.status_code
                 body = response.text
                 if status in _WAF_BLOCK_STATUSES:
@@ -222,6 +255,7 @@ class WebFetcher:
             logger.warning("JSON fetch of %s failed: %s", url, e)
             return {"url": url, "ok": False, "data": None, "error": str(e), "blocked": False}
 
+        self._log_negotiated_protocol(response, url)
         status = response.status_code
         if status in _WAF_BLOCK_STATUSES:
             # Same point-of-detection logging contract as fetch(): only this frame knows the
