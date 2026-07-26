@@ -23,7 +23,7 @@ from domain.pricing import (
     unit_price_py,
 )
 from domain.protocols import IFetcher
-from domain.result import PriceExtractionResult
+from domain.result import PriceExtractionResult, StoreBlockedError
 from domain.schedule import effective_schedule, is_inherited
 
 logger = logging.getLogger(__name__)
@@ -106,13 +106,29 @@ async def perform_price_check(
             blocked=bool(fetch_result.get("blocked")),
         )
 
-    extraction = await parser.extract_price(
-        text_content=fetch_result["text"],
-        store_slug=store.slug,
-        product_name=product.name,
-        store_url=product_store.store_url,
-        html_content=fetch_result.get("html"),
-    )
+    try:
+        extraction = await parser.extract_price(
+            text_content=fetch_result["text"],
+            store_slug=store.slug,
+            product_name=product.name,
+            store_url=product_store.store_url,
+            html_content=fetch_result.get("html"),
+        )
+    except StoreBlockedError as e:
+        # A store-API extractor hit a bot wall. The PAGE fetch above can still succeed while
+        # this happens (Willys' CDN serves the SPA shell; the wall sits on the REST API on the
+        # same host), so without this arm the check would end as a routine "no_price" — and the
+        # callers would record a SUCCESS against the circuit breaker for a host that is
+        # actively walling us.
+        return PriceCheckOutcome(
+            success=False,
+            failure_reason="fetch_failed",
+            fetch_error=str(e),
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+            blocked=True,
+        )
 
     # LLM enrichment for the JSON-LD path (locked decision). JSON-LD carries only
     # price + stock, so offer-based watches and package autofill never see data for

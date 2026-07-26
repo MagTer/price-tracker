@@ -13,6 +13,7 @@ from domain.parser import (
     _to_decimal,
     _to_int,
 )
+from domain.result import StoreBlockedError
 
 _SPA_HTML = """<!doctype html><html><head>
 <title>Falukorv Klassikern 800g Scan &ndash; online</title>
@@ -580,6 +581,31 @@ class TestPriceParser:
         mock_api_extractor.extract.assert_called_once()
         mock_llm.assert_called_once()
         assert result == llm_result
+
+    @pytest.mark.asyncio
+    async def test_extract_price_stops_the_ladder_on_a_bot_wall(self) -> None:
+        """StoreBlockedError must pass THROUGH the API step's except-Exception fallback.
+
+        Falling back would run JSON-LD on an empty SPA shell and then pay for an LLM call to
+        conclude "no price" — and the caller would record that as a breaker-resetting success
+        against a host that is actively walling us.
+        """
+        parser = PriceParser()
+
+        mock_api_extractor = AsyncMock()
+        mock_api_extractor.extract = AsyncMock(side_effect=StoreBlockedError("Willys API wall"))
+        parser._api_extractors["willys"] = mock_api_extractor
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            with pytest.raises(StoreBlockedError):
+                await parser.extract_price(
+                    text_content="page content",
+                    store_slug="willys",
+                    product_name="Mjolk",
+                    store_url="https://www.willys.se/produkt/Mjolk-100014716_ST",
+                )
+
+        mock_llm.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_extract_price_without_store_url_skips_api(self) -> None:

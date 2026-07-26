@@ -194,6 +194,67 @@ class WebFetcher:
         )
         return {"url": url, "ok": False, "text": "", "html": "", "error": last_error}
 
+    async def fetch_json(self, url: str) -> dict[str, Any]:
+        """GET a store's JSON API endpoint, returning {ok, data, error, blocked}.
+
+        Goes through the SAME client as page fetches on purpose: same Chrome fingerprint,
+        same h2 connection, same TLS session — the way a real SPA's XHR rides the connection
+        its page opened. The per-request headers below repaint the navigation headers as an
+        XHR (Accept: application/json, sec-fetch-mode: cors); a bare per-call httpx client
+        here used to announce `python-httpx` over HTTP/1.1 to the very host the page fetch
+        had just spoken Chrome-h2 to.
+
+        No retries: the only caller sits inside the extraction ladder with an LLM fallback
+        behind it, and a WAF answer (blocked=True) must fail fast for the same reason
+        fetch() does — see _WAF_BLOCK_STATUSES.
+        """
+        try:
+            response = await self._client.get(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                },
+            )
+        except Exception as e:  # network error / timeout
+            logger.warning("JSON fetch of %s failed: %s", url, e)
+            return {"url": url, "ok": False, "data": None, "error": str(e), "blocked": False}
+
+        status = response.status_code
+        if status in _WAF_BLOCK_STATUSES:
+            # Same point-of-detection logging contract as fetch(): only this frame knows the
+            # status and body size, and an unlogged wall is how blocks stay invisible in prod.
+            logger.warning(
+                "Bot wall from %s — HTTP %d, %d-byte body; failing fast (no retry) "
+                "and reporting blocked",
+                url,
+                status,
+                len(response.content),
+            )
+            return {
+                "url": url,
+                "ok": False,
+                "data": None,
+                "error": f"blocked (HTTP {status})",
+                "blocked": True,
+            }
+        if status != 200:
+            return {
+                "url": url,
+                "ok": False,
+                "data": None,
+                "error": f"HTTP {status}",
+                "blocked": False,
+            }
+        try:
+            data = response.json()
+        except Exception as e:
+            logger.warning("Non-JSON body from %s: %s", url, e)
+            return {"url": url, "ok": False, "data": None, "error": str(e), "blocked": False}
+        return {"url": url, "ok": True, "data": data, "error": None, "blocked": False}
+
     async def close(self) -> None:
         await self._client.aclose()
 

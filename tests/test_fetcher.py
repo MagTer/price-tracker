@@ -153,3 +153,75 @@ class TestRetry:
         assert result["ok"] is False
         assert "HTTP 404" in result["error"]
         assert fetcher._client.get.await_count == 1
+
+
+class TestFetchJson:
+    """fetch_json shares fetch()'s client and its WAF contract, minus the retries."""
+
+    def _json_response(self, status_code: int, data: object = None) -> SimpleNamespace:
+        resp = SimpleNamespace(status_code=status_code, content=b"{}")
+        if isinstance(data, Exception):
+
+            def _raise() -> object:
+                raise data
+
+            resp.json = _raise
+        else:
+            resp.json = lambda: data
+        return resp
+
+    async def test_ok_returns_parsed_data(self) -> None:
+        fetcher = _make_fetcher([self._json_response(200, {"priceValue": 29.9})])
+
+        result = await fetcher.fetch_json("https://example.test/api/p/1")
+
+        assert result["ok"] is True
+        assert result["data"] == {"priceValue": 29.9}
+        assert result["blocked"] is False
+
+    async def test_uses_the_shared_client_with_xhr_headers(self) -> None:
+        """One client for pages AND the API: the whole point is that the REST call rides the
+        same Chrome-fingerprinted h2 connection, repainted as an XHR (accept: json, cors)."""
+        fetcher = _make_fetcher([self._json_response(200, {})])
+
+        await fetcher.fetch_json("https://example.test/api/p/1")
+
+        headers = fetcher._client.get.await_args.kwargs["headers"]
+        assert headers["Accept"] == "application/json"
+        assert headers["sec-fetch-mode"] == "cors"
+        assert headers["sec-fetch-site"] == "same-origin"
+
+    async def test_waf_wall_is_blocked_true_and_not_retried(self) -> None:
+        fetcher = _make_fetcher([self._json_response(403)] * 3)
+
+        result = await fetcher.fetch_json("https://example.test/api/p/1")
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert fetcher._client.get.await_count == 1  # fail fast — no retry burst at the WAF
+
+    async def test_http_error_is_ok_false_not_blocked(self) -> None:
+        fetcher = _make_fetcher([self._json_response(404)])
+
+        result = await fetcher.fetch_json("https://example.test/api/p/1")
+
+        assert result["ok"] is False
+        assert result["blocked"] is False
+        assert "HTTP 404" in result["error"]
+
+    async def test_non_json_body_is_ok_false(self) -> None:
+        fetcher = _make_fetcher([self._json_response(200, ValueError("not json"))])
+
+        result = await fetcher.fetch_json("https://example.test/api/p/1")
+
+        assert result["ok"] is False
+        assert result["blocked"] is False
+
+    async def test_network_error_is_ok_false_not_blocked(self) -> None:
+        fetcher = _make_fetcher([TimeoutError("timed out")])
+
+        result = await fetcher.fetch_json("https://example.test/api/p/1")
+
+        assert result["ok"] is False
+        assert result["blocked"] is False
+        assert "timed out" in result["error"]

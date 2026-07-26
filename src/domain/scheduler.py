@@ -235,9 +235,12 @@ class PriceCheckScheduler:
                             store_name=product_store.store.name,
                             source="scheduler",
                         )
-                    elif outcome is not None and outcome.success:
-                        # A real page ends the escalation — otherwise the strike count would
-                        # ratchet up across unrelated blocks days apart.
+                    elif outcome is not None and outcome.failure_reason != "fetch_failed":
+                        # "Reached the store" ends the escalation — NOT outcome.success: a page
+                        # that loaded fine but yielded no extractable price still proves the
+                        # store is answering us. Same predicate as the interactive paths in
+                        # api/admin.py (_record_store_outcome callers) — the breaker is shared
+                        # state, so its callers must agree on what counts as a success.
                         self.block_registry.record_success(
                             product_store.store_id, store_name=product_store.store.name
                         )

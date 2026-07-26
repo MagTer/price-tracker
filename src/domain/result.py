@@ -4,6 +4,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 
+class StoreBlockedError(Exception):
+    """A store's bot wall answered instead of data — the HOST is blocking us, not one URL.
+
+    Raised by extractors whose HTTP call hits a WAF (HTTP 202/403/429), because returning
+    None there is indistinguishable from "product not found": the ladder would fall through
+    to the LLM on an empty page, the check would end as a routine "no_price", and the callers
+    would record a SUCCESS against the circuit breaker — resetting the escalation for a store
+    that is actively walling us. An exception is the only return channel that survives the
+    whole extraction ladder without threading a flag through every result type.
+    """
+
+
 @dataclass
 class ProductMetadata:
     """What a product PAGE says the product is — used by quick-add, never by price checks.

@@ -14,7 +14,7 @@ from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.base import PriceExtractor
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.extractors.willys_api import WillysApiExtractor
-from domain.result import PriceExtractionResult, ProductMetadata
+from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
 from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
 
 __all__ = ["PriceExtractionResult", "PriceParser", "ProductMetadata"]
@@ -216,6 +216,12 @@ class PriceParser:
                     "API extractor returned None, falling back to LLM",
                     extra={"store": store_slug},
                 )
+            except StoreBlockedError:
+                # The HOST is walling us — stop the ladder. JSON-LD on a Willys SPA shell
+                # finds nothing and an LLM run on it costs money to conclude the same, and
+                # the caller must see a BLOCK (perform_price_check turns this into a blocked
+                # outcome for the circuit breaker), not a routine "no price on the page".
+                raise
             except Exception as e:
                 logger.warning(
                     "API extractor failed, falling back to LLM: %s",

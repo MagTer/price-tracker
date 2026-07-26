@@ -1,14 +1,12 @@
 """Tests for WillysApiExtractor."""
 
-import logging
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from domain.extractors.willys_api import WillysApiExtractor
-from domain.result import PriceExtractionResult
+from domain.result import PriceExtractionResult, StoreBlockedError
 
 
 def _make_extractor() -> WillysApiExtractor:
@@ -61,15 +59,21 @@ class TestExtractProductCode:
 # ---------------------------------------------------------------------------
 
 
-def _mock_httpx_response(
-    status_code: int = 200,
-    json_data: dict[str, object] | None = None,
-) -> MagicMock:
-    """Build a mock httpx response."""
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = json_data or {}
-    return resp
+def _fetch_json_ok(data: dict[str, object]) -> dict[str, object]:
+    """A successful WebFetcher.fetch_json result."""
+    return {"ok": True, "data": data, "error": None, "blocked": False}
+
+
+def _fetch_json_fail(error: str, *, blocked: bool = False) -> dict[str, object]:
+    """A failed WebFetcher.fetch_json result (blocked=True for a bot wall)."""
+    return {"ok": False, "data": None, "error": error, "blocked": blocked}
+
+
+def _mock_fetcher(result: dict[str, object]) -> MagicMock:
+    """The shared WebFetcher as the extractor sees it: one fetch_json call."""
+    fetcher = MagicMock()
+    fetcher.fetch_json = AsyncMock(return_value=result)
+    return fetcher
 
 
 class TestExtract:
@@ -79,14 +83,12 @@ class TestExtract:
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
         api_data = _valid_api_response(price_value=29.90, compare_price="14,95 kr")
+        fetcher = _mock_fetcher(_fetch_json_ok(api_data))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, api_data))
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
             result = await extractor.extract(url, "Mjolk")
 
         assert result is not None
@@ -109,14 +111,12 @@ class TestExtract:
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Bearnaise-Original-101283524_ST"
         api_data = _valid_api_response(price_value=21.29, savings_amount=3.39)
+        fetcher = _mock_fetcher(_fetch_json_ok(api_data))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, api_data))
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
             result = await extractor.extract(url)
 
         assert result is not None
@@ -131,15 +131,12 @@ class TestExtract:
         """outOfStock=true maps to in_stock=False."""
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
-        api_data = _valid_api_response(out_of_stock=True)
+        fetcher = _mock_fetcher(_fetch_json_ok(_valid_api_response(out_of_stock=True)))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, api_data))
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
             result = await extractor.extract(url)
 
         assert result is not None
@@ -150,31 +147,27 @@ class TestExtract:
         """HTTP 404 returns None to trigger LLM fallback."""
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+        fetcher = _mock_fetcher(_fetch_json_fail("HTTP 404"))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_httpx_response(404))
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
             result = await extractor.extract(url)
 
         assert result is None
 
     @pytest.mark.asyncio
     async def test_extract_returns_none_on_timeout(self) -> None:
-        """httpx.TimeoutException returns None."""
+        """A network timeout (fetch_json ok=False) returns None."""
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+        fetcher = _mock_fetcher(_fetch_json_fail("timed out"))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
             result = await extractor.extract(url)
 
         assert result is None
@@ -184,12 +177,13 @@ class TestExtract:
         """URL without product code pattern returns None immediately (no HTTP call)."""
         extractor = _make_extractor()
         url = "https://ica.se/product/123"
+        fetcher = _mock_fetcher(_fetch_json_ok({}))
 
-        with patch("httpx.AsyncClient") as mock_cls:
+        with patch("infra.providers.get_fetcher", return_value=fetcher):
             result = await extractor.extract(url)
 
         assert result is None
-        mock_cls.assert_not_called()
+        fetcher.fetch_json.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -541,17 +535,12 @@ class TestWillysApiIsThrottledAndBlockAware:
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
 
         limiter = AsyncMock()
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(
-            return_value=_mock_httpx_response(200, _valid_api_response(price_value=29.90))
-        )
+        fetcher = _mock_fetcher(_fetch_json_ok(_valid_api_response(price_value=29.90)))
 
         with (
             patch("infra.providers.get_rate_limiter", return_value=limiter),
-            patch("httpx.AsyncClient") as mock_cls,
+            patch("infra.providers.get_fetcher", return_value=fetcher),
         ):
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
             await extractor.extract(url, "Mjolk")
 
         limiter.acquire.assert_awaited_once()
@@ -574,21 +563,37 @@ class TestWillysApiIsThrottledAndBlockAware:
         limiter.acquire.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_bot_wall_is_logged_as_a_block(self, caplog) -> None:
+    async def test_the_api_call_goes_through_the_shared_browser_client(self) -> None:
+        """The REST call rides WebFetcher's client — Chrome fingerprint, h2, shared TLS
+        session — not a per-call httpx client announcing `python-httpx` over HTTP/1.1 to the
+        very host the page fetch just spoke Chrome-h2 to."""
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_httpx_response(403, {}))
+        fetcher = _mock_fetcher(_fetch_json_ok(_valid_api_response()))
 
         with (
             patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
-            patch("httpx.AsyncClient") as mock_cls,
-            caplog.at_level(logging.WARNING, logger="domain.extractors.willys_api"),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
         ):
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-            result = await extractor.extract(url, "Mjolk")
+            await extractor.extract(url, "Mjolk")
 
-        assert result is None
-        assert any("bot wall" in r.message.lower() for r in caplog.records), caplog.text
+        fetcher.fetch_json.assert_awaited_once_with(
+            "https://www.willys.se/axfood/rest/p/100014716_ST"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_bot_wall_raises_store_blocked_for_both_paths(self) -> None:
+        """A wall must STOP the ladder, not degrade to None: None means "product missing",
+        which fell through to the LLM and ended the check as a strike-resetting no_price."""
+        extractor = _make_extractor()
+        url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+        fetcher = _mock_fetcher(_fetch_json_fail("blocked (HTTP 403)", blocked=True))
+
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
+            with pytest.raises(StoreBlockedError):
+                await extractor.extract(url, "Mjolk")
+            with pytest.raises(StoreBlockedError):
+                await extractor.extract_metadata(url)

@@ -1144,3 +1144,55 @@ class TestStoreCircuitBreaker:
         scheduler._check_single_product.assert_awaited_once()
         # A successful probe also resets the escalation, so the NEXT block starts at base again.
         assert scheduler.block_registry._strikes.get(store_id, 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_no_price_page_still_resets_the_escalation(self) -> None:
+        """ "Reached the store" is the predicate, NOT outcome.success: a page that loaded but
+        yielded no extractable price proves the store is answering. The interactive paths
+        (api/admin.py) already used this predicate; the scheduler once keyed on full success,
+        so a store with a changed page layout kept its strike count forever — and the next
+        real block escalated from a stale count instead of starting at base."""
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        # Leftover escalation from an earlier walled evening; the cooldown itself has lapsed.
+        scheduler.block_registry._strikes[store_id] = 3
+        self._due_session(session_factory, [_make_product_store(store_id=store_id)])
+        no_price = PriceCheckOutcome(
+            success=False,
+            failure_reason="no_price",
+            fetch_error=None,
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+        )
+        scheduler._check_single_product = AsyncMock(return_value=no_price)
+
+        await scheduler._check_due_products()
+
+        assert scheduler.block_registry._strikes.get(store_id, 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_plain_fetch_failure_leaves_the_strikes_standing(self) -> None:
+        """A non-wall fetch failure (transient 5xx, dead page) is NOT "the store answered" —
+        it must neither trip the breaker nor clear the escalation."""
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        scheduler.block_registry._strikes[store_id] = 3
+        self._due_session(session_factory, [_make_product_store(store_id=store_id)])
+        failed = PriceCheckOutcome(
+            success=False,
+            failure_reason="fetch_failed",
+            fetch_error="HTTP 503",
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+            blocked=False,
+        )
+        scheduler._check_single_product = AsyncMock(return_value=failed)
+
+        await scheduler._check_due_products()
+
+        assert scheduler.block_registry._strikes.get(store_id, 0) == 3
+        assert scheduler.block_registry.blocked_until(store_id) is None

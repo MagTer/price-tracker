@@ -4,10 +4,8 @@ import logging
 import re
 from decimal import Decimal
 
-import httpx
-
 from domain.quickadd import parse_package_from_name
-from domain.result import PriceExtractionResult, ProductMetadata
+from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +13,6 @@ logger = logging.getLogger(__name__)
 # Matches patterns like: /produkt/Some-Name-100014716_ST or /produkt/name-12345_ST
 _PRODUCT_CODE_RE = re.compile(r"-(\d+_ST)(?:\?|$|#)")
 
-
-# The API answers on the SAME host as the product pages, so a WAF wall here is the same wall.
-# Statuses kept in step with infra.fetcher._WAF_BLOCK_STATUSES on purpose.
-_WAF_BLOCK_STATUSES = frozenset({202, 403, 429})
 
 # The politeness key for this endpoint. The ledger is keyed by store id everywhere else, but
 # this extractor never sees one — and it must be throttled regardless, because a Willys price
@@ -35,14 +29,14 @@ class WillysApiExtractor:
     """Extract prices from Willys public REST API."""
 
     API_BASE = "https://www.willys.se/axfood/rest/p"
-    TIMEOUT = 15.0
 
     async def extract(
         self, store_url: str, product_name: str | None = None
     ) -> PriceExtractionResult | None:
         """Extract price from Willys API.
 
-        Returns None on any error to allow LLM fallback.
+        Returns None on ordinary errors to allow LLM fallback; raises StoreBlockedError on
+        a bot wall (deliberately NOT caught here — the ladder must stop, not fall through).
         """
         data = await self._fetch_product(store_url)
         if data is None:
@@ -55,8 +49,10 @@ class WillysApiExtractor:
 
         Willys is a client-rendered SPA: its product HTML carries no JSON-LD and no price, so
         quick-add's HTML/LLM ladder sees an empty shell. The public REST API is the only
-        reliable source, exactly as it is for the price-check path. Returns None on any error
-        so the preview can still fall back to the HTML ladder.
+        reliable source, exactly as it is for the price-check path. Returns None on ordinary
+        errors so the preview can still fall back to the HTML ladder; raises StoreBlockedError
+        on a bot wall — falling back would fire a second request at the host that just walled
+        the first one.
         """
         data = await self._fetch_product(store_url)
         if data is None:
@@ -86,9 +82,15 @@ class WillysApiExtractor:
         )
 
     async def _fetch_product(self, store_url: str) -> dict[str, object] | None:
-        """GET the product JSON from the Willys REST API, or None on any error.
+        """GET the product JSON from the Willys REST API, or None on an ordinary miss.
 
         Shared by the price and metadata paths so the URL→code→GET dance lives in one place.
+        Goes through the SHARED WebFetcher client (not a per-call httpx client): the page
+        fetch speaks Chrome-over-h2 to www.willys.se, and this call announcing `python-httpx`
+        over HTTP/1.1 to the same host seconds later was a self-contradiction at exactly the
+        layer a WAF fingerprints. Raises StoreBlockedError on a bot wall — a wall here used to
+        come back as None, indistinguishable from a missing product, so the ladder fell
+        through to the LLM and the check ended as a strike-resetting "no_price".
         """
         code = self._extract_product_code(store_url)
         if not code:
@@ -97,35 +99,20 @@ class WillysApiExtractor:
 
         # Spend a slot on the SHARED ledger. Imported here rather than at module scope so the
         # domain layer keeps its lazy dependency on infra (same shape as the scheduler's).
-        from infra.providers import get_rate_limiter
+        from infra.providers import get_fetcher, get_rate_limiter
 
         await get_rate_limiter().acquire(
             _LEDGER_KEY, _MIN_INTERVAL_SECONDS, max_wait=_MAX_WAIT_SECONDS
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
-                resp = await client.get(
-                    f"{self.API_BASE}/{code}",
-                    headers={"Accept": "application/json"},
-                )
-                if resp.status_code in _WAF_BLOCK_STATUSES:
-                    # A bot wall, not a missing product. It was logged at DEBUG alongside every
-                    # ordinary 404, so a Willys block was invisible in prod and quietly became
-                    # "the API missed" — a silent, pointless fall-through to the LLM.
-                    logger.warning(
-                        "Willys API bot wall — HTTP %d for %s; falling back (do not retry)",
-                        resp.status_code,
-                        code,
-                    )
-                    return None
-                if resp.status_code != 200:
-                    logger.warning("Willys API returned %d for %s", resp.status_code, code)
-                    return None
-                return resp.json()
-        except Exception:
-            logger.warning("Willys API request failed for %s", store_url, exc_info=True)
+        result = await get_fetcher().fetch_json(f"{self.API_BASE}/{code}")
+        if result.get("blocked"):
+            raise StoreBlockedError(f"Willys API bot wall: {result.get('error')}")
+        if not result.get("ok"):
+            logger.warning("Willys API request failed for %s: %s", store_url, result.get("error"))
             return None
+        data = result.get("data")
+        return data if isinstance(data, dict) else None
 
     def _extract_product_code(self, url: str) -> str | None:
         """Extract product code from Willys URL."""

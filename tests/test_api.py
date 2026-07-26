@@ -1644,3 +1644,43 @@ class TestInteractiveFetchesRespectTheCircuitBreaker:
 
         assert r.status_code == 503
         fetcher.fetch.assert_not_awaited()
+
+    def test_preview_api_tier_wall_trips_the_breaker_and_skips_the_page_fetch(
+        self, client, mock_session
+    ):
+        """A wall at the store-API tier used to degrade to None, which fell through to a
+        SECOND request (the page fetch) at the very host that just walled the first — and
+        only that one tripped the breaker. Now the wall itself trips it, answers 503, and
+        the page fetch never fires."""
+        from domain.result import StoreBlockedError
+
+        store = _store(name="Willys", slug="willys")
+        stores_result = MagicMock()
+        stores_result.scalars.return_value.all.return_value = [store]
+        stores_result.first.return_value = None  # not already tracked
+        mock_session.execute = AsyncMock(return_value=stores_result)
+
+        registry = self._registry()
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+        api_extractor = MagicMock()
+        api_extractor.extract_metadata = AsyncMock(
+            side_effect=StoreBlockedError("Willys API bot wall: blocked (HTTP 403)")
+        )
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_fetcher", return_value=fetcher),
+            patch("api.admin.get_api_extractor", return_value=api_extractor),
+            patch("api.admin.match_store_by_url", return_value=store),
+        ):
+            r = client.post(
+                "/quick-add/preview",
+                json={"url": "https://www.willys.se/produkt/Mjolk-100014716_ST"},
+            )
+
+        assert r.status_code == 503
+        assert "Retry-After" in r.headers
+        # The breaker holds the whole store now — scheduler AND the next click stand down.
+        assert registry.blocked_until(store.id) is not None
+        fetcher.fetch.assert_not_awaited()

@@ -49,6 +49,7 @@ from domain.quickadd import (
     suggest_sibling_links,
     suggest_store_label,
 )
+from domain.result import StoreBlockedError
 from domain.schedule import effective_schedule, is_inherited, next_check_time
 from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
@@ -608,8 +609,23 @@ async def quick_add_preview(
         # ladder below sees an empty shell. Read identity + package straight off the API.
         api_extractor = get_api_extractor(store.slug)
         if api_extractor is not None:
-            api_meta = await api_extractor.extract_metadata(url)
+            try:
+                api_meta = await api_extractor.extract_metadata(url)
+            except StoreBlockedError as e:
+                # The API tier hit the wall. It used to return None here, which fell through
+                # to the page fetch below — a SECOND request at the host that just walled the
+                # first — and only that one tripped the breaker. Trip it now and answer with
+                # the same 503 + Retry-After the next click would get.
+                _record_store_outcome(
+                    store, blocked=True, success=False, source="quick-add-preview"
+                )
+                _guard_store_not_blocked(store)
+                raise HTTPException(status_code=502, detail=f"Kunde inte hämta sidan: {e}") from e
             if api_meta is not None:
+                # The API answered — the store is talking to us; reset the breaker's escalation.
+                _record_store_outcome(
+                    store, blocked=False, success=True, source="quick-add-preview"
+                )
                 name = api_meta.name
                 brand = api_meta.brand
                 category = api_meta.category

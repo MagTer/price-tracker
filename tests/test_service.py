@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from domain.result import PriceExtractionResult
+from domain.result import PriceExtractionResult, StoreBlockedError
 from domain.service import PriceTrackerService, perform_price_check
 
 
@@ -764,6 +764,30 @@ class TestPerformPriceCheck:
         assert outcome.failure_reason == "fetch_failed"
         assert outcome.fetch_error == "boom"
         parser.extract_price.assert_not_called()
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_api_bot_wall_during_extraction_is_a_blocked_outcome(self) -> None:
+        """The PAGE can load while a store-API extractor hits the wall (Willys' CDN serves
+        the SPA shell; the wall sits on the REST API on the same host). That must surface as
+        blocked=True, not as a routine no_price — the callers feed this outcome to the
+        circuit breaker, and a no_price would RESET the escalation for a walling host."""
+        ps, product, store, session, fetcher, parser = _check_fixtures()
+        parser.extract_price = AsyncMock(side_effect=StoreBlockedError("Willys API wall"))
+
+        outcome = await perform_price_check(
+            product_store=ps,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+
+        assert outcome.success is False
+        assert outcome.failure_reason == "fetch_failed"
+        assert outcome.blocked is True
+        assert "Willys API wall" in outcome.fetch_error
         session.add.assert_not_called()
 
     @pytest.mark.asyncio
