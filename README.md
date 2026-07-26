@@ -36,8 +36,19 @@ distinguishable everywhere a store name is shown (v0.6.0).
 - **Portal / API auth = IAP header trust.** This app does NOT terminate Entra
   OIDC. An upstream Traefik + oauth2-proxy `forwardAuth` ingress (live in
   production since 2026-07-09, managed in the home-server repo) authenticates
-  the user once and forwards `X-Auth-Request-Email`. The app validates that
-  header against `ALLOWED_ENTRA_EMAIL` and denies everything else.
+  the user once and forwards `X-Auth-Request-Email`. The app requires that
+  header on every request; without it (or without `ALLOWED_ENTRA_EMAIL` set at
+  all) it fails closed with 403.
+- **Two roles, one variable (v0.29.0).** `ALLOWED_ENTRA_EMAIL` is the **admin**
+  — the only identity that may change anything. Anyone else the upstream proxy
+  let through is a **reader**: every `GET` (products, deals, watches, history,
+  `/logs`, `/export`, `/scheduler/status`) is open to them, and every
+  state-changing method is 403. The rule is enforced once, as a router-level
+  dependency keyed on the HTTP method, so a new endpoint is admin-gated by
+  default; `tests/test_static_gates.py` fails the build if that gate is removed
+  or a route is registered off a different router. Membership is delegated to
+  Entra on purpose — oauth2-proxy already enforces the tenant and the allowed
+  email domains, so this app keeps no second list of people.
   `ALLOWED_ENTRA_EMAIL` must match the Entra **UPN**, not necessarily a gmail
   address.
 - **MCP auth = static bearer.** `/mcp/` is served on the same host
@@ -51,7 +62,7 @@ distinguishable everywhere a store name is shown (v0.6.0).
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
 | `DATABASE_URL` | prod | `postgresql+asyncpg://price_tracker:price_tracker@localhost:5432/price_tracker` | Async Postgres URL. Also read by Alembic (overrides `alembic.ini`). |
-| `ALLOWED_ENTRA_EMAIL` | yes | `""` (deny all) | Entra **UPN** allowed to use the portal; matched against `X-Auth-Request-Email`. |
+| `ALLOWED_ENTRA_EMAIL` | yes | `""` (deny all) | Entra **UPN** of the **admin** — the only identity allowed to write; matched against `X-Auth-Request-Email`. Everyone else the ingress authenticates gets read-only access. Unset ⇒ everyone is denied, reads included. |
 | `MCP_BEARER_TOKEN` | for MCP | `""` | Static bearer for `/mcp/`. Unset ⇒ `/mcp` fails closed with 503. |
 | `OPENROUTER_API_KEY` | for LLM fallback | `""` | OpenRouter key for the LLM extraction cascade. |
 | `OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | OpenRouter endpoint (OpenAI-compatible). |
@@ -77,9 +88,11 @@ everything a second deployment needs.
 3. **Auth:** the app does NOT do login itself. It trusts the `X-Auth-Request-Email`
    header from your reverse proxy (any forward-auth setup works — oauth2-proxy, Authelia,
    Cloudflare Access…) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:
-   whatever email your IdP forwards). **Never expose the app without such a proxy** — the
-   header is trusted as-is. `/mcp/` is instead protected by `MCP_BEARER_TOKEN` and fails
-   closed (503) when unset.
+   whatever email your IdP forwards). That address is the admin; anyone else your proxy
+   authenticates gets read-only access, so **your proxy's allowlist is the membership
+   boundary** — scope it before pointing it at this app. **Never expose the app without
+   such a proxy** — the header is trusted as-is. `/mcp/` is instead protected by
+   `MCP_BEARER_TOKEN` and fails closed (503) when unset.
 4. **Keys:** get your own `OPENROUTER_API_KEY` (LLM extraction fallback — cheap; most
    checks use store APIs/JSON-LD and never touch the LLM) and, for email alerts,
    `RESEND_API_KEY` + `EMAIL_FROM` on a domain you have verified with Resend.
@@ -87,8 +100,10 @@ everything a second deployment needs.
    butiker (the id is in the product-page URL after `/stores/`). Without them, quick-add
    suggests the defaults' labels — harmless, but they are someone else's stores.
 
-Single-user by design: one instance per person, auth gates one email. Multi-tenancy is
-deliberately out of scope (see `.planning/` for the decision history).
+Single-**owner** by design: one instance per person, one admin email, one tenant of data.
+Readers share the admin's data — they are extra eyes on one household's prices, not
+accounts of their own. Multi-tenancy is deliberately out of scope (see `.planning/` for
+the decision history).
 
 ## Local development
 
