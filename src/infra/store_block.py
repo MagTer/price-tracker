@@ -31,7 +31,23 @@ logger = logging.getLogger(__name__)
 
 # First cooldown after a block. Read from the scheduler's original env name so existing
 # deployments keep their tuning; it is no longer scheduler-specific.
-BASE_COOLDOWN_MINUTES = float(os.getenv("SCHEDULER_STORE_BLOCK_COOLDOWN_MINUTES", "30"))
+#
+# 5 minutes, not the 30 this shipped with — MEASURED, not guessed. On 2026-07-26 a quick-add
+# preview took an HTTP 202 from ICA at 22:41:17Z; 17 minutes later the SAME httpx client with
+# the SAME headers from the SAME public IP fetched that exact URL and got the full 510 KB
+# product page. The requests around the block were ~2 minutes apart — slower than the
+# scheduler's own 60-90 s cadence — so the wall was neither rate-driven nor fingerprint-driven.
+# ICA's challenge appears to be SAMPLED: it lands occasionally and lifts within minutes.
+#
+# A 30-minute base was sized for the other hypothesis, a persistent AWS WAF IP flag. Against a
+# sampled challenge it costs a half hour of coverage per unlucky request and answers a human
+# 503 for the same half hour, when retrying in a minute would very likely have worked. The
+# doubling below is what still covers the flag case: 5 → 10 → 20 → 40 → … → 240.
+#
+# One measurement, one store. 17 minutes is an UPPER bound on how long that wall stood; the
+# real figure may be far lower and nothing here knows it — a 30-minute stand-down structurally
+# prevents ever finding out. Shortening the base is also how prod logs start answering it.
+BASE_COOLDOWN_MINUTES = float(os.getenv("SCHEDULER_STORE_BLOCK_COOLDOWN_MINUTES", "5"))
 # Ceiling for the doubling. An AWS WAF IP flag can persist for hours; probing a walled store
 # every 30 min for a day is both useless and the thing that keeps the flag alive.
 MAX_COOLDOWN_MINUTES = float(os.getenv("STORE_BLOCK_MAX_COOLDOWN_MINUTES", "240"))

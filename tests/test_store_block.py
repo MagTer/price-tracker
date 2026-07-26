@@ -8,11 +8,35 @@ longer than the last.
 
 from datetime import UTC, datetime, timedelta
 
-from infra.store_block import StoreBlockRegistry
+from infra.store_block import BASE_COOLDOWN_MINUTES, MAX_COOLDOWN_MINUTES, StoreBlockRegistry
 
 
 def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+class TestShippedDefaults:
+    """The defaults are the only values prod actually runs — every other test here passes
+    base_minutes explicitly, so nothing else would notice them changing."""
+
+    def test_base_cooldown_is_five_minutes(self) -> None:
+        """Measured, not guessed: a 2026-07-26 ICA wall had lifted 17 minutes later for the
+        identical client from the identical IP, and the requests around it were 2 minutes
+        apart. A sampled challenge does not deserve a half-hour stand-down — see the constant's
+        comment. Raising this back to 30 costs half an hour of coverage per unlucky request."""
+        assert BASE_COOLDOWN_MINUTES == 5
+
+    def test_the_escalation_ceiling_still_covers_a_real_flag(self) -> None:
+        """Shortening the base only works because the doubling is untouched: a store that
+        genuinely flags us still reaches hours (5 → 10 → 20 → 40 → 80 → 160 → 240)."""
+        assert MAX_COOLDOWN_MINUTES == 240
+
+        registry = StoreBlockRegistry()
+        waits = []
+        for _ in range(7):
+            until = registry.record_block("ica")
+            waits.append(round((until - _now()).total_seconds() / 60))
+        assert waits == [5, 10, 20, 40, 80, 160, 240]
 
 
 class TestStoreBlockRegistry:
