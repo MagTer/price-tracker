@@ -88,9 +88,12 @@ Recent decisions affecting current work:
 
 - **MCP registration against the `nousresearch/hermes-agent` gateway** — see § GSD status. The
   only open item in the whole plan.
-- `.env.template` may still carry `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`
-  (D-32). The file is permission-blocked for agents, so **Magnus has to edit it** — an agent
-  cannot even read it to confirm the state (verified again 2026-07-26: the read was denied).
+- ~~`.env.template` still carries `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`~~ —
+  **closed 2026-07-26.** It did, plus three dead `PRICE_PARSER_*` rows and a stale
+  `mcp.<domain>` comment; it also lacked all 8 of the QUICKADD/SCHEDULER knobs. Rewritten
+  against the code's actual env contract. **The Read deny on `.env.*` is real and stays** —
+  the way through is `git show HEAD:.env.template` to read and a shell heredoc to write, so
+  the global secrets guard never has to be loosened for a committed template.
 - ~~UI gap: watches can be created and deleted, but not edited~~ — **closed in v0.27.0.**
   The dialog exists, and the endpoint behind it can now CLEAR a target (its `is not None`
   guards meant a target price could be set but never removed).
