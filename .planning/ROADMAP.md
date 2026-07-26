@@ -18,9 +18,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Skeleton + Domain Copy** - Repo scaffolding, domain modules ported verbatim, squashed initial migration, green test suite
 - [x] **Phase 2: Service Infrastructure** - httpx/SMTP/OpenRouter/DB clients wired into a FastAPI app whose scheduler ticks and runs a real Willys price check
 - [x] **Phase 3: Admin UI + IAP Header Trust** - Ported admin endpoints + HTML behind upstream IAP. App reads `X-Auth-Request-Email`, validates against `ALLOWED_ENTRA_EMAIL`, denies otherwise. No OIDC client in this repo; routed to `prices.<domain>` by the external edge proxy
-- [ ] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools built and tested (bearer auth fail-closed); `price.<domain>/mcp/` path-route prepared in the home-server repo (D-29). Remaining gap is ONLY the agent-platform Hermes registration (`/platformadmin/mcp/` in ai-agent-platform)
-- [ ] **Phase 04.1: Package data moves to the store link** (INSERTED) - `package_size` + `package_quantity` move `Product` -> `ProductStore`; `unit` stays on `Product`. Product = abstract good, link = concrete package listing. Unlocks "cheapest kr/unit across pack sizes and stores" as one product view
-- [ ] **Phase 5: Source-repo Cleanup** - Delete price-tracker code from `ai-agent-platform`, drop `price_tracker_*` tables, verify platform deploys with `priser` still working
+- [x] **Phase 4: MCP Server + Agent Wiring** - FastMCP server with 4 tools built, tested and LIVE at `price.<domain>/mcp/` (bearer auth fail-closed, path-scoped un-gated router — D-29). The registration tail outlived its target: `ai-agent-platform` was wound down, so wiring the MCP to the third-party `nousresearch/hermes-agent` gateway now running in prod is tracked as an open item in STATE.md § GSD status, not as an unfinished phase
+- [x] **Phase 04.1: Package data moves to the store link** (INSERTED) - `package_size` + `package_quantity` move `Product` -> `ProductStore`; `unit` stays on `Product`. Product = abstract good, link = concrete package listing. Built, verified and DEPLOYED; "cheapest kr/unit across pack sizes and stores" is live in the product view
+- [x] **Phase 5: Source-repo Cleanup** - **Closed as obsolete 2026-07-26.** The premise was deleting price-tracker code from `ai-agent-platform`; that repo no longer exists on the dev machine (the platform was wound down), so there is no source tree left to clean and no platform deploy left to verify
 
 ## Phase Details
 
@@ -129,32 +129,32 @@ Plans:
 
 **Wave 1**
 
-- [ ] 04.1-01-PLAN.md — pricing.py (single unit-price + package-normalization definition), models.py reshape, 0001 migration rewritten in place
+- [x] 04.1-01-PLAN.md — pricing.py (single unit-price + package-normalization definition), models.py reshape, 0001 migration rewritten in place
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 04.1-02-PLAN.md — extraction contract: `PriceExtractionResult` gains package_amount/package_unit, `store_unit_price_sek` renamed, the `price / pack_size` synthesis deleted
+- [x] 04.1-02-PLAN.md — extraction contract: `PriceExtractionResult` gains package_amount/package_unit, `store_unit_price_sek` renamed, the `price / pack_size` synthesis deleted
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 04.1-03-PLAN.md — service + scheduler rewire: watch evaluation onto the computed unit price with a NULL guard (the silent-6am-crash fix), `get_links_for_product()`, scrape write-paths 1 and 2
+- [x] 04.1-03-PLAN.md — service + scheduler rewire: watch evaluation onto the computed unit price with a NULL guard (the silent-6am-crash fix), `get_links_for_product()`, scrape write-paths 1 and 2
 
 **Wave 4** *(blocked on Wave 3; plans within wave run in parallel)*
 
-- [ ] 04.1-04-PLAN.md — re-key the 3 pair-keyed link endpoints to `/product-stores/{id}`, move package validation to the link, 409 on duplicate store_url
-- [ ] 04.1-05-PLAN.md — MCP `compare_stores`: one row per link, ranked by kr/unit (also fixes the always-`N/A` column)
+- [x] 04.1-04-PLAN.md — re-key the 3 pair-keyed link endpoints to `/product-stores/{id}`, move package validation to the link, 409 on duplicate store_url
+- [x] 04.1-05-PLAN.md — MCP `compare_stores`: one row per link, ranked by kr/unit (also fixes the always-`N/A` column)
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 04.1-06-PLAN.md — admin read paths onto the computed unit price; `GET /products/{id}/links`; scrape write-path 3 (`POST /check/{id}`)
+- [x] 04.1-06-PLAN.md — admin read paths onto the computed unit price; `GET /products/{id}/links`; scrape write-path 3 (`POST /check/{id}`)
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 04.1-07-PLAN.md — admin UI: product dialog unit-only, link dialog packaging chain, product links panel with sortable kr/unit
+- [x] 04.1-07-PLAN.md — admin UI: product dialog unit-only, link dialog packaging chain, product links panel with sortable kr/unit
 
 **Wave 7** *(blocked on Wave 6)*
 
-- [ ] 04.1-08-PLAN.md — phase gate: first DB-backed test tier (auto-skipping Postgres), migration/constraint/ranking proofs, operator reset runbook, blocking human checkpoint
+- [x] 04.1-08-PLAN.md — phase gate: first DB-backed test tier (auto-skipping Postgres), migration/constraint/ranking proofs, operator reset runbook, blocking human checkpoint
 
 **Cross-cutting constraints** (truths shared across multiple plans):
 
@@ -190,6 +190,9 @@ Phases execute strictly in numeric order: 1 → 2 → 3 → 4 → 5. Each phase'
 | 1. Skeleton + Domain Copy | 5/5 | Complete | 2026-05-04 |
 | 2. Service Infrastructure | 1/1 | Complete | 2026-05-22 |
 | 3. Admin UI + Entra Auth | 1/1 | Complete | 2026-05-22 |
-| 4. MCP Server + Agent Wiring | 1/1 | Gaps Found | 2026-07-06 (retroactive verification) |
-| 04.1. Package data moves to the store link (INSERTED) | 8/8 | Executed — awaiting human verification | 2026-07-14 (code complete; 4 operator items) |
-| 5. Source-repo Cleanup | 0/TBD | Not started | - |
+| 4. MCP Server + Agent Wiring | 1/1 | Complete (server live; registration tail reframed — STATE.md) | 2026-07-26 |
+| 04.1. Package data moves to the store link (INSERTED) | 8/8 | Complete — verified and deployed | 2026-07-26 |
+| 5. Source-repo Cleanup | — | Closed as obsolete (target repo no longer exists) | 2026-07-26 |
+
+**Milestone complete.** GSD is retired for this repo — see `.planning/STATE.md` § GSD status.
+Ongoing work runs through ordinary commits and release tags (CLAUDE.md § Releasing).

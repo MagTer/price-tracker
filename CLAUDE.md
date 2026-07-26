@@ -15,9 +15,9 @@
 - **v0.25.2 / v0.25.3 — campaign prices:** the two store families were wrong in opposite directions and now agree (→ campaign-price bullet).
 - **v0.26.0 — backup repaired:** the export had rotted into a backup of nothing (→ export/import bullet), and alembic was silencing app logging (→ Gotcha 5).
 
-Remaining from the original extraction plan:
-- **Phase 4 tail:** register the MCP server with Hermes (`/platformadmin/mcp/`) in the agent platform.
-- **Phase 5:** delete the price-tracker code from `ai-agent-platform` — `services/agent/src/modules/price_tracker/` and friends still exist there.
+**The extraction is finished (closed out 2026-07-26).** One follow-up remains, and it is not in this repo:
+- **MCP registration — open, but reframed.** The plan said "register the MCP server with Hermes at `/platformadmin/mcp/` in `ai-agent-platform`". That platform has been wound down; what runs in prod is the third-party gateway image `nousresearch/hermes-agent`, whose compose in the home-server repo carries **no MCP configuration** (checked 2026-07-26). Wiring price-tracker's MCP to *that* gateway is still wanted. Nothing here blocks it — the server is live and bearer-gated at `price.<domain>/mcp/`.
+- **Phase 5 (delete the source code from `ai-agent-platform`) is closed as obsolete** — the repo no longer exists on the dev machine, so there is no source tree left to clean. Do not go looking for it.
 
 **Historical context:** [EXTRACTION.md](./EXTRACTION.md) describes the original 5-phase port. It is a **historical document, not current law** — where it conflicts with this file or with `.planning/STATE.md`, those win.
 

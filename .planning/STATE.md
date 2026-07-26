@@ -1,64 +1,54 @@
 ---
 gsd_state_version: 1.0
-milestone: v7.15.2
-milestone_name: milestone
-current_phase: 04.1
-current_phase_name: Package data moves to the store link
-status: executing
-stopped_at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
-last_updated: "2026-07-22T00:00:00.000Z"
-last_activity: 2026-07-22
-last_activity_desc: "v0.13.0 schedule became a STORE property links inherit (Magnus's ask: per-butik, dolt för produkten): Store.check_weekdays JSONB list + check_frequency_hours (ICA [0], Willys [0,4], apotek 72h — allt förmiddag 06-12, interval mode snaps to morning when >=24h), ProductStore.check_weekday DROPPED for nullable check_weekdays + nullable frequency (NULL/NULL=inherit, either set=wholesale override), migration 0005_store_schedule RESET all links to inherit (deliberate — old per-link values were materialized defaults). NEW domain/schedule.py = THE resolution+next-check definition (scheduler + PUT /frequency both use it; endpoint's private copy deleted). Scheduler rate limit now a per-store monotonic ledger (works across cycles + non-adjacent items). quickadd.OFFER_WEEKDAYS/suggest_check_weekday deleted; quick-add + add-link UI ask nothing about schedule (info line shows store schedule); link-edit dialog: Butikens standard / Eget schema (weekday checkboxes + interval). Suite: 357+13. Deploy bump pending (v0.13.0). Prior: v0.12.0 Kronans Apotek + Apohem as sixth/seventh stores: data-only migrations 0003_seed_kronans (slug kronans, www.kronansapotek.se) and 0004_seed_apohem (slug apohem, www.apohem.se), both pharmacy; KRONANS_HINTS/APOHEM_HINTS in domain/stores, docs updated. NO new extractors needed — both server-render full schema.org Product JSON-LD (verified live 2026-07-22: Kronans 102.75 InStock w/ StrikethroughPrice ord.pris; Apohem 97 InStock, offers-as-LIST shape + ListPrice ord.pris, both spec prices ignored by design); generic JsonLdExtractor covers both, quick-add parses '132 st'/'132 kapslar' titles (kapslar wins over '1000 mg'), no OFFER_WEEKDAYS entries (interval-checked like other pharmacies). Suite: 349+12. Deploy bump pending (v0.12.0). Prior: v0.11.0 UX overhaul from a purpose-first review Magnus approved wholesale: deals page is now a DECISION surface (jfr-pris + best-alternative comparison per deal via a cross-link latest-price query, Swedish offer_type fallback, clickable store link, seen-date) and the route's stale 24h window became 7d matching the service (Gotcha 4 drift — page was empty Tue-Sun); store names link out everywhere (UI had ZERO outbound links before); freshness line on Erbjudanden from /scheduler/status (new last_check_at/next_check_at bounds); watches show current lowest price/store + under-målet highlight and prefill the user's email; mobile-first pass (sidebar→top bar <768px, scrollable table containers, bottom-sheet modals) because the app doubles as the IN-STORE shopping list (Magnus webhandlar inte); headings say jfr-pris (shelf-label term, glossary updated); stat boxes link to their pages; weekly email deals rows link to store page + show jfr-pris. Suite: 347+12. Deploy bump: go straight to v0.11.1 (v0.11.1: Butiker column shows a distinct-store COUNT — the linked name list swallowed the table; names live behind Länkar). Prior: v0.10.0 UI-gap closure: product edit dialog (Redigera on the row; name/brand/category via previously UI-less PUT /products, unit LOCKED — removed from ProductUpdate, delete+recreate to change it, blank-name 400 guard added) and link-edit dialog now also edits cadence (Kontrolldag+frequency via previously UI-less PUT /product-stores/{id}/frequency, sent only when changed since the server reschedules next_check_at; cadence shown under last-checked in the links table; get_links_for_product payload gained check_frequency_hours/check_weekday). Remaining known UI gap: PUT /watches has no edit dialog (create/delete only). Suite: 334+12. Deploy bump pending (go straight to v0.10.0). Older: v0.9.0 weekday check schedule in quick-add (OFFER_WEEKDAYS Monday prefill for ICA/Willys), v0.8.x shareability + footer fix. .env.template still not updatable from here (permission-blocked)."
+milestone: extraction
+milestone_name: Extract price-tracker from ai-agent-platform
+current_phase: none
+current_phase_name: "GSD retired — see § GSD status"
+status: retired
+stopped_at: "GSD wound down 2026-07-26. Every phase is closed; ONE external follow-up remains (Hermes MCP registration). Do not resume the pipeline — CLAUDE.md is the living document."
+last_updated: "2026-07-26T00:00:00.000Z"
+last_activity: 2026-07-26
+last_activity_desc: "GSD retired. This file is a decision log + open-items list, not a live pipeline. Product history since v0.13.0 lives in CLAUDE.md and git log — the old 3 000-character running commentary was deleted here on 2026-07-26 because it had become a list of stale 'deploy bump pending' claims contradicting the frontmatter. Prod runs v0.26.0."
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 16
   completed_plans: 16
-  percent: 83
+  percent: 100
 ---
 
 # Project State
 
-## Project Reference
+> **GSD is retired for this repo (2026-07-26).** This file is no longer a live pipeline —
+> it is (a) the **decision log** (D-19…D-32, referenced by name from CLAUDE.md) and (b) the
+> **open-items list** below. Everything about how the product currently works lives in
+> **CLAUDE.md**, which is maintained. Do not "resume" a phase from here, and do not mirror
+> product changes into this file — that duplication is exactly what made the old
+> `last_activity_desc` a 3 000-character contradiction of itself.
 
-See: .planning/PROJECT.md (updated 2026-05-04)
+## GSD status — what is actually open
 
-**Project code:** PT
-**Core value:** After extraction, the agent platform's `priser` skill keeps working end-to-end via MCP-discovered tools served by this standalone repo, with all price-tracker code removed from the agent platform.
-**Current focus:** Phase 04.1 (package data -> store link) is BUILT and verified: 214 tests green, no code gaps. Status human_needed — 4 operator items await Magnus (see 04.1-VERIFICATION.md + 04.1-08-SUMMARY.md § Operator checkpoint). MOST IMPORTANT: the deployed DB is still stamped at the OLD 0001, so `alembic upgrade head` silently applies NOTHING until the volume is dropped — see README.md § Schema reset (Phase 04.1).
+**Closed:** Phases 1–3 (skeleton, services, portal+IAP), Phase 4's build (MCP server: 4 tools,
+bearer auth, live at `price.<domain>/mcp/`), Phase 04.1 (package data → store link; built,
+verified, deployed — the old "deployed DB still stamped at old 0001" warning was resolved by
+the volume drop), and **Phase 5**.
 
-## Current Position
+**Phase 5 closed as obsolete (2026-07-26):** it was "delete the price-tracker code from
+`ai-agent-platform`". That repo no longer exists on the dev machine (`/home/magnus/dev` holds
+no copy) — the platform was wound down, so there is no source tree left to clean. Verified by
+absence, not by deletion.
 
-Phase: 04.1 (Package data moves to the store link) — EXECUTING
-Plan: 1 of 8
-Status: Executing Phase 04.1
-Last activity: 2026-07-21 — v0.8.0 shareability, on top of the v0.5.0–v0.7.1 quick-add/label/sibling/UI work: a friend wants their own instance, and the decision is SEPARATE INSTANCES over multi-tenant (service-layer reads have zero tenant filters; tenancy was deliberately dropped in D-02/D-03 — reversing it is a security audit, not a flag). To make the public repo genuinely reusable: butik config moved to env (QUICKADD_STORE_LABELS / QUICKADD_SIBLING_GROUPS, Magnus's butiker as in-repo defaults so his deploy needs no new vars), MIT LICENSE added, README "Run your own instance" section written. Erbjudanden also moved to the top of the menu and made the start page. GSD bypassed at Magnus's request. v0.8.1 followed immediately: the footer version was blank in prod — the image installs --no-root (no package metadata) AND never copied pyproject.toml, so both version sources failed silently; fixed by copying pyproject.toml into the image, verified by building the image locally and asserting the rendered footer. Deploy bump pending (go straight to v0.8.1). v0.9.0 then closed the quick-add cadence gap Magnus reported: the confirm form only offered an hour interval although QuickAddCreate had accepted check_weekday since v0.5.0 — now a weekday select (Swedish day names, interval field hidden when a day is fixed), prefilled Monday for ICA/Willys from quickadd.OFFER_WEEKDAYS because those chains publish weekly offers on Mondays and a weekly check on that day is the lightest schedule against their sites. Siblings already inherited the primary's cadence, so sister-butik links get the same Monday. The manual link form's numeric 0-6 weekday input became the same select. Deploy bump target is now v0.9.0.
+**The one genuinely open item — MCP registration, reframed:**
+The original Phase 4 tail was "register the MCP server with Hermes at `/platformadmin/mcp/`
+in `ai-agent-platform`". That endpoint belonged to the retired platform. What runs in prod
+today is the third-party gateway image `nousresearch/hermes-agent` (container `hermes` on the
+Dokploy VM), and its compose in the home-server repo has **no MCP configuration at all**
+(checked 2026-07-26). Magnus still wants price-tracker's MCP wired to it, so the task stands —
+but against the third-party gateway, which is a different integration from the one the
+original plan described. Nothing in this repo blocks it: the server is live and bearer-gated.
 
-Progress: [███████░░░] 70% (Phases 1-3 of 5 complete; Phase 4 partial — MCP server built and tested, agent-platform wiring pending)
-
-## Performance Metrics
-
-**Velocity:**
-
-- Total plans completed: 5
-- Average duration: ~11 min
-- Total execution time: ~54 min
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 1. Skeleton + Domain Copy | 5/5 | ~54 min | ~11 min |
-| 2. Service Infrastructure | 1/1 | — | — |
-| 3. Admin UI + IAP Header Trust | 1/1 | — | — |
-| 4. MCP Server + Agent Wiring | 1/1 | — | — |
-
-**Recent Trend:**
-
-- Phases 2-4 completed in a single autonomous session
-- New test coverage: 2 test files (~120 LOC) covering admin API and MCP tools
-
-*Updated after each plan completion*
+**Milestone verdict:** the extraction is complete. The product is standalone, deployed, and
+maintained through ordinary releases (see CLAUDE.md § Releasing), not through GSD phases.
 
 ## Accumulated Context
 
@@ -96,16 +86,36 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Opus-kravställning (skrivs när Magnus ber om den): Dockerfile USER + stale kommentar + libpq-trim, /health med DB-ping, självhostad Chart.js, N+1 i list_products, tenant/email-validering i create-endpoints, import-replace i en transaktion, stale Entra-docstrings + inaktuella ingress-referenser i CLAUDE.md/ROADMAP/STATE, README-runbok, escapeHtml-quotes i admin.html.
-- Hermes-registrering av MCP-servern (`/platformadmin/mcp/` i ai-agent-platform) — kvarstående Phase 4-gap, görs efter att MCP-routen finns i home-server.
+- **MCP registration against the `nousresearch/hermes-agent` gateway** — see § GSD status. The
+  only open item in the whole plan.
+- `.env.template` may still carry `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`
+  (D-32). The file is permission-blocked for agents, so **Magnus has to edit it** — an agent
+  cannot even read it to confirm the state (verified again 2026-07-26: the read was denied).
+- **UI gap: watches can be created and deleted, but not edited.** `PUT /watches/{watch_id}`
+  exists in `admin.py` and has no dialog behind it — changing a target price means delete +
+  recreate. Confirmed still true 2026-07-26. (Rescued from the old `last_activity_desc`, where
+  it had been buried in prose since v0.10.0.)
+
+**Closed since this list was written:** the "Opus-kravställning" backlog (Dockerfile USER,
+libpq trim, `/health` DB-ping, self-hosted Chart.js, N+1 in `list_products`, tenant/email
+validation, import-replace in one transaction, stale Entra docstrings, README runbook,
+escapeHtml quotes) was delivered across D-26, D-30 and D-31.
 
 ### Blockers/Concerns
 
-- Phases must run sequentially despite `parallelization=true` in config — each gate is a precondition for the next phase's work. Plans within a phase may parallelize.
-- Email backend (SMTP via aiosmtplib vs AWS SES) — decide during Phase 2
-- MCP subdomain (`mcp.<domain>`) is now LOCKED for Phase 4 (was: TBD); IAP per-host bypass is the rationale (D-18)
-- **Edge-proxy / portal stack** is operated within Dokploy's managed scope, out of this repo's build scope (D-18, EDGE-01; hosting reassessed 2026-07-06 per D-20). Phases 3 + 4 ASSUME the IAP exists; if it does not exist when Phase 3 lands, Phase 3 still ships behind a "trust the header" dependency and the operator runs the app in a private network until the Dokploy-managed ingress is built (pending Entra client registration).
-- **Phase 4 gap (2026-07-06 retroactive verification):** The MCP server itself works and is tested (4 tools, bearer auth), but the `mcp.<domain>` ingress (Dokploy-managed, not yet built) and agent-platform `/platformadmin/mcp/` registration (separate `ai-agent-platform` repo, never attempted) are NOT done. Phase 5 explicitly depends on "MCP must be live and `priser` verified end-to-end" — this precondition is unmet. Do not start Phase 5 until this gap is closed or the dependency is explicitly re-scoped. See `.planning/phases/04-mcp-server-agent-wiring/04-VERIFICATION.md` for the full gap summary.
+**None open.** Kept for the record, with why each is dead:
+
+- ~~Phases must run sequentially~~ — GSD retired; there are no phases left to sequence.
+- ~~Email backend (SMTP vs SES) — decide during Phase 2~~ — decided: **Resend HTTP API**
+  (D-32). `aiosmtplib` is gone from `pyproject.toml`.
+- ~~MCP subdomain `mcp.<domain>` LOCKED (D-18)~~ — **superseded by D-29**: no subdomain; the
+  MCP is served at `price.<domain>/mcp/` behind a path-scoped un-gated Traefik router. This
+  entry contradicted a decision recorded 40 lines above it in this same file.
+- ~~Edge-proxy / portal stack pending Entra client registration~~ — the ingress has been
+  **live in production since 2026-07-09/10** (oauth2-proxy v7.15.2 + Traefik `forwardAuth`);
+  see the 2026-07-13 FAKTAKORRIGERING entry above.
+- ~~Phase 4 gap: ingress + agent-platform registration~~ — the ingress question died with
+  D-29; the registration item is reframed and moved to Pending Todos above.
 
 ### Quick Tasks Completed
 
@@ -129,19 +139,28 @@ Recent decisions affecting current work:
 
 Items acknowledged and carried forward (v2 / post-extraction backlog from REQUIREMENTS.md):
 
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| Reliability | REL-01..05 (retry/backoff, raw_response, soft-delete, rate limiting, fallback threshold) | v2 backlog | Init |
-| Extraction Quality | EXT-01..02 (structured extractors, dedup) | v2 backlog | Init |
-| Notifications | NOTF-01 (Telegram/push) | v2 backlog | Init |
-| Analytics | ANAL-01 (price trends/volatility) | v2 backlog | Init |
-| i18n | I18N-01 (externalize sv-SE strings) | v2 backlog | Init |
-| Edge proxy / portal | EDGE-01 (Traefik + oauth2-proxy + Homepage, operated within Dokploy's managed scope) | Out of milestone | 2026-05-04 (D-19 reassess); hosting corrected 2026-07-06 (D-20) |
+Several of these were quietly **built** while the table still called them deferred — corrected
+2026-07-26 by checking the code, not the label.
+
+| Category | Item | Status | Note |
+|----------|------|--------|------|
+| Reliability | REL-01 retry/backoff | **DONE** | Bounded retry on transient failures in `infra/fetcher.py`; scheduler +1h backoff on exception, +24h on a failed weekday check |
+| Reliability | REL-04 rate limiting | **DONE** | `infra/rate_limiter.py` — one shared per-store ledger with jitter, used by scheduler AND interactive fetches |
+| Reliability | REL-05 fallback threshold | **DONE** | `PRICE_PARSER_MIN_CONFIDENCE` acceptance floor (D-23) |
+| Reliability | REL-02/03 (raw_response, soft-delete) | v2 backlog | `raw_data` column exists and is populated; soft-delete never needed at single-user scale |
+| Extraction Quality | EXT-01 structured extractors | **DONE** | `WillysApiExtractor` (store REST API) + `JsonLdExtractor` (schema.org), ahead of the LLM cascade (D-22) |
+| Extraction Quality | EXT-02 dedup | v2 backlog | — |
+| Notifications | NOTF-01 (Telegram/push) | v2 backlog | Email via Resend covers the need today |
+| Analytics | ANAL-01 (price trends/volatility) | v2 backlog | Price history + per-link chart shipped; statistical analysis not attempted |
+| i18n | I18N-01 (externalize sv-SE strings) | **won't do** | One language track, decided 2026-07-14: Swedish for users, English for developers. Externalizing is pointless for a single-user Swedish app |
+| Edge proxy / portal | EDGE-01 (Traefik + oauth2-proxy) | **DONE / out of repo** | Live in prod since 2026-07-09; owned by the home-server repo, never this one |
 
 ## Session Continuity
 
-**Resume file:** .planning/phases/04.1-package-data-moves-to-the-store-link/04.1-08-SUMMARY.md
+**There is nothing to resume.** GSD is retired for this repo; the old resume pointer
+(`/gsd-discuss-phase 2`, aimed at a phase completed months ago) would have sent a fresh
+session to re-plan working, deployed code.
 
-Last session: 2026-07-14T00:49:29.769Z
-Stopped at: Phase 04.1 built + verified (human_needed) — autonomous stopped here as instructed
-Resume command: `/gsd-discuss-phase 2` (or continue `/gsd-autonomous` from current main thread)
+Start a session by reading **CLAUDE.md**. Ordinary work goes through ordinary commits and a
+release tag (CLAUDE.md § Releasing); `.planning/phases/` and `.planning/quick/` are kept as an
+**archive** of how the extraction was run, not as a queue.
