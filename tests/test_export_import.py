@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.admin import get_db as admin_get_db
 from api.app import create_app
-from api.auth import require_auth
+from api.auth import Principal, get_principal
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store
 from domain.tenant import DEFAULT_TENANT_ID
 
@@ -43,14 +43,16 @@ def client(session_factory: async_sessionmaker[AsyncSession]):
     """
     app = create_app()
 
-    async def override_auth() -> str:
-        return "test@example.com"
+    # get_principal is THE identity point — the router's write gate resolves through it too.
+    # Import is a POST, so this fixture has to be the admin or the round trip 403s.
+    async def override_auth() -> Principal:
+        return Principal(email="test@example.com", is_admin=True)
 
     async def override_get_db():
         async with session_factory() as session:
             yield session
 
-    app.dependency_overrides[require_auth] = override_auth
+    app.dependency_overrides[get_principal] = override_auth
     app.dependency_overrides[admin_get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")

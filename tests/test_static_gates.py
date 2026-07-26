@@ -15,6 +15,7 @@ from domain.pricing import PKG_UNITS
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 ADMIN_HTML = REPO_ROOT / "src" / "api" / "templates" / "admin.html"
+ADMIN_MODULE = SRC_ROOT / "api" / "admin.py"
 INITIAL_MIGRATION = REPO_ROOT / "alembic" / "versions" / "0001_initial.py"
 
 _JS_TABLE_RE = re.compile(r"const PKG_UNITS\s*=\s*\{(.*?)\};", re.DOTALL)
@@ -205,6 +206,110 @@ def test_no_link_lookup_by_product_store_pair() -> None:
         + ", ".join(findings)
         + ". That pair is no longer unique — the query raises MultipleResultsFound (HTTP 500) "
         "as soon as a product has two pack sizes at one store. Key on ProductStore.id."
+    )
+
+
+# --- AUTHZ: every route must sit behind the ONE write gate ---------------------------------
+#
+# The admin/reader split (v0.29.0) is enforced by a single router-level dependency that keys
+# on the HTTP method: reads for everyone the Entra gate let in, writes for ALLOWED_ENTRA_EMAIL
+# only. That design is only safe while it is the ONLY way a route gets registered — a second
+# APIRouter, or a route hung straight off the FastAPI app in this module, would be an
+# unauthenticated, unauthorized endpoint that no runtime test would think to call.
+#
+# Both failure modes are silent: the endpoint works perfectly, for everybody.
+
+_ROUTE_METHODS = frozenset({"get", "post", "put", "delete", "patch", "head", "options"})
+
+# A route registered on something other than the gated router. The detector MUST flag it.
+_UNGATED_ROUTE_SAMPLE = """
+open_router = APIRouter()
+
+@open_router.post("/danger")
+async def danger() -> None:
+    ...
+"""
+
+
+def _router_gate_dependencies(source: str) -> list[str]:
+    """Names passed to Depends(...) in the `router = APIRouter(dependencies=[...])` call."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "router" for t in node.targets):
+            continue
+        call = node.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+            continue
+        if call.func.id != "APIRouter":
+            continue
+        for kw in call.keywords:
+            if kw.arg != "dependencies" or not isinstance(kw.value, ast.List):
+                continue
+            return [
+                el.args[0].id
+                for el in kw.value.elts
+                if isinstance(el, ast.Call)
+                and isinstance(el.func, ast.Name)
+                and el.func.id == "Depends"
+                and el.args
+                and isinstance(el.args[0], ast.Name)
+            ]
+    return []
+
+
+def _route_decorator_owners(source: str) -> set[str]:
+    """Every object a route decorator is applied to — `@router.get` yields "router"."""
+    owners: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            func = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in _ROUTE_METHODS
+                and isinstance(func.value, ast.Name)
+            ):
+                owners.add(func.value.id)
+    return owners
+
+
+def test_ungated_route_detector_flags_a_second_router() -> None:
+    """Self-check: the gate below is only worth anything if it can actually fail."""
+    assert _route_decorator_owners(_UNGATED_ROUTE_SAMPLE) == {"open_router"}
+
+
+def test_admin_router_carries_the_write_gate() -> None:
+    """AUTHZ-01: the router's dependency list IS the authorization model.
+
+    require_admin_for_writes authenticates every caller and refuses a state-changing
+    method from anyone who is not ALLOWED_ENTRA_EMAIL. Drop it and all 14 write endpoints
+    silently become open to every reader in the Entra tenant.
+    """
+    dependencies = _router_gate_dependencies(ADMIN_MODULE.read_text(encoding="utf-8"))
+
+    assert "require_admin_for_writes" in dependencies, (
+        "src/api/admin.py's APIRouter no longer declares Depends(require_admin_for_writes). "
+        f"Found dependencies: {dependencies or 'none'}. Every write endpoint is now open to "
+        "any authenticated reader."
+    )
+
+
+def test_every_admin_route_is_registered_on_the_gated_router() -> None:
+    """AUTHZ-02: no route in admin.py may be hung off anything but the gated `router`.
+
+    The gate is router-level, so a route registered on a second APIRouter — or straight on
+    the app — inherits nothing and is reachable by anyone the ingress lets through.
+    """
+    owners = _route_decorator_owners(ADMIN_MODULE.read_text(encoding="utf-8"))
+
+    assert owners == {"router"}, (
+        "Routes in src/api/admin.py are registered on "
+        + ", ".join(sorted(owners))
+        + " — only the gated `router` may carry routes, or the endpoint bypasses "
+        "require_admin_for_writes entirely."
     )
 
 

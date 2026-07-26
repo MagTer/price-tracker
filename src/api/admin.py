@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from api.auth import require_auth
+from api.auth import Principal, get_principal, require_admin_for_writes, require_auth
 from api.schemas import (
     DealResponse,
     PricePointResponse,
@@ -275,7 +275,12 @@ def _sorted_links(
 # where OpenWebUI owned "/" — standalone, this UI+API is the whole app.
 router = APIRouter(
     tags=["price-tracker"],
-    dependencies=[Depends(require_auth)],
+    # ONE gate for every route on this router: it authenticates the caller AND refuses
+    # any state-changing method from a non-admin. Deny-by-default and keyed on the HTTP
+    # method, so a new endpoint is covered the moment it is written — there is no
+    # per-route marker to forget. Reads (the 11 GETs, /export and /logs included) are
+    # open to everyone the Entra gate let in; the 14 writes are the admin's alone.
+    dependencies=[Depends(require_admin_for_writes)],
 )
 
 
@@ -2737,12 +2742,15 @@ async def get_logs(
 
 
 @router.get("/", response_class=HTMLResponse)
-async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> str:
-    """Server-rendered admin dashboard for price tracking.
+async def price_tracker_dashboard(principal: Principal = Depends(get_principal)) -> str:
+    """Server-rendered dashboard for price tracking.
         HTML dashboard for managing products, deals, and price watches.
 
     Security:
-        Requires IAP header auth (X-Auth-Request-Email).
+        Requires IAP header auth (X-Auth-Request-Email). A reader gets the same page
+        with every write control removed — the server is still the real gate (the
+        router dependency 403s the writes regardless), but a button that always fails
+        is worse than no button.
     """
     template_path = Path(__file__).parent / "templates" / "admin.html"
     parts = template_path.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")
@@ -2763,7 +2771,11 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
 
     base_css = _get_admin_nav_css()
     sidebar = _get_admin_sidebar_html()
-    header = _get_admin_header_html(admin_email)
+    header = _get_admin_header_html(principal)
+    # The role travels as a body class, not as an injected JS literal: the CSS hides the
+    # static write controls off it, and the JS reads it back (IS_ADMIN) to decide which
+    # row actions to build. One source, and nothing to escape.
+    body_class = "role-admin" if principal.is_admin else "role-reader"
     return f"""<!DOCTYPE html>
 <html lang="sv">
 <head>
@@ -2776,7 +2788,7 @@ async def price_tracker_dashboard(admin_email: str = Depends(require_auth)) -> s
         {extra_css}
     </style>
 </head>
-<body>
+<body class="{body_class}">
     <div class="admin-layout">
         {sidebar}
         <main class="admin-main">
@@ -2923,6 +2935,20 @@ def _get_admin_nav_css() -> str:
             font-weight: 600;
             font-size: 12px;
         }
+        .role-badge {
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #e5e7eb;
+            color: #374151;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        /* Every write control in the static markup carries .admin-only. A reader's page
+           is the same document with those removed — the API 403s them anyway, so this is
+           about not offering a button that cannot work. The JS-built row actions make the
+           same decision from IS_ADMIN (see the script fragment). */
+        body.role-reader .admin-only { display: none !important; }
         .admin-content { flex: 1; padding: 24px; }
         .page-title { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
         .card {
@@ -3111,12 +3137,17 @@ def _get_admin_sidebar_html() -> str:
     """
 
 
-def _get_admin_header_html(user_email: str) -> str:
-    """Generate header HTML with user info."""
+def _get_admin_header_html(principal: Principal) -> str:
+    """Generate header HTML with user info.
+
+    A reader gets a badge next to their address. Without it, a page whose write buttons
+    are simply absent reads as a broken deploy rather than as a permission level.
+    """
     import html as html_module
 
-    safe_email = html_module.escape(user_email)
+    safe_email = html_module.escape(principal.email)
     user_initial = safe_email[0].upper() if safe_email else "?"
+    role_badge = "" if principal.is_admin else '<span class="role-badge">Läsbehörighet</span>'
     return f"""
     <header class="admin-header">
         <div class="breadcrumbs">
@@ -3128,6 +3159,7 @@ def _get_admin_header_html(user_email: str) -> str:
             <div class="user-menu">
                 <div class="user-avatar">{user_initial}</div>
                 <span id="user-email">{safe_email}</span>
+                {role_badge}
             </div>
         </div>
     </header>

@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
-from api.auth import require_auth
+from api.auth import Principal, get_principal
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.models import Product, Store
 from domain.quickadd import (
@@ -336,15 +336,16 @@ def mock_session():
 def client(mock_session):
     app = create_app()
 
+    # get_principal is THE identity point — the router's write gate resolves through it too.
     async def override_auth():
-        return "test@example.com"
+        return Principal(email="test@example.com", is_admin=True)
 
     async def override_get_db():
         yield mock_session
 
     from api.admin import get_db as admin_get_db
 
-    app.dependency_overrides[require_auth] = override_auth
+    app.dependency_overrides[get_principal] = override_auth
     app.dependency_overrides[admin_get_db] = override_get_db
     return TestClient(app)
 

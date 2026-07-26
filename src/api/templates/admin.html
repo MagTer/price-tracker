@@ -27,10 +27,11 @@
         <div class="card-title">Produkter</div>
         <div class="header-actions">
             <input type="text" id="product-search" placeholder="Sök produkter…" class="search-input">
-            <button class="btn btn-primary" onclick="showQuickAddModal()">⚡ Snabbtillägg</button>
-            <button class="btn btn-primary" onclick="showCreateProductModal()">+ Ny produkt</button>
+            <button class="btn btn-primary admin-only" onclick="showQuickAddModal()">⚡ Snabbtillägg</button>
+            <button class="btn btn-primary admin-only" onclick="showCreateProductModal()">+ Ny produkt</button>
+            <!-- Exportera is a GET: a reader may take a copy of what they can already see. -->
             <button class="btn" onclick="loadExport()">Exportera</button>
-            <button class="btn" onclick="showImportModal()">Importera</button>
+            <button class="btn admin-only" onclick="showImportModal()">Importera</button>
         </div>
     </div>
     <div id="products-table-container">
@@ -67,7 +68,7 @@
     <div class="card-header">
         <div class="card-title">Prisbevakningar</div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="showCreateWatchModal()">+ Ny bevakning</button>
+            <button class="btn btn-primary admin-only" onclick="showCreateWatchModal()">+ Ny bevakning</button>
         </div>
     </div>
     <div id="watches-table-container">
@@ -729,6 +730,10 @@ th.sortable-col:hover {
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
 const API_BASE = '';
+// Read/write role, set server-side as a body class by render_admin. Everyone who cleared
+// the Entra gate may READ; only ALLOWED_ENTRA_EMAIL may write. This constant only decides
+// which controls get built — the API refuses a reader's write regardless.
+const IS_ADMIN = document.body.classList.contains('role-admin');
 let allProducts = [];
 let allStores = [];
 
@@ -743,9 +748,19 @@ function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
+// A 403 body is NOT ours to show. The ingress `entra-auth-errors` middleware swaps the
+// body of any 401-403 for the oauth2-proxy sign-in response (an unfollowed redirect whose
+// text is literally "Found") while keeping the status — so echoing r.text() into a toast
+// prints that instead of the server's Swedish detail. Say what a 403 means ourselves.
+const FORBIDDEN_MESSAGE = 'Du har läsbehörighet och kan inte ändra något här.';
+
+async function apiError(r) {
+    return new Error(r.status === 403 ? FORBIDDEN_MESSAGE : await r.text());
+}
+
 async function apiGet(path) {
     const r = await fetch(API_BASE + path);
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw await apiError(r);
     return r.json();
 }
 
@@ -755,7 +770,7 @@ async function apiPost(path, body) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw await apiError(r);
     return r.json();
 }
 
@@ -765,13 +780,13 @@ async function apiPut(path, body) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw await apiError(r);
     return r.json();
 }
 
 async function apiDelete(path) {
     const r = await fetch(API_BASE + path, { method: 'DELETE' });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw await apiError(r);
     return r.json();
 }
 
@@ -905,6 +920,8 @@ function buildProductsTable(products) {
     if (!products.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
+    // A reader still gets an Åtgärder column: Länkar and Historik are reads, and they are
+    // the two that answer "where is it cheapest" — the point of the table.
     let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const links = p.stores || [];
@@ -921,10 +938,10 @@ function buildProductsTable(products) {
             <td>${buildBestPriceCell(p, links)}</td>
             <td>
                 <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
-                <button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>
+                ${IS_ADMIN ? `<button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>` : ''}
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
-                <button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>
-                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Ta bort</button>
+                ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>
+                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Ta bort</button>` : ''}
             </td>
         </tr>`;
     }
@@ -1086,7 +1103,10 @@ async function loadWatches() {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th>Larma vid erbjudande</th><th>Åtgärder</th></tr></thead><tbody>';
+        // Both actions here are writes, so a reader gets no Åtgärder column at all rather
+        // than an empty one.
+        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th>Larma vid erbjudande</th>'
+            + (IS_ADMIN ? '<th>Åtgärder</th>' : '') + '</tr></thead><tbody>';
         for (const w of watches) {
             // Show the target in whichever currency the watch actually uses —
             // jfr-pris targets are the norm, absolute kr the legacy.
@@ -1111,10 +1131,10 @@ async function loadWatches() {
                 <td>${escapeHtml(target)}</td>
                 <td>${now}</td>
                 <td>${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
-                <td>
+                ${IS_ADMIN ? `<td>
                     <button class="action-btn" onclick="openEditWatch('${w.watch_id}')">Redigera</button>
                     <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
-                </td>
+                </td>` : ''}
             </tr>`;
         }
         html += '</tbody></table>';
@@ -1795,7 +1815,7 @@ function buildLinksTable(rows, unit) {
         <th class="sortable-col" data-sort="unit_price_sek">Jfr-pris (${escapeHtml(unitPriceHeading(unit))})</th>
         <th>Butiken anger</th>
         <th>Senast kollad</th>
-        <th>Åtgärder</th>
+        ${IS_ADMIN ? '<th>Åtgärder</th>' : ''}
     </tr></thead><tbody>`;
 
     for (const r of rows) {
@@ -1814,8 +1834,11 @@ function buildLinksTable(rows, unit) {
         }
 
         // D-02: never a blank cell. A blank would read as "free" and sort like zero.
+        // For a reader the same words are a label, not a shortcut into the edit dialog.
         const unitCell = r.needs_amount === true
-            ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar mängd</button>`
+            ? (IS_ADMIN
+                ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar mängd</button>`
+                : '<span class="badge badge-warning">saknar mängd</span>')
             : (r.unit_price_sek != null
                 ? `<span class="unit-price">${escapeHtml(r.unit_price_sek.toFixed(2))} kr</span>`
                 : '&#8212;');
@@ -1828,11 +1851,11 @@ function buildLinksTable(rows, unit) {
             <td class="store-says">${r.store_unit_price_sek != null ? escapeHtml(r.store_unit_price_sek) + ' kr' : '&#8212;'}</td>
             <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}
                 <div class="best-link">${escapeHtml(cadenceLabel(r))}</div></td>
-            <td>
+            ${IS_ADMIN ? `<td>
                 <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Redigera</button>
                 <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Kontrollera nu</button>
                 <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Avlänka</button>
-            </td>
+            </td>` : ''}
         </tr>`;
     }
     html += '</tbody></table></div>';

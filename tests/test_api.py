@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
-from api.auth import require_auth
+from api.auth import Principal, get_principal
 from domain.models import PricePoint, Product, ProductStore, Store
 from domain.result import PriceExtractionResult
 
@@ -27,16 +27,19 @@ def mock_session():
 
 @pytest.fixture
 def client(mock_session):
-    """FastAPI TestClient with mocked auth and DB."""
+    """FastAPI TestClient with mocked auth (as the admin) and DB."""
     app = create_app()
 
-    async def override_auth():
-        return "test@example.com"
+    # get_principal is THE identity point: require_auth and the router's write gate both
+    # resolve through it, so overriding it here covers both. Overriding require_auth alone
+    # would leave the write gate live and 403 every POST in this file.
+    async def override_principal():
+        return Principal(email="test@example.com", is_admin=True)
 
     async def override_get_db():
         yield mock_session
 
-    app.dependency_overrides[require_auth] = override_auth
+    app.dependency_overrides[get_principal] = override_principal
     # Override the get_db used in admin router — it is injected via Depends(get_db)
     # We patch at the module level where get_db is defined
     from api.admin import get_db as admin_get_db
@@ -232,18 +235,110 @@ class TestPublicEndpoints:
         assert r.json()["db"] is False
 
 
+ADMIN_EMAIL = "magnus@example.com"
+READER_EMAIL = "someone.else@example.com"
+
+
+@pytest.fixture
+def unmocked_client(monkeypatch):
+    """A client with the REAL auth chain — no dependency overrides.
+
+    Everything else in this file overrides get_principal; these tests are the ones that
+    must not, because the role split is what they are checking.
+    """
+    monkeypatch.setenv("ALLOWED_ENTRA_EMAIL", ADMIN_EMAIL)
+    return TestClient(create_app())
+
+
 class TestAuth:
-    def test_admin_rejects_missing_header(self):
-        app = create_app()
-        client = TestClient(app)
-        r = client.get("/")
+    def test_rejects_missing_header(self, unmocked_client):
+        """No IAP header = the request did not come through the ingress at all."""
+        assert unmocked_client.get("/").status_code == 403
+
+    def test_fails_closed_when_no_admin_is_configured(self, monkeypatch):
+        """An unconfigured instance grants nothing — not even reads."""
+        monkeypatch.delenv("ALLOWED_ENTRA_EMAIL", raising=False)
+        client = TestClient(create_app())
+        r = client.get("/", headers={"X-Auth-Request-Email": ADMIN_EMAIL})
         assert r.status_code == 403
 
-    def test_admin_rejects_wrong_email(self):
-        app = create_app()
-        client = TestClient(app)
-        r = client.get("/admin/", headers={"X-Auth-Request-Email": "attacker@evil.com"})
+    def test_admin_email_is_matched_case_insensitively(self, unmocked_client):
+        r = unmocked_client.get("/", headers={"X-Auth-Request-Email": ADMIN_EMAIL.upper()})
+        assert r.status_code == 200
+        assert "role-admin" in r.text
+
+
+class TestReadOnlyRole:
+    """Everyone the Entra gate let in may read; only ALLOWED_ENTRA_EMAIL may write.
+
+    Membership is Entra's job (tenant + OAUTH2_PROXY_EMAIL_DOMAINS), so a second
+    allowlist here would only be a second thing to forget to update.
+    """
+
+    def test_only_the_read_methods_are_safe(self):
+        """The whole split hangs off this set. Adding a verb here opens every endpoint
+        that uses it to every reader, with nothing else to notice."""
+        from api.auth import SAFE_METHODS
+
+        assert set(SAFE_METHODS) == {"GET", "HEAD", "OPTIONS"}
+
+    def test_reader_may_load_the_portal(self, unmocked_client):
+        r = unmocked_client.get("/", headers={"X-Auth-Request-Email": READER_EMAIL})
+        assert r.status_code == 200
+        assert "role-reader" in r.text
+
+    def test_reader_may_read_the_logs(self, unmocked_client):
+        """Reads are open to readers — /logs and /export included, by decision.
+
+        /logs is the one read with no DB behind it, so it is the one this DB-less test can
+        assert on end to end; the rest share the same router-level gate.
+        """
+        r = unmocked_client.get("/logs", headers={"X-Auth-Request-Email": READER_EMAIL})
+        assert r.status_code == 200
+        assert "logs" in r.json()
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("post", "/products"),
+            ("post", "/quick-add/preview"),
+            ("post", f"/check/{LINK_ID}"),
+            ("post", "/watches"),
+            ("put", f"/products/{LINK_ID}"),
+            ("delete", f"/products/{LINK_ID}"),
+            ("delete", f"/product-stores/{LINK_ID}"),
+        ],
+    )
+    def test_reader_may_not_write(self, unmocked_client, method, path):
+        """The gate is keyed on the HTTP method, so it fires before any handler runs —
+        no DB is touched and no store is fetched on a reader's behalf."""
+        r = getattr(unmocked_client, method)(path, headers={"X-Auth-Request-Email": READER_EMAIL})
         assert r.status_code == 403
+
+    def test_admin_passes_the_write_gate(self, unmocked_client):
+        """422 (not 403) proves the gate let the admin through to body validation."""
+        r = unmocked_client.post(
+            "/products", json={}, headers={"X-Auth-Request-Email": ADMIN_EMAIL}
+        )
+        assert r.status_code == 422
+
+    def test_reader_gets_no_write_controls_on_the_page(self, unmocked_client):
+        """A button that can only 403 is worse than no button. The API is still the gate;
+        this is about not offering the action."""
+        reader = unmocked_client.get("/", headers={"X-Auth-Request-Email": READER_EMAIL}).text
+        admin = unmocked_client.get("/", headers={"X-Auth-Request-Email": ADMIN_EMAIL}).text
+
+        for control in ("showQuickAddModal()", "showCreateProductModal()", "showImportModal()"):
+            assert control in admin
+            # Present in the markup but hidden by the role-reader CSS rule, and the
+            # server refuses the write regardless — assert the rule that does the hiding.
+            assert "body.role-reader .admin-only" in reader
+
+        assert 'class="btn btn-primary admin-only" onclick="showQuickAddModal()"' in reader
+        assert "Läsbehörighet" in reader
+        assert "Läsbehörighet" not in admin
+        # Exportera is a GET — a reader keeps it.
+        assert "loadExport()" in reader
 
 
 class TestAdminDashboard:
