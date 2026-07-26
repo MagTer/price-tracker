@@ -2050,7 +2050,10 @@ async def export_data(
 
     Args:
         include_history: Whether to include price history (default: False).
-        history_days: Days of history to include if include_history=True (max 365).
+        history_days: Days of history to include if include_history=True. 0 or less means
+            ALL history — what the portal's backup button asks for, because a backup that
+            silently drops everything older than N days is not a backup. A positive value
+            is clamped to 365.
         session: Database session.
 
     Returns:
@@ -2064,17 +2067,15 @@ async def export_data(
         # Get user's context
         tenant_id = DEFAULT_TENANT_ID
 
-        # Limit history_days to max 365
+        # 0/negative = no cutoff (full history); otherwise cap the window at a year.
+        full_history = history_days <= 0
         history_days = min(history_days, 365)
 
-        # Get all products with watches in this context
-        stmt = (
-            select(Product)
-            .join(PriceWatch, Product.id == PriceWatch.product_id)
-            .where(PriceWatch.tenant_id == tenant_id)
-            .where(PriceWatch.is_active.is_(True))
-            .distinct()
-        )
+        # EVERY product in the tenant — this is a backup, not a report on watched products.
+        # It used to inner-join active watches, so a tracker with no watch exported an empty
+        # products list under a 200 OK: a backup that silently backed up nothing. Watches are
+        # one optional attribute of a product, never the condition for saving it.
+        stmt = select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
         result = await session.execute(stmt)
         products = result.scalars().all()
 
@@ -2093,6 +2094,11 @@ async def export_data(
             store_links = [
                 {
                     "store_slug": store.slug,
+                    # The link's own display store name ("ICA Maxi Sandviken"). Two butiker of
+                    # one chain are two links under ONE chain-level Store row, so the slug
+                    # alone cannot tell them apart — without this a restore collapses every
+                    # per-butik link to the bare chain name.
+                    "store_label": ps.store_label,
                     "store_url": ps.store_url,
                     "check_frequency_hours": ps.check_frequency_hours,
                     "check_weekdays": ps.check_weekdays,
@@ -2145,7 +2151,10 @@ async def export_data(
 
         # Build export data
         export_data: dict[str, Any] = {
-            "version": "1.0",
+            # 1.1 adds store_label on each link and store_url on each history row (1.0 keyed
+            # history by product+store_slug, which cannot address one of several links at the
+            # same store). Import still accepts 1.0.
+            "version": "1.1",
             "exported_at": datetime.now(UTC).isoformat(),
             "tenant_id": str(tenant_id),
             "products": products_data,
@@ -2155,7 +2164,11 @@ async def export_data(
 
         # Optionally include price history
         if include_history:
-            cutoff_date = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=history_days)
+            cutoff_date = (
+                datetime.min
+                if full_history
+                else datetime.now(UTC).replace(tzinfo=None) - timedelta(days=history_days)
+            )
             price_history: list[dict[str, Any]] = []
 
             for product in products:
@@ -2181,6 +2194,10 @@ async def export_data(
                             {
                                 "product_id": str(product.id),
                                 "store_slug": store.slug,
+                                # THE key on import: a product may hold several links at one
+                                # store (a 24-pack and an 8-pack), so product+slug addresses
+                                # the wrong row. store_url is the link's natural key.
+                                "store_url": ps.store_url,
                                 "checked_at": pp.checked_at.isoformat(),
                                 "price_sek": float(pp.price_sek) if pp.price_sek else None,
                                 # The only unit price worth persisting in an export is the one
@@ -2256,9 +2273,10 @@ async def import_data(
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=400, detail=f"Ogiltig JSON: {e}") from e
 
-        # Validate version
+        # Validate version. 1.0 files stay importable — they simply carry no store_label and
+        # no store_url on history rows, so those parts degrade rather than fail.
         version = data.get("version")
-        if version != "1.0":
+        if version not in ("1.0", "1.1"):
             raise HTTPException(
                 status_code=400, detail=f"Versionen av exporten stöds inte: {version}"
             )
@@ -2359,11 +2377,17 @@ async def import_data(
                     if link_data.get("package_quantity"):
                         link_package_qty = Decimal(str(link_data["package_quantity"]))
 
+                    scraped_qty = None
+                    if link_data.get("scraped_package_quantity"):
+                        scraped_qty = Decimal(str(link_data["scraped_package_quantity"]))
+
                     # Create new link — the link owns the packaging.
                     ps = ProductStore(
                         product_id=product.id,
                         store_id=store.id,
                         store_url=store_url,
+                        # The per-butik display name; absent in a 1.0 file (None = chain name).
+                        store_label=link_data.get("store_label"),
                         # Absent schedule fields = inherit the store's schedule (the old
                         # 168h import default predates store-level schedules).
                         check_frequency_hours=link_data.get("check_frequency_hours"),
@@ -2371,6 +2395,9 @@ async def import_data(
                         is_active=link_data.get("is_active", True),
                         package_size=link_data.get("package_size"),
                         package_quantity=link_package_qty,
+                        # Evidence of what the page said, kept so a restored link does not
+                        # re-flag a conflict the operator already settled.
+                        scraped_package_quantity=scraped_qty,
                     )
                     session.add(ps)
                     store_links_created += 1
@@ -2422,6 +2449,82 @@ async def import_data(
                 else:
                     watches_skipped += 1
 
+        # Price history. The export has always carried it and the import always dropped it on
+        # the floor, so `include_history=true` bought nothing but a bigger file — for a price
+        # tracker, the history IS the asset worth restoring.
+        price_points_created = 0
+        price_points_skipped = 0
+        history_rows = data.get("price_history") or []
+        if history_rows:
+            # New links were only added to the session above; flush so they have ids to key on.
+            await session.flush()
+
+            # store_url is the link's natural key (globally unique) — the one address that can
+            # tell apart several links of the same product at the same store.
+            link_stmt = select(ProductStore.store_url, ProductStore.id)
+            link_by_url = {url: link_id for url, link_id in (await session.execute(link_stmt))}
+
+            for row in history_rows:
+                row_url = row.get("store_url")
+                if not row_url:
+                    # A 1.0 export keyed history by product+store_slug, which cannot address
+                    # one of several links at one store. Skipping beats guessing wrong.
+                    price_points_skipped += 1
+                    continue
+
+                link_id = link_by_url.get(row_url)
+                if link_id is None:
+                    warnings.append(f"No link for history URL '{row_url}', skipped price point")
+                    price_points_skipped += 1
+                    continue
+
+                checked_at_raw = row.get("checked_at")
+                price_raw = row.get("price_sek")
+                if not checked_at_raw or price_raw is None:
+                    price_points_skipped += 1
+                    continue
+                try:
+                    checked_at = datetime.fromisoformat(str(checked_at_raw))
+                except ValueError:
+                    warnings.append(f"Unparsable checked_at '{checked_at_raw}', skipped")
+                    price_points_skipped += 1
+                    continue
+                # checked_at is a naive-UTC column; drop an offset rather than store a mix.
+                if checked_at.tzinfo is not None:
+                    checked_at = checked_at.astimezone(UTC).replace(tzinfo=None)
+
+                # (link, checked_at) identifies a reading, so re-importing the same file adds
+                # nothing instead of duplicating every point.
+                dup_stmt = select(PricePoint.id).where(
+                    PricePoint.product_store_id == link_id,
+                    PricePoint.checked_at == checked_at,
+                )
+                if (await session.execute(dup_stmt)).first() is not None:
+                    price_points_skipped += 1
+                    continue
+
+                session.add(
+                    PricePoint(
+                        product_store_id=link_id,
+                        price_sek=Decimal(str(price_raw)),
+                        store_unit_price_sek=(
+                            Decimal(str(row["store_unit_price_sek"]))
+                            if row.get("store_unit_price_sek") is not None
+                            else None
+                        ),
+                        offer_price_sek=(
+                            Decimal(str(row["offer_price_sek"]))
+                            if row.get("offer_price_sek") is not None
+                            else None
+                        ),
+                        offer_type=row.get("offer_type"),
+                        offer_details=row.get("offer_details"),
+                        in_stock=row.get("in_stock", True),
+                        checked_at=checked_at,
+                    )
+                )
+                price_points_created += 1
+
         await session.commit()
 
         return {
@@ -2435,6 +2538,8 @@ async def import_data(
                 "store_links_skipped": store_links_skipped,
                 "watches_created": watches_created,
                 "watches_skipped": watches_skipped,
+                "price_points_created": price_points_created,
+                "price_points_skipped": price_points_skipped,
                 "warnings": warnings,
             },
         }

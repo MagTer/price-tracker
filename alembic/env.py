@@ -29,9 +29,14 @@ if os.environ.get("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# disable_existing_loggers=False on purpose: the default (True) silences every logger that
+# already exists, which here means the app's own `domain`/`infra`/`api` loggers — they end up
+# with `disabled = True` and drop their records on the floor, including into the portal's log
+# buffer. Harmless when alembic owns the process, but in any process that ran the app first
+# (the test suite, where the migration fixture precedes the app tests) it silently kills app
+# logging. Alembic's logging config has no business disabling loggers it did not create.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

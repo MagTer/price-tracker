@@ -1932,7 +1932,8 @@ async function unlinkStore(productStoreId) {
 
 async function loadExport() {
     try {
-        const r = await fetch(API_BASE + '/export?include_history=true');
+        // history_days=0 = ALL history: this button is the backup, not a 30-day report.
+        const r = await fetch(API_BASE + '/export?include_history=true&history_days=0');
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
