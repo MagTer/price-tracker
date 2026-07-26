@@ -462,6 +462,49 @@
     </div>
 </div>
 
+<div class="modal" id="modal-edit-watch" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Redigera bevakning</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-watch')">&times;</button>
+        </div>
+        <form id="form-edit-watch" onsubmit="handleEditWatch(event)">
+            <input type="hidden" id="edit-watch-id">
+            <div class="form-group">
+                <label>Produkt</label>
+                <input type="text" id="edit-watch-product" class="form-input" disabled>
+            </div>
+            <div class="form-group">
+                <label>E-post *</label>
+                <input type="email" id="edit-watch-email" required class="form-input">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="edit-watch-any-offer"> Larma vid varje erbjudande
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Prisfallströskel (%)</label>
+                <input type="number" id="edit-watch-drop" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Mål för jämförpris (<span id="edit-watch-unit-label">kr/st</span>)</label>
+                <input type="number" step="0.01" id="edit-watch-unit-target" class="form-input">
+                <small class="form-hint">Lämna tomt för att ta bort målet.</small>
+            </div>
+            <div class="form-group">
+                <label>Absolut målpris (kr)</label>
+                <input type="number" step="0.01" id="edit-watch-target" class="form-input">
+                <small class="form-hint">Gäller hela förpackningen oavsett storlek — jämförpriset ovan är oftast det du vill styra på. Tomt = inget mål.</small>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Spara</button>
+                <button type="button" class="btn" onclick="closeModal('modal-edit-watch')">Avbryt</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Import Modal -->
 <div class="modal" id="modal-import" style="display:none;">
     <div class="modal-content">
@@ -665,6 +708,14 @@ th.sortable-col:hover {
     color: var(--text-muted);
     font-size: 0.85em;
     font-weight: 400;
+}
+/* Help text under a form field — where a control's meaning is not obvious from its label
+   (an empty field that CLEARS a value rather than leaving it alone, say). */
+.form-hint {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 0.85em;
 }
 .needs-amount {
     border-color: var(--warning);
@@ -1009,9 +1060,14 @@ async function loadLogs() {
     }
 }
 
+// The last /watches payload, kept so the edit dialog prefills from what the row already
+// showed instead of refetching a single watch (there is no GET /watches/{id}).
+let watchesCache = [];
+
 async function loadWatches() {
     try {
         const watches = await apiGet('/watches');
+        watchesCache = watches;
         const container = document.getElementById('watches-table-container');
         if (!watches.length) {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div>';
@@ -1043,6 +1099,7 @@ async function loadWatches() {
                 <td>${now}</td>
                 <td>${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
                 <td>
+                    <button class="action-btn" onclick="openEditWatch('${w.watch_id}')">Redigera</button>
                     <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
                 </td>
             </tr>`;
@@ -2000,6 +2057,53 @@ async function handleCreateWatch(e) {
         closeModal('modal-create-watch');
         e.target.reset();
         showToast('Bevakning skapad');
+        loadWatches();
+        loadStats();
+    } catch (err) {
+        showToast('Fel: ' + err.message, 'error');
+    }
+}
+
+function openEditWatch(id) {
+    const w = watchesCache.find(x => x.watch_id === id);
+    if (!w) { showToast('Bevakningen hittades inte — ladda om sidan', 'error'); return; }
+    document.getElementById('edit-watch-id').value = w.watch_id;
+    document.getElementById('edit-watch-product').value = w.product_name || w.product_id;
+    document.getElementById('edit-watch-email').value = w.email_address || '';
+    document.getElementById('edit-watch-any-offer').checked = !!w.alert_on_any_offer;
+    document.getElementById('edit-watch-drop').value =
+        w.price_drop_threshold_percent != null ? w.price_drop_threshold_percent : '';
+    document.getElementById('edit-watch-unit-label').textContent = unitPriceHeading(w.unit);
+    document.getElementById('edit-watch-unit-target').value =
+        w.unit_price_target_sek != null ? w.unit_price_target_sek : '';
+    document.getElementById('edit-watch-target').value =
+        w.target_price_sek != null ? w.target_price_sek : '';
+    document.getElementById('modal-edit-watch').style.display = 'flex';
+}
+
+async function handleEditWatch(e) {
+    e.preventDefault();
+    const id = document.getElementById('edit-watch-id').value;
+    const num = el => {
+        const v = document.getElementById(el).value.trim();
+        return v === '' ? null : parseFloat(v);
+    };
+    // Every field is sent on every save, nulls included — the server treats a sent null as
+    // "clear this", so an emptied target price is actually removed rather than kept.
+    const body = {
+        email_address: document.getElementById('edit-watch-email').value.trim(),
+        alert_on_any_offer: document.getElementById('edit-watch-any-offer').checked,
+        price_drop_threshold_percent: (() => {
+            const v = document.getElementById('edit-watch-drop').value.trim();
+            return v === '' ? null : parseInt(v);
+        })(),
+        unit_price_target_sek: num('edit-watch-unit-target'),
+        target_price_sek: num('edit-watch-target')
+    };
+    try {
+        await apiPut('/watches/' + id, body);
+        closeModal('modal-edit-watch');
+        showToast('Bevakning uppdaterad');
         loadWatches();
         loadStats();
     } catch (err) {

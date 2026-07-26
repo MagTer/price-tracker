@@ -1939,19 +1939,31 @@ async def update_watch(
         if not watch:
             raise HTTPException(status_code=404, detail="Prisbevakningen hittades inte")
 
-        # Update only provided fields
-        if data.target_price_sek is not None:
-            watch.target_price_sek = Decimal(str(data.target_price_sek))
+        # Partial update — but an explicitly-sent null must CLEAR the field, not be ignored.
+        # The old `if value is not None` shape could only ever SET a target: once a watch had
+        # a target price there was no request that could remove it again, which made "edit"
+        # a one-way door. `model_fields_set` is what tells an absent key apart from a null one.
+        sent = data.model_fields_set
+
+        if "target_price_sek" in sent:
+            watch.target_price_sek = (
+                Decimal(str(data.target_price_sek)) if data.target_price_sek is not None else None
+            )
+        if "unit_price_target_sek" in sent:
+            watch.unit_price_target_sek = (
+                Decimal(str(data.unit_price_target_sek))
+                if data.unit_price_target_sek is not None
+                else None
+            )
+        if "price_drop_threshold_percent" in sent:
+            watch.price_drop_threshold_percent = data.price_drop_threshold_percent
+        if "unit_price_drop_threshold_percent" in sent:
+            watch.unit_price_drop_threshold_percent = data.unit_price_drop_threshold_percent
+        # NOT NULL columns: a null here is a malformed request, not an instruction to clear.
         if data.alert_on_any_offer is not None:
             watch.alert_on_any_offer = data.alert_on_any_offer
-        if data.price_drop_threshold_percent is not None:
-            watch.price_drop_threshold_percent = data.price_drop_threshold_percent
-        if data.unit_price_target_sek is not None:
-            watch.unit_price_target_sek = Decimal(str(data.unit_price_target_sek))
-        if data.unit_price_drop_threshold_percent is not None:
-            watch.unit_price_drop_threshold_percent = data.unit_price_drop_threshold_percent
-        if data.email_address is not None:
-            if not EMAIL_PATTERN.match(data.email_address):
+        if "email_address" in sent:
+            if not data.email_address or not EMAIL_PATTERN.match(data.email_address):
                 raise HTTPException(status_code=400, detail="Ogiltig e-postadress")
             watch.email_address = data.email_address
 

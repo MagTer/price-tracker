@@ -1227,6 +1227,89 @@ class TestWatchesEndpoint:
         assert watches[0]["unit"] == "st"
 
 
+class TestUpdateWatch:
+    """PUT /watches/{id} — the endpoint behind the edit dialog.
+
+    The load-bearing case is CLEARING. The old handler used `if value is not None`, so once a
+    watch had a target price no request could ever remove it: editing was a one-way door and
+    an emptied field silently kept its old value.
+    """
+
+    def _watch(self):
+        from domain.models import PriceWatch
+
+        return PriceWatch(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(TENANT),
+            product_id=uuid.uuid4(),
+            email_address="magnus@example.com",
+            target_price_sek=Decimal("99.00"),
+            unit_price_target_sek=Decimal("4.50"),
+            price_drop_threshold_percent=20,
+            alert_on_any_offer=True,
+        )
+
+    def test_explicit_null_clears_a_target(self, client, mock_session):
+        watch = self._watch()
+        mock_session.execute.return_value = _scalar(watch)
+
+        r = client.put(
+            f"/watches/{watch.id}",
+            json={"target_price_sek": None, "unit_price_target_sek": None},
+        )
+
+        assert r.status_code == 200
+        assert watch.target_price_sek is None
+        assert watch.unit_price_target_sek is None
+
+    def test_omitted_field_is_left_alone(self, client, mock_session):
+        """Partial update must survive: a body that never mentions a field cannot change it."""
+        watch = self._watch()
+        mock_session.execute.return_value = _scalar(watch)
+
+        r = client.put(f"/watches/{watch.id}", json={"unit_price_target_sek": 3.25})
+
+        assert r.status_code == 200
+        assert watch.unit_price_target_sek == Decimal("3.25")
+        assert watch.target_price_sek == Decimal("99.00")  # untouched
+        assert watch.price_drop_threshold_percent == 20  # untouched
+
+    def test_thresholds_clear_too(self, client, mock_session):
+        watch = self._watch()
+        mock_session.execute.return_value = _scalar(watch)
+
+        r = client.put(f"/watches/{watch.id}", json={"price_drop_threshold_percent": None})
+
+        assert r.status_code == 200
+        assert watch.price_drop_threshold_percent is None
+
+    def test_email_cannot_be_cleared(self, client, mock_session):
+        """email_address is NOT NULL — a null there is a malformed request, not 'clear it'."""
+        watch = self._watch()
+        mock_session.execute.return_value = _scalar(watch)
+
+        r = client.put(f"/watches/{watch.id}", json={"email_address": None})
+
+        assert r.status_code == 400
+        assert watch.email_address == "magnus@example.com"
+
+    def test_invalid_email_is_rejected(self, client, mock_session):
+        watch = self._watch()
+        mock_session.execute.return_value = _scalar(watch)
+
+        r = client.put(f"/watches/{watch.id}", json={"email_address": "inte-en-adress"})
+
+        assert r.status_code == 400
+        assert watch.email_address == "magnus@example.com"
+
+    def test_missing_watch_is_404(self, client, mock_session):
+        mock_session.execute.return_value = _scalar(None)
+
+        r = client.put(f"/watches/{uuid.uuid4()}", json={"target_price_sek": 10})
+
+        assert r.status_code == 404
+
+
 class TestManualCheckAppliesTheScrapeRule:
     """POST /check/{id} routes through domain.service.perform_price_check (D-07, AC#4).
 

@@ -91,10 +91,9 @@ Recent decisions affecting current work:
 - `.env.template` may still carry `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`
   (D-32). The file is permission-blocked for agents, so **Magnus has to edit it** — an agent
   cannot even read it to confirm the state (verified again 2026-07-26: the read was denied).
-- **UI gap: watches can be created and deleted, but not edited.** `PUT /watches/{watch_id}`
-  exists in `admin.py` and has no dialog behind it — changing a target price means delete +
-  recreate. Confirmed still true 2026-07-26. (Rescued from the old `last_activity_desc`, where
-  it had been buried in prose since v0.10.0.)
+- ~~UI gap: watches can be created and deleted, but not edited~~ — **closed in v0.27.0.**
+  The dialog exists, and the endpoint behind it can now CLEAR a target (its `is not None`
+  guards meant a target price could be set but never removed).
 
 **Closed since this list was written:** the "Opus-kravställning" backlog (Dockerfile USER,
 libpq trim, `/health` DB-ping, self-hosted Chart.js, N+1 in `list_products`, tenant/email
