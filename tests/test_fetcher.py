@@ -101,6 +101,35 @@ class TestBlockDetection:
         assert result["blocked"] is True
         assert fetcher._client.get.await_count == 1
 
+    async def test_405_is_a_wall_not_a_method_error(self) -> None:
+        """ICA answers 405 to a plain GET when it is walling us (prod, 2026-07-27).
+
+        It is not a real "method not allowed": we only ever GET, these are pages a browser
+        opens, and the SAME urls returned 200, 405 and 202 within one morning. The 405s
+        arrive in runs beginning on the first probe after a cooldown lapses. Classified as a
+        hard 4xx it left blocked=False, so the breaker never re-tripped and the scheduler
+        kept fetching ICA at its 60-90 s cadence right through the wall.
+        """
+        fetcher = _make_fetcher([_response(405, "")] * 3)
+
+        result = await fetcher.fetch("https://example.test/p")
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert "HTTP 405" in result["error"]
+        # Fails fast like every other wall — a 405 is not going to change in 1.5 seconds.
+        assert fetcher._client.get.await_count == 1
+
+    async def test_404_is_still_a_hard_error_not_a_wall(self) -> None:
+        """The counterpart: a genuinely missing page must NOT cool the whole store down."""
+        fetcher = _make_fetcher([_response(404, "not found")] * 3)
+
+        result = await fetcher.fetch("https://example.test/p")
+
+        assert result["ok"] is False
+        assert result.get("blocked") is not True
+        assert fetcher._client.get.await_count == 1
+
     async def test_200_but_empty_body_is_a_transient_failure(self) -> None:
         """Empty body carries no status tell, so it is transient (retried), not a WAF block."""
         fetcher = _make_fetcher([_response(200, "   ")] * 3)

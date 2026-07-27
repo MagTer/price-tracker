@@ -18,7 +18,19 @@ logger = logging.getLogger(__name__)
 # scheduler can cool the whole store down (a per-store circuit breaker) instead of working
 # through its other due links. (Treating a 202 as a *successful* 2xx is what raise_for_status
 # once did, silently feeding an empty page to the extractors — that trap stays fixed.)
-_WAF_BLOCK_STATUSES = frozenset({202, 403, 429})
+#
+# 405 joined the set on 2026-07-27, from prod evidence. It is NOT a "this method is not allowed
+# on this resource" answer: we only ever GET, and these are pages a browser opens. The same
+# URLs returned all three of 200, 405 and 202 within one morning — Ketchup 1,25 kg priced at
+# 06:42 and 405 at 10:01; Tortilla priced at 09:42 and 405 at 10:03; Kaviar 405 at 07:56 and a
+# 202 challenge at 10:13. And the 405s arrive in RUNS that start on the first probe after a
+# cooldown lapses (07:45 block → 07:50, 07:55, 07:56, 07:57, 08:02 all 405). Classified as a
+# hard 4xx it did not set blocked, so the breaker never re-tripped and the scheduler kept
+# feeding ICA at its 60-90 s cadence straight through the wall — exactly the hammering the
+# breaker exists to prevent — and each 405 also pushed its link +24h out of the förmiddag
+# window. Cost of being wrong about this: a genuinely 405-ing URL gets cooled down and retried
+# instead of failing fast. Cost of being wrong the other way is what prod just showed.
+_WAF_BLOCK_STATUSES = frozenset({202, 403, 405, 429})
 
 # Transient origin failures — worth a short bounded retry, unlike a WAF wall.
 _TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
