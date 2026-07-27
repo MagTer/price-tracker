@@ -1,7 +1,7 @@
 [project]
 name = "price-tracker"
 # The released tag, kept in step with it on purpose: this said 0.1.0 while prod ran v0.3.2.
-version = "0.29.3"
+version = "0.30.0"
 description = "Standalone Swedish grocery and pharmacy price tracker (extracted from ai-agent-platform)"
 authors = [{ name = "Magnus Ternstrom", email = "magnus.ternstrom@gmail.com" }]
 readme = "README.md"
@@ -14,6 +14,11 @@ dependencies = [
     # claims to be Chrome and then speaks HTTP/1.1 to a CDN is a fingerprint mismatch every
     # bot-detection layer checks first (see infra/fetcher.py).
     "httpx[http2] (>=0.28,<0.29)",
+    # curl_cffi is the DEFAULT fetch transport (env FETCHER_TRANSPORT flips it back to
+    # httpx). It impersonates Chrome's TLS ClientHello (JA3) and HTTP/2 SETTINGS — the half
+    # of the fingerprint headers cannot reach. Ships prebuilt abi3 wheels, so no toolchain
+    # in the image; httpx stays regardless (OpenRouter, Resend, and the fallback path).
+    "curl-cffi (>=0.15,<0.16)",
     "pydantic (>=2.7,<3.0)",
     "fastapi (>=0.111,<0.112)",
     "uvicorn[standard] (>=0.30,<0.31)",

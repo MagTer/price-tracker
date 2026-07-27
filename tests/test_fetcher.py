@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from infra.fetcher import WebFetcher
+from infra.fetcher import WebFetcher, _normalise_http_version
 
 
 def _response(status_code: int, text: str) -> SimpleNamespace:
@@ -34,11 +34,62 @@ def _no_sleep():
         yield sleep_mock
 
 
+class TestTransportSelection:
+    """Which HTTP client answers is an A/B we run in prod, so it must be switchable and
+    observable — `FETCHER_TRANSPORT` flips it, `fetcher.transport` records what happened."""
+
+    def test_curl_cffi_is_the_default(self) -> None:
+        """curl_cffi impersonates Chrome's TLS ClientHello and h2 SETTINGS, which headers
+        cannot reach. It is a declared dependency, so this is the path prod takes."""
+        assert WebFetcher().transport == "curl_cffi"
+
+    def test_env_var_forces_httpx(self, monkeypatch) -> None:
+        """The rollback: one env var and a restart, no redeploy, if block rates get worse."""
+        monkeypatch.setenv("FETCHER_TRANSPORT", "httpx")
+        assert WebFetcher().transport == "httpx"
+
+    def test_an_unrecognised_value_falls_back_to_curl_cffi(self) -> None:
+        """A typo must not silently drop the impersonation."""
+        assert WebFetcher(transport="chrome-ish").transport == "curl_cffi"
+
+    def test_a_missing_curl_cffi_degrades_to_httpx_instead_of_raising(self, monkeypatch) -> None:
+        """A native library that will not load must cost us a fingerprint, not the app: a
+        fetcher that cannot be constructed takes every price check with it."""
+        monkeypatch.setattr(WebFetcher, "_build_curl_client", lambda self: None, raising=True)
+        fetcher = WebFetcher()
+        assert fetcher.transport == "httpx"
+        assert fetcher._client is not None
+
+
+class TestHttpVersionNormalisation:
+    """httpx reports "HTTP/2"; curl reports CURLINFO_HTTP_VERSION as an int."""
+
+    def test_curl_three_is_http_2_not_http_3(self) -> None:
+        """The trap this function exists for: curl's 3 is HTTP/2. HTTP/3 is 30. Reading it
+        the other way is how a probe once 'showed' curl_cffi negotiating h3 with ICA."""
+        assert _normalise_http_version(3) == "HTTP/2"
+        assert _normalise_http_version(30) == "HTTP/3"
+
+    def test_httpx_strings_pass_through(self) -> None:
+        assert _normalise_http_version("HTTP/2") == "HTTP/2"
+        assert _normalise_http_version("HTTP/1.1") == "HTTP/1.1"
+
+    def test_absent_version_logs_nothing(self) -> None:
+        """Test stubs carry no http_version; that must stay silent, not crash."""
+        assert _normalise_http_version(None) is None
+        assert _normalise_http_version("") is None
+
+
 class TestBrowserHeaders:
     def test_sends_a_consistent_browser_fingerprint(self) -> None:
         """A Chrome UA WITH the matching client hints + Sec-Fetch-* — inconsistency here
-        is what invites a WAF's bot challenge (the empty 202 from ICA)."""
-        headers = WebFetcher()._client.headers  # httpx lowercases keys
+        is what invites a WAF's bot challenge (the empty 202 from ICA).
+
+        Explicitly the httpx transport: under curl_cffi these headers come from the
+        impersonation profile, and hand-writing a UA on top of it would re-create exactly
+        the self-contradiction this test guards against.
+        """
+        headers = WebFetcher(transport="httpx")._client.headers  # httpx lowercases keys
 
         ua = headers["user-agent"]
         assert "Chrome/" in ua

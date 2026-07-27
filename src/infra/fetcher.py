@@ -1,7 +1,16 @@
-"""httpx async fetcher implementing IFetcher."""
+"""Async fetcher implementing IFetcher, over curl_cffi (default) or httpx.
+
+The transport is swappable ON PURPOSE, via env `FETCHER_TRANSPORT`. curl_cffi impersonates
+a real Chrome down at the TLS and HTTP/2 layers, which is the one part of the fingerprint
+headers cannot fix — but whether that actually changes how often a store walls us is an
+open question this app is in a position to MEASURE rather than assume. One env var and a
+restart flips it back, and every fetch logs which transport answered, so a week of prod
+logs settles it. See the transport bullet in CLAUDE.md.
+"""
 
 import asyncio
 import logging
+import os
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
@@ -65,10 +74,100 @@ class _TextExtractor(HTMLParser):
         return "\n".join(self._chunks)
 
 
-class WebFetcher:
-    """Simple async web fetcher with browser headers and HTML text extraction."""
+# The Chrome version the httpx path claims. curl_cffi does NOT read this — `impersonate`
+# ships its own matched UA, and hand-writing one on top would re-create exactly the
+# self-contradiction the impersonation exists to remove. Bump it when the fallback is stale.
+_CHROME_MAJOR = "143"
 
-    def __init__(self) -> None:
+# curl_cffi impersonation target. "chrome" is the library's alias for its newest Chrome
+# profile, so a curl_cffi upgrade also refreshes the fingerprint — the opposite of the
+# hand-maintained _CHROME_MAJOR above, which goes stale silently.
+_IMPERSONATE = "chrome"
+
+# curl's CURLINFO_HTTP_VERSION is an int enum, httpx's http_version a string. Normalising
+# here keeps _log_negotiated_protocol (and prod's logs) transport-independent. NOTE 3 is
+# HTTP/2, not HTTP/3 — HTTP/3 is 30. Getting that backwards is how a session concluded
+# curl_cffi bought us a protocol upgrade it did not.
+_CURL_HTTP_VERSIONS = {
+    1: "HTTP/1.0",
+    2: "HTTP/1.1",
+    3: "HTTP/2",
+    4: "HTTP/2",
+    5: "HTTP/2",
+    30: "HTTP/3",
+    31: "HTTP/3",
+}
+
+
+class WebFetcher:
+    """Async web fetcher with a browser fingerprint and HTML text extraction.
+
+    `transport` records which client actually got built ("curl_cffi" or "httpx") — read it
+    in tests, and it is logged once at construction so prod can attribute a week of block
+    rates to a transport rather than to a hunch.
+    """
+
+    def __init__(self, transport: str | None = None) -> None:
+        requested = (transport or os.getenv("FETCHER_TRANSPORT") or "curl_cffi").strip().lower()
+        if requested not in ("curl_cffi", "httpx"):
+            # Loud, because a typo would silently drop the impersonation and the whole point
+            # of the A/B is knowing which transport a week of logs belongs to.
+            logger.warning(
+                "FETCHER_TRANSPORT=%r is not one of curl_cffi/httpx — using curl_cffi", requested
+            )
+            requested = "curl_cffi"
+
+        self.transport = "httpx"
+        if requested == "curl_cffi":
+            client = self._build_curl_client()
+            if client is not None:
+                self._client = client
+                self.transport = "curl_cffi"
+        if self.transport == "httpx":
+            self._client = self._build_httpx_client()
+        logger.info("WebFetcher using the %s transport (requested %s)", self.transport, requested)
+
+        # Hosts whose negotiated protocol has been logged. h2 was verified manually against
+        # the stores, but prod evidence must live in prod logs: one line per host per process
+        # settles "did we actually speak h2 to ICA today" without a line per request.
+        self._protocol_logged_hosts: set[str] = set()
+
+    def _build_curl_client(self) -> Any | None:
+        """A curl_cffi session impersonating Chrome, or None if it cannot be built.
+
+        This is the whole point of the transport: headers are only half a fingerprint, and
+        the half they cannot reach is the TLS ClientHello (cipher order, extensions, GREASE
+        — the JA3) and the HTTP/2 SETTINGS/priority frames. A client sending Chrome's headers
+        over an OpenSSL-default handshake contradicts itself before a byte of HTTP is read,
+        and that contradiction is precisely what a bot-detection layer scores first.
+
+        Returning None rather than raising mirrors the h2 fallback below: a native library
+        that fails to load must degrade to a more detectable fetcher, never to no fetcher.
+        """
+        try:
+            from curl_cffi.requests import AsyncSession
+        except ImportError:
+            logger.warning(
+                "curl_cffi is not installed — falling back to httpx, which cannot impersonate "
+                "Chrome's TLS or HTTP/2 fingerprint. Install curl_cffi to close that gap."
+            )
+            return None
+
+        try:
+            return AsyncSession(
+                impersonate=_IMPERSONATE,
+                timeout=15,
+                allow_redirects=True,
+                # Only the locale is ours. Everything else that identifies the "browser" —
+                # User-Agent, sec-ch-ua, header ORDER — comes from the impersonation profile
+                # and must stay consistent with the TLS handshake it ships with.
+                headers={"Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7"},
+            )
+        except Exception as e:  # a broken native lib must not take the app down
+            logger.warning("curl_cffi failed to initialise (%s) — falling back to httpx", e)
+            return None
+
+    def _build_httpx_client(self) -> httpx.AsyncClient:
         # Headers of a real top-level Chrome navigation. A WAF/CDN's bot-detection
         # fingerprints requests, and a "Chrome" User-Agent arriving WITHOUT the client
         # hints (Sec-Ch-Ua) and Sec-Fetch-* headers a real Chrome always sends is an
@@ -77,8 +176,8 @@ class WebFetcher:
         # the Sec-Ch-Ua brand list in step, plus the navigation Sec-Fetch-* set, makes us
         # look like a browser. This does NOT beat a genuine per-IP rate limit (that is the
         # politeness ledger's job) — it just lowers how often we trip the bot challenge.
-        # Bump CHROME_MAJOR periodically; a stale major version is itself a mild bot tell.
-        chrome_major = "143"
+        # Bump _CHROME_MAJOR periodically; a stale major version is itself a mild bot tell.
+        chrome_major = _CHROME_MAJOR
         client_kwargs: dict[str, Any] = dict(
             follow_redirects=True,
             timeout=httpx.Timeout(15.0, connect=5.0),
@@ -111,24 +210,19 @@ class WebFetcher:
         # HTTP/2, because the headers above are only half a fingerprint. Real Chrome ALWAYS
         # negotiates h2 with a modern CDN, so a client that claims to be Chrome and then speaks
         # HTTP/1.1 contradicts itself at the connection layer — before a single header is read.
-        # This does NOT reproduce Chrome's exact h2 SETTINGS/priority fingerprint (only
-        # curl_cffi or a real browser does, and those remain the un-built next levers); it
-        # removes one free tell. `h2` is a declared dependency via httpx[http2]; the fallback
-        # exists so a broken install degrades to HTTP/1.1 instead of a fetcher that cannot be
-        # constructed at all — a no-price app is worse than a slightly more detectable one.
+        # This does NOT reproduce Chrome's exact h2 SETTINGS/priority fingerprint — that is
+        # what the curl_cffi transport above is for; this only removes one free tell. `h2` is
+        # a declared dependency via httpx[http2]; the fallback exists so a broken install
+        # degrades to HTTP/1.1 instead of a fetcher that cannot be constructed at all — a
+        # no-price app is worse than a slightly more detectable one.
         try:
-            self._client = httpx.AsyncClient(http2=True, **client_kwargs)
+            return httpx.AsyncClient(http2=True, **client_kwargs)
         except ImportError:
             logger.warning(
                 "h2 is not installed — falling back to HTTP/1.1, which is a bot tell "
                 "for a client sending Chrome headers. Install httpx[http2]."
             )
-            self._client = httpx.AsyncClient(**client_kwargs)
-
-        # Hosts whose negotiated protocol has been logged. h2 was verified manually against
-        # the stores, but prod evidence must live in prod logs: one line per host per process
-        # settles "did we actually speak h2 to ICA today" without a line per request.
-        self._protocol_logged_hosts: set[str] = set()
+            return httpx.AsyncClient(**client_kwargs)
 
     def _log_negotiated_protocol(self, response: Any, url: str) -> None:
         """Log the negotiated HTTP version once per host — WARNING when it is not h2.
@@ -137,22 +231,26 @@ class WebFetcher:
         Chrome, and real Chrome always negotiates h2 with a modern CDN, so a 1.1 downgrade
         IS the fingerprint contradiction we added http2 to remove. Reads via getattr because
         tests stub responses minimally; a stub without http_version simply logs nothing.
+
+        The transport is named in the line: comparing block rates between curl_cffi and
+        httpx over a week only works if the log says which one answered.
         """
         host = urlsplit(url).netloc
         if not host or host in self._protocol_logged_hosts:
             return
-        version = getattr(response, "http_version", None)
+        version = _normalise_http_version(getattr(response, "http_version", None))
         if not version:
             return
         self._protocol_logged_hosts.add(host)
         if version == "HTTP/2":
-            logger.info("Negotiated %s with %s", version, host)
+            logger.info("Negotiated %s with %s via %s", version, host, self.transport)
         else:
             logger.warning(
-                "Negotiated %s with %s — a client sending Chrome headers over %s "
+                "Negotiated %s with %s via %s — a client sending Chrome headers over %s "
                 "contradicts its own fingerprint (real Chrome speaks h2 to a modern CDN)",
                 version,
                 host,
+                self.transport,
                 version,
             )
 
@@ -302,7 +400,26 @@ class WebFetcher:
         return {"url": url, "ok": True, "data": data, "error": None, "blocked": False}
 
     async def close(self) -> None:
-        await self._client.aclose()
+        # httpx says aclose(), curl_cffi says close() — and both are coroutines.
+        closer = getattr(self._client, "aclose", None) or self._client.close
+        await closer()
+
+
+def _normalise_http_version(version: Any) -> str | None:
+    """One string for a protocol two clients report differently.
+
+    httpx gives "HTTP/2"; curl_cffi gives curl's CURLINFO_HTTP_VERSION int enum, where
+    **3 means HTTP/2** and HTTP/3 is 30. Reading that 3 as "HTTP/3" is how a probe once
+    concluded curl_cffi had bought a protocol upgrade it had not.
+    """
+    if version is None or version == "":
+        return None
+    if isinstance(version, str):
+        return version
+    try:
+        return _CURL_HTTP_VERSIONS.get(int(version), f"HTTP-version {int(version)}")
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_text(html: str) -> str:

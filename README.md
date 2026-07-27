@@ -64,6 +64,7 @@ distinguishable everywhere a store name is shown (v0.6.0).
 | `DATABASE_URL` | prod | `postgresql+asyncpg://price_tracker:price_tracker@localhost:5432/price_tracker` | Async Postgres URL. Also read by Alembic (overrides `alembic.ini`). |
 | `ALLOWED_ENTRA_EMAIL` | yes | `""` (deny all) | Entra **UPN** of the **admin** — the only identity allowed to write; matched against `X-Auth-Request-Email`. Everyone else the ingress authenticates gets read-only access. Unset ⇒ everyone is denied, reads included. |
 | `MCP_BEARER_TOKEN` | for MCP | `""` | Static bearer for `/mcp/`. Unset ⇒ `/mcp` fails closed with 503. |
+| `FETCHER_TRANSPORT` | no | `curl_cffi` | Which HTTP client fetches store pages. `curl_cffi` impersonates Chrome's TLS (JA3) and HTTP/2 fingerprint; `httpx` is the fallback and the rollback. A missing/broken curl_cffi degrades to httpx with a warning. |
 | `OPENROUTER_API_KEY` | for LLM fallback | `""` | OpenRouter key for the LLM extraction cascade. |
 | `OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | OpenRouter endpoint (OpenAI-compatible). |
 | `OPENROUTER_HTTP_REFERER` | no | `""` | Optional OpenRouter attribution header. |
