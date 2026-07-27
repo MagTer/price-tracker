@@ -979,6 +979,10 @@ class TestCheckDueProducts:
 
         failed_outcome = MagicMock()
         failed_outcome.success = False
+        # Explicit: a MagicMock auto-creates `.blocked` as a TRUTHY mock, which would send
+        # this through the breaker's deferral instead of the +24h path under test. "Failed"
+        # here means the fetch reached the store and yielded nothing — not a bot wall.
+        failed_outcome.blocked = False
 
         before = datetime.now(UTC).replace(tzinfo=None)
         with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
@@ -1015,6 +1019,10 @@ class TestCheckDueProducts:
 
         failed_outcome = MagicMock()
         failed_outcome.success = False
+        # Explicit: a MagicMock auto-creates `.blocked` as a TRUTHY mock, which would send
+        # this through the breaker's deferral instead of the +24h path under test. "Failed"
+        # here means the fetch reached the store and yielded nothing — not a bot wall.
+        failed_outcome.blocked = False
 
         sentinel = datetime(2026, 3, 2, 8, 0, 0)
         with (
@@ -1052,6 +1060,7 @@ class TestCheckDueProducts:
 
         ok_outcome = MagicMock()
         ok_outcome.success = True
+        ok_outcome.blocked = False  # see the note on failed_outcome.blocked above
 
         sentinel = datetime(2026, 3, 9, 7, 30, 0)
         with (
@@ -1064,6 +1073,129 @@ class TestCheckDueProducts:
         mock_compute.assert_called_once()
         params = self._update_params(sessions[1].execute.call_args)
         assert params["next_check_at"] == sentinel
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_link_is_deferred_by_the_breaker_not_by_24h(self) -> None:
+        """A wall is the STORE's state, not this link's failure — so the link that discovers
+        it gets the same cooldown deferral every other due link of that store gets.
+
+        It used to take +24h for being first in the ASC due queue while its siblings resumed
+        in minutes, and +24h keeps the clock time the wall happened at: a link blocked at
+        23:16 retried at 23:16 the next night, and the night after, permanently outside the
+        06-12 förmiddag window the schedule exists to hold it in.
+        """
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekdays=[0])
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        blocked_outcome = MagicMock()
+        blocked_outcome.success = False
+        blocked_outcome.blocked = True
+
+        before = datetime.now(UTC).replace(tzinfo=None)
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = blocked_outcome
+            await scheduler._check_due_products()
+        after = datetime.now(UTC).replace(tzinfo=None)
+
+        params = self._update_params(sessions[1].execute.call_args)
+        # Deferred to the breaker's cooldown (base 5 min), NOT a day out.
+        assert (
+            before + timedelta(minutes=5) <= params["next_check_at"] <= after + timedelta(minutes=5)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_wall_does_not_count_as_a_check(self) -> None:
+        """last_checked_at is left alone when we never saw the page.
+
+        Otherwise "Senast kollad" and the portal's freshness line report a block as fresh
+        data — and the skip branch, which defers a cooling store's other links, already
+        leaves the field alone. Same event, same bookkeeping.
+        """
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekdays=[0])
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        blocked_outcome = MagicMock()
+        blocked_outcome.success = False
+        blocked_outcome.blocked = True
+
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = blocked_outcome
+            await scheduler._check_due_products()
+
+        params = self._update_params(sessions[1].execute.call_args)
+        assert "last_checked_at" not in params
+
+    @pytest.mark.asyncio
+    async def test_a_reached_store_with_no_price_still_counts_as_a_check(self) -> None:
+        """The counterpart: the page loaded and yielded nothing extractable. The store
+        answered, which is what last_checked_at means — and what keeps the +24h retry."""
+        scheduler, session_factory, _ = _make_scheduler()
+
+        ps = _make_product_store(check_weekdays=[0])
+        due_result = MagicMock()
+        due_result.unique.return_value.scalars.return_value.all.return_value = [ps]
+
+        sessions: list[AsyncMock] = []
+
+        def make_session_cm():
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(return_value=due_result)
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_session)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            sessions.append(mock_session)
+            return cm
+
+        session_factory.side_effect = lambda: make_session_cm()
+
+        no_price = MagicMock()
+        no_price.success = False
+        no_price.blocked = False
+        no_price.failure_reason = "no_price"
+
+        before = datetime.now(UTC).replace(tzinfo=None)
+        with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = no_price
+            await scheduler._check_due_products()
+        after = datetime.now(UTC).replace(tzinfo=None)
+
+        params = self._update_params(sessions[1].execute.call_args)
+        assert "last_checked_at" in params
+        assert (
+            before + timedelta(hours=24) <= params["next_check_at"] <= after + timedelta(hours=24)
+        )
 
 
 class TestStoreCircuitBreaker:

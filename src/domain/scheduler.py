@@ -229,8 +229,9 @@ class PriceCheckScheduler:
                     # fetch from 3 requests to 1.) The breaker is the SHARED registry, so the
                     # interactive paths stand down too — and each consecutive block doubles the
                     # cooldown, so a store that keeps walling us is left alone for longer.
+                    blocked_until: datetime | None = None
                     if outcome is not None and outcome.blocked:
-                        self.block_registry.record_block(
+                        blocked_until = self.block_registry.record_block(
                             product_store.store_id,
                             store_name=product_store.store.name,
                             source="scheduler",
@@ -250,15 +251,38 @@ class PriceCheckScheduler:
                     # weekday-scheduled link retries in 24h instead of waiting a
                     # full week; frequency-based links keep their jittered
                     # schedule, and success keeps current behavior exactly.
+                    #
+                    # A BLOCK is not a failure of this link — it is the store walling
+                    # everyone, and the breaker already owns that case with a measured,
+                    # escalating cooldown. Deferring to `blocked_until` is exactly what the
+                    # skip branch above gives every OTHER due link of that store; without
+                    # this branch the one link that happened to sit first in the ASC due
+                    # queue took a 24h penalty for discovering the wall while its siblings
+                    # resumed in minutes. That asymmetry was also the only thing walking
+                    # links out of the förmiddag window: +24h keeps the clock time the wall
+                    # happened at, so a link blocked at 23:16 retried at 23:16 the next
+                    # night, and again the night after, until one attempt finally landed.
                     weekdays, frequency = effective_schedule(product_store, product_store.store)
-                    if outcome is not None and not outcome.success and weekdays:
+                    if blocked_until is not None:
+                        next_check = blocked_until
+                    elif outcome is not None and not outcome.success and weekdays:
                         next_check = now_utc + timedelta(hours=24)
                     else:
                         next_check = next_check_time(weekdays, frequency, now_utc)
+
+                    # A wall is not a check: we never saw the page. Leaving last_checked_at
+                    # alone keeps "Senast kollad" and the portal's freshness line honest
+                    # (they would otherwise report a block as fresh data) and matches the
+                    # skip branch above, which defers without touching it. A fetch that
+                    # REACHED the store and yielded no price still counts — the store
+                    # answered, which is what the field means.
+                    values: dict[str, Any] = {"next_check_at": next_check}
+                    if blocked_until is None:
+                        values["last_checked_at"] = now_utc
                     await session.execute(
                         update(ProductStore)
                         .where(ProductStore.id == product_store.id)
-                        .values(last_checked_at=now_utc, next_check_at=next_check)
+                        .values(values)
                     )
 
                     await session.commit()
