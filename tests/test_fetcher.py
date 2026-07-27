@@ -21,8 +21,13 @@ def _response(status_code: int, text: str) -> SimpleNamespace:
 
 
 def _make_fetcher(responses: list) -> WebFetcher:
-    """A WebFetcher whose HTTP client yields the given responses (or raises) in order."""
-    fetcher = WebFetcher()
+    """A WebFetcher whose HTTP client yields the given responses (or raises) in order.
+
+    Pinned to the curl_cffi transport so the module does not change shape with the shell's
+    FETCHER_TRANSPORT: fetch_json's httpx branch goes through build_request/send rather
+    than .get, and has its own explicitly-pinned test below.
+    """
+    fetcher = WebFetcher(transport="curl_cffi")
     fetcher._client.get = AsyncMock(side_effect=responses)
     return fetcher
 
@@ -38,9 +43,12 @@ class TestTransportSelection:
     """Which HTTP client answers is an A/B we run in prod, so it must be switchable and
     observable — `FETCHER_TRANSPORT` flips it, `fetcher.transport` records what happened."""
 
-    def test_curl_cffi_is_the_default(self) -> None:
+    def test_curl_cffi_is_the_default(self, monkeypatch) -> None:
         """curl_cffi impersonates Chrome's TLS ClientHello and h2 SETTINGS, which headers
         cannot reach. It is a declared dependency, so this is the path prod takes."""
+        # "Default" means default: a developer shell exporting FETCHER_TRANSPORT=httpx
+        # must not turn this test into a test of their environment.
+        monkeypatch.delenv("FETCHER_TRANSPORT", raising=False)
         assert WebFetcher().transport == "curl_cffi"
 
     def test_env_var_forces_httpx(self, monkeypatch) -> None:
@@ -181,6 +189,20 @@ class TestBlockDetection:
         assert result.get("blocked") is not True
         assert fetcher._client.get.await_count == 1
 
+    async def test_the_wall_log_names_the_transport(self, caplog) -> None:
+        """The transport switch exists to be MEASURED: a week of prod logs settles whether
+        curl_cffi lowers the block rate, and that grep only works if the line that counts
+        a block says which transport took it."""
+        import logging
+
+        fetcher = _make_fetcher([_response(202, "")])
+
+        with caplog.at_level(logging.WARNING, logger="infra.fetcher"):
+            await fetcher.fetch("https://example.test/p")
+
+        [line] = [r.getMessage() for r in caplog.records if "Bot wall" in r.getMessage()]
+        assert f"via {fetcher.transport}" in line
+
     async def test_200_but_empty_body_is_a_transient_failure(self) -> None:
         """Empty body carries no status tell, so it is transient (retried), not a WAF block."""
         fetcher = _make_fetcher([_response(200, "   ")] * 3)
@@ -270,6 +292,51 @@ class TestFetchJson:
         assert headers["Accept"] == "application/json"
         assert headers["sec-fetch-mode"] == "cors"
         assert headers["sec-fetch-site"] == "same-origin"
+
+    async def test_navigation_only_headers_are_disabled_under_curl_cffi(self) -> None:
+        """A real Chrome XHR never sends sec-fetch-user or upgrade-insecure-requests, but
+        the impersonation profile paints them onto every request. None is curl_cffi's
+        "disable this header" marker (serialised as "name:") — an empty string would SEND
+        the header with an empty value, echo-verified on both transports."""
+        fetcher = _make_fetcher([self._json_response(200, {})])
+
+        await fetcher.fetch_json(
+            "https://example.test/api/p/1", referer="https://example.test/produkt/x"
+        )
+
+        headers = fetcher._client.get.await_args.kwargs["headers"]
+        assert headers["sec-fetch-user"] is None
+        assert headers["upgrade-insecure-requests"] is None
+        # sec-fetch-site: same-origin with no Referer contradicts itself — a same-origin
+        # XHR by definition has a page behind it.
+        assert headers["Referer"] == "https://example.test/produkt/x"
+
+    async def test_navigation_only_headers_are_removed_under_httpx(self) -> None:
+        """httpx's request-header merge has no removal semantics at all, so the httpx
+        branch deletes them from a BUILT request. The request here is real — the
+        assertions are on what would actually leave the process."""
+        fetcher = WebFetcher(transport="httpx")
+        fetcher._client.send = AsyncMock(return_value=self._json_response(200, {}))
+
+        await fetcher.fetch_json(
+            "https://example.test/api/p/1", referer="https://example.test/produkt/x"
+        )
+
+        request = fetcher._client.send.await_args.args[0]
+        assert "sec-fetch-user" not in request.headers
+        assert "upgrade-insecure-requests" not in request.headers
+        assert request.headers["accept"] == "application/json"
+        assert request.headers["sec-fetch-mode"] == "cors"
+        assert request.headers["referer"] == "https://example.test/produkt/x"
+
+    async def test_without_a_referer_none_is_sent(self) -> None:
+        """No page to claim → no Referer header, not an empty or invented one."""
+        fetcher = _make_fetcher([self._json_response(200, {})])
+
+        await fetcher.fetch_json("https://example.test/api/p/1")
+
+        headers = fetcher._client.get.await_args.kwargs["headers"]
+        assert "Referer" not in headers
 
     async def test_waf_wall_is_blocked_true_and_not_retried(self) -> None:
         fetcher = _make_fetcher([self._json_response(403)] * 3)

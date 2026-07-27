@@ -101,6 +101,23 @@ class TestExtract:
         assert result.raw_response.get("source") == "willys_api"
 
     @pytest.mark.asyncio
+    async def test_extract_passes_the_page_url_as_referer(self) -> None:
+        """The API call is repainted as a same-origin XHR, and a same-origin XHR with no
+        Referer contradicts itself — the page it claims to come from is the product page
+        being checked."""
+        extractor = _make_extractor()
+        url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
+        fetcher = _mock_fetcher(_fetch_json_ok(_valid_api_response(price_value=29.90)))
+
+        with (
+            patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
+            patch("infra.providers.get_fetcher", return_value=fetcher),
+        ):
+            await extractor.extract(url)
+
+        assert fetcher.fetch_json.await_args.kwargs["referer"] == url
+
+    @pytest.mark.asyncio
     async def test_extract_with_savings(self) -> None:
         """savingsAmount: priceValue is ordinarie, offer = priceValue - savings.
 
@@ -578,7 +595,7 @@ class TestWillysApiIsThrottledAndBlockAware:
             await extractor.extract(url, "Mjolk")
 
         fetcher.fetch_json.assert_awaited_once_with(
-            "https://www.willys.se/axfood/rest/p/100014716_ST"
+            "https://www.willys.se/axfood/rest/p/100014716_ST", referer=url
         )
 
     @pytest.mark.asyncio

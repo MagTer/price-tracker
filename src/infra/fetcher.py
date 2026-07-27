@@ -44,6 +44,12 @@ _WAF_BLOCK_STATUSES = frozenset({202, 403, 405, 429})
 # Transient origin failures — worth a short bounded retry, unlike a WAF wall.
 _TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
 
+# Headers a real Chrome sends ONLY on a top-level navigation, never on an XHR. Both
+# transports carry them on every request by default (the impersonation profile paints them
+# in under curl_cffi, the session headers under httpx), so fetch_json must actively remove
+# them — an "XHR" arriving with upgrade-insecure-requests is its own small fingerprint tell.
+_NAVIGATION_ONLY_HEADERS = ("sec-fetch-user", "upgrade-insecure-requests")
+
 # Short, bounded backoff for the transient path. Bounded on purpose: an interactive quick-add
 # caller is waiting, and an origin blip usually clears within seconds. Worst added latency ≈
 # sum of these delays; after the last one we give up and report the failure.
@@ -282,11 +288,12 @@ class WebFetcher:
                     # the status code and the body size, and a WAF challenge used to produce no
                     # log line at all — the first evidence was a caller's generic "fetch failed".
                     logger.warning(
-                        "Bot wall from %s — HTTP %d, %d-byte body; failing fast (no retry) "
-                        "and reporting blocked",
+                        "Bot wall from %s — HTTP %d, %d-byte body via %s; failing fast "
+                        "(no retry) and reporting blocked",
                         url,
                         status,
                         len(body),
+                        self.transport,
                     )
                     return {
                         "url": url,
@@ -337,7 +344,7 @@ class WebFetcher:
         )
         return {"url": url, "ok": False, "text": "", "html": "", "error": last_error}
 
-    async def fetch_json(self, url: str) -> dict[str, Any]:
+    async def fetch_json(self, url: str, referer: str | None = None) -> dict[str, Any]:
         """GET a store's JSON API endpoint, returning {ok, data, error, blocked}.
 
         Goes through the SAME client as page fetches on purpose: same Chrome fingerprint,
@@ -347,20 +354,41 @@ class WebFetcher:
         here used to announce `python-httpx` over HTTP/1.1 to the very host the page fetch
         had just spoken Chrome-h2 to.
 
+        The repaint also REMOVES _NAVIGATION_ONLY_HEADERS, and removal is transport-specific
+        because neither client documents the obvious spelling: an empty string value does
+        NOT remove a header on either transport — both SEND it empty, echo-verified — so
+        curl_cffi gets None (its explicit "disable this header" marker, serialised as
+        "name:") and httpx gets the header deleted from a built request (its request-header
+        merge has no removal semantics at all).
+
+        `referer` is the page this XHR pretends to originate from. sec-fetch-site:
+        same-origin with no Referer is a self-contradiction — a same-origin call by
+        definition has a page behind it — so the one caller (the Willys API extractor)
+        passes the product page URL it is checking.
+
         No retries: the only caller sits inside the extraction ladder with an LLM fallback
         behind it, and a WAF answer (blocked=True) must fail fast for the same reason
         fetch() does — see _WAF_BLOCK_STATUSES.
         """
+        headers: dict[str, Any] = {
+            "Accept": "application/json",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+        }
+        if referer:
+            headers["Referer"] = referer
         try:
-            response = await self._client.get(
-                url,
-                headers={
-                    "Accept": "application/json",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-origin",
-                },
-            )
+            if self.transport == "curl_cffi":
+                for name in _NAVIGATION_ONLY_HEADERS:
+                    headers[name] = None
+                response = await self._client.get(url, headers=headers)
+            else:
+                request = self._client.build_request("GET", url, headers=headers)
+                for name in _NAVIGATION_ONLY_HEADERS:
+                    if name in request.headers:
+                        del request.headers[name]
+                response = await self._client.send(request)
         except Exception as e:  # network error / timeout
             logger.warning("JSON fetch of %s failed: %s", url, e)
             return {"url": url, "ok": False, "data": None, "error": str(e), "blocked": False}
@@ -371,11 +399,12 @@ class WebFetcher:
             # Same point-of-detection logging contract as fetch(): only this frame knows the
             # status and body size, and an unlogged wall is how blocks stay invisible in prod.
             logger.warning(
-                "Bot wall from %s — HTTP %d, %d-byte body; failing fast (no retry) "
-                "and reporting blocked",
+                "Bot wall from %s — HTTP %d, %d-byte body via %s; failing fast "
+                "(no retry) and reporting blocked",
                 url,
                 status,
                 len(response.content),
+                self.transport,
             )
             return {
                 "url": url,

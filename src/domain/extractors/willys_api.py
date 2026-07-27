@@ -105,7 +105,10 @@ class WillysApiExtractor:
             _LEDGER_KEY, _MIN_INTERVAL_SECONDS, max_wait=_MAX_WAIT_SECONDS
         )
 
-        result = await get_fetcher().fetch_json(f"{self.API_BASE}/{code}")
+        # referer = the product page this XHR pretends to originate from: the repaint says
+        # sec-fetch-site: same-origin, and a same-origin XHR with no Referer contradicts
+        # itself — a real SPA's API call always has the page it was made from behind it.
+        result = await get_fetcher().fetch_json(f"{self.API_BASE}/{code}", referer=store_url)
         if result.get("blocked"):
             raise StoreBlockedError(f"Willys API bot wall: {result.get('error')}")
         if not result.get("ok"):
