@@ -546,6 +546,79 @@ class TestPriceParser:
         assert result == api_result
 
     @pytest.mark.asyncio
+    async def test_extract_price_uses_page_state_before_jsonld(self) -> None:
+        """The store-HTML tier outranks generic JSON-LD: on a Rusta rea the JSON-LD carries
+        only the campaign price, so letting it win would record the offer as ordinarie."""
+        parser = PriceParser()
+
+        page_result = PriceExtractionResult(
+            price_sek=Decimal("2999"),
+            store_unit_price_sek=None,
+            offer_price_sek=Decimal("1899"),
+            offer_type="kampanj",
+            offer_details="Spara 1100 kr",
+            in_stock=True,
+            confidence=0.98,
+            pack_size=None,
+            package_amount=None,
+            package_unit=None,
+            raw_response={"source": "rusta_page"},
+        )
+        mock_html_extractor = MagicMock()
+        mock_html_extractor.extract_from_html = MagicMock(return_value=page_result)
+        parser._html_extractors["rusta"] = mock_html_extractor
+
+        # JSON-LD with the WRONG (current-only) price sits in the same page — it must lose.
+        html = (
+            '<script type="application/ld+json">{"@context": "http://schema.org/",'
+            '"@type": "Product", "name": "Hängstol Sorrento", "offers": [{"@type": "Offer",'
+            '"price": "1899.00", "priceCurrency": "SEK"}]}</script>'
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            result = await parser.extract_price(
+                text_content="page content",
+                store_slug="rusta",
+                product_name="Hängstol Sorrento",
+                store_url="https://www.rusta.com/sv-se/x/hangstol-sorrento-605011720101",
+                html_content=html,
+            )
+
+        mock_html_extractor.extract_from_html.assert_called_once()
+        mock_llm.assert_not_called()
+        assert result == page_result
+
+    @pytest.mark.asyncio
+    async def test_page_state_none_falls_back_to_jsonld(self) -> None:
+        """A CURRENT_PAGE the extractor cannot use degrades to today's JSON-LD behaviour
+        (right price outside campaigns), never to a failed check."""
+        parser = PriceParser()
+
+        mock_html_extractor = MagicMock()
+        mock_html_extractor.extract_from_html = MagicMock(return_value=None)
+        parser._html_extractors["rusta"] = mock_html_extractor
+
+        html = (
+            '<script type="application/ld+json">{"@context": "http://schema.org/",'
+            '"@type": "Product", "name": "Hängstol Sorrento", "offers": [{"@type": "Offer",'
+            '"price": "1899.00", "priceCurrency": "SEK"}]}</script>'
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            result = await parser.extract_price(
+                text_content="page content",
+                store_slug="rusta",
+                product_name="Hängstol Sorrento",
+                store_url="https://www.rusta.com/sv-se/x/hangstol-sorrento-605011720101",
+                html_content=html,
+            )
+
+        mock_html_extractor.extract_from_html.assert_called_once()
+        mock_llm.assert_not_called()
+        assert result.price_sek == Decimal("1899.00")
+        assert result.raw_response.get("source") == "jsonld"
+
+    @pytest.mark.asyncio
     async def test_extract_price_falls_back_to_llm_when_api_returns_none(self) -> None:
         """API extractor returns None -> LLM cascade is used."""
         parser = PriceParser()

@@ -37,7 +37,7 @@ from api.schemas import (
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
-from domain.parser import PriceParser, get_api_extractor
+from domain.parser import PriceParser, get_api_extractor, get_html_extractor
 from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
 from domain.quickadd import (
     PackageGuess,
@@ -665,19 +665,45 @@ async def quick_add_preview(
             _record_store_outcome(store, blocked=False, success=True, source="quick-add-preview")
 
             html = fetch_result.get("html") or ""
-            extractor = JsonLdExtractor()
-            meta = extractor.extract_product_metadata(html) if html else None
-            # No product_name yet, so the name-overlap sanity check is skipped — acceptable
-            # because this price is preview display only; the recorded first price comes from
-            # perform_price_check after confirm.
-            price_result = extractor.extract_from_html(html) if html else None
 
-            name = meta.get("name") if meta else None
-            brand = meta.get("brand") if meta else None
-            price = price_result.price_sek if price_result else None
-            in_stock = price_result.in_stock if price_result else None
-            source = "jsonld" if name else None
-            guess = parse_package_from_name(name)
+            # Store-HTML tier, mirroring the price-check ladder: Rusta's CURRENT_PAGE state
+            # carries the package text (subTitle) and brand that its bare JSON-LD names drop,
+            # so the preview form arrives prefilled instead of asking the user to type them.
+            html_extractor = get_html_extractor(store.slug)
+            if html_extractor is not None and html:
+                page_meta = html_extractor.extract_metadata_from_html(html, url)
+                if page_meta is not None:
+                    name = page_meta.name
+                    brand = page_meta.brand
+                    price = page_meta.price_sek
+                    in_stock = page_meta.in_stock
+                    source = page_meta.source
+                    if page_meta.package_amount is not None or page_meta.pack_size is not None:
+                        guess = PackageGuess(
+                            amount=page_meta.package_amount,
+                            entry_unit=page_meta.package_unit,
+                            pack_size=page_meta.pack_size,
+                            label=(
+                                f"{page_meta.package_amount} {page_meta.package_unit or ''}".strip()
+                                if page_meta.package_amount is not None
+                                else None
+                            ),
+                        )
+
+            if name is None:
+                extractor = JsonLdExtractor()
+                meta = extractor.extract_product_metadata(html) if html else None
+                # No product_name yet, so the name-overlap sanity check is skipped — acceptable
+                # because this price is preview display only; the recorded first price comes
+                # from perform_price_check after confirm.
+                price_result = extractor.extract_from_html(html) if html else None
+
+                name = meta.get("name") if meta else None
+                brand = meta.get("brand") if meta else None
+                price = price_result.price_sek if price_result else None
+                in_stock = price_result.in_stock if price_result else None
+                source = "jsonld" if name else None
+                guess = parse_package_from_name(name)
 
             if name is None:
                 # Pass the raw HTML too: for a JS SPA the identity lives in <title>/<meta>/

@@ -119,9 +119,19 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
 
 
 async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
-    """The 0001 seed survived the in-place rewrite; 0003/0004 added Kronans and Apohem."""
+    """The 0001 seed survived the in-place rewrite; 0003/0004/0007 added Kronans, Apohem
+    and Rusta."""
     slugs = (await db_session.execute(select(Store.slug).order_by(Store.slug))).scalars().all()
-    assert list(slugs) == ["apohem", "apotea", "doz", "ica", "kronans", "med24", "willys"]
+    assert list(slugs) == [
+        "apohem",
+        "apotea",
+        "doz",
+        "ica",
+        "kronans",
+        "med24",
+        "rusta",
+        "willys",
+    ]
 
 
 async def test_migration_seeded_the_store_schedules(db_session: AsyncSession) -> None:
@@ -135,7 +145,7 @@ async def test_migration_seeded_the_store_schedules(db_session: AsyncSession) ->
     by_slug = {slug: (weekdays, freq) for slug, weekdays, freq in rows}
     assert by_slug["ica"] == ([0], 72)
     assert by_slug["willys"] == ([0, 4], 72)
-    for slug in ("apotea", "med24", "doz", "kronans", "apohem"):
+    for slug in ("apotea", "med24", "doz", "kronans", "apohem", "rusta"):
         assert by_slug[slug] == (None, 72)
 
 

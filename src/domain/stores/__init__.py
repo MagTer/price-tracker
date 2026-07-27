@@ -11,6 +11,7 @@ def get_store_hints() -> dict[str, str]:
         "doz": DOZ_HINTS,
         "kronans": KRONANS_HINTS,
         "apohem": APOHEM_HINTS,
+        "rusta": RUSTA_HINTS,
     }
 
 
@@ -77,6 +78,17 @@ Kronans Apotek (pharmacy) uses these patterns:
 - "Finns i webblager" for in stock; "Tillfalligt slut" for out of stock
 - "Klubbpris" for member/loyalty prices
 - Prescription items marked "Receptbelagt"
+"""
+
+RUSTA_HINTS = """
+Rusta (retail chain) uses these patterns:
+- Regular price shown as "X kr" or "X:-"
+- On sale the regular price shows as "Ordinarie pris X kr" and "(X:-)" beside the
+  campaign price - the LARGER value is the ordinarie, the smaller is what you pay
+- Comparison price shown as "Jamforpris X kr /liter" (or /kg, /st)
+- Club Rusta member prices marked "Club Rusta"
+- Some items are sold in-store only ("Kop i varuhus") but still show a price
+- Stock wording: "Finns i lager", "Slut i lager"
 """
 
 DOZ_HINTS = """

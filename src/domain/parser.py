@@ -13,6 +13,7 @@ import httpx
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.base import PriceExtractor
 from domain.extractors.jsonld import JsonLdExtractor
+from domain.extractors.rusta import RustaExtractor
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
 from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
@@ -141,10 +142,22 @@ def _build_metadata_context(html_content: str, fallback_text: str, *, budget: in
 # store with a real API is read the same way everywhere. One definition; do not make a second.
 _API_EXTRACTORS: dict[str, WillysApiExtractor] = {"willys": WillysApiExtractor()}
 
+# THE registry of store-HTML extractors — stores whose PAGE embeds richer structured state
+# than their JSON-LD (Rusta: the ordinarie at a rea and the printed jämförpris live only in
+# window.CURRENT_PAGE). Same sharing contract as _API_EXTRACTORS, one tier further down the
+# ladder: these parse the already-fetched page and never make an HTTP call of their own,
+# which is why they need no ledger slot and can never raise StoreBlockedError.
+_HTML_EXTRACTORS: dict[str, RustaExtractor] = {"rusta": RustaExtractor()}
+
 
 def get_api_extractor(store_slug: str) -> WillysApiExtractor | None:
     """The store-API extractor for this slug, or None if the store has no structured API."""
     return _API_EXTRACTORS.get(store_slug)
+
+
+def get_html_extractor(store_slug: str) -> RustaExtractor | None:
+    """The store-HTML extractor for this slug, or None if generic JSON-LD is the best tier."""
+    return _HTML_EXTRACTORS.get(store_slug)
 
 
 class PriceParser:
@@ -175,10 +188,11 @@ class PriceParser:
     def __init__(self) -> None:
         self._store_hints: dict[str, str] = {}
         self._load_store_hints()
-        # A working COPY of the shared registry: the module-level dict stays the one canonical
-        # list (get_api_extractor reads it), while a test swapping in a mock on an instance
-        # cannot leak into every other consumer.
+        # A working COPY of the shared registries: the module-level dicts stay the one
+        # canonical list (get_api_extractor/get_html_extractor read them), while a test
+        # swapping in a mock on an instance cannot leak into every other consumer.
         self._api_extractors: dict[str, PriceExtractor] = dict(_API_EXTRACTORS)
+        self._html_extractors: dict[str, RustaExtractor] = dict(_HTML_EXTRACTORS)
         self._jsonld_extractor = JsonLdExtractor()
 
     def _load_store_hints(self) -> None:
@@ -195,7 +209,7 @@ class PriceParser:
         store_url: str | None = None,
         html_content: str | None = None,
     ) -> PriceExtractionResult:
-        """Extract price data: store API first, then JSON-LD, then LLM cascade."""
+        """Extract price data: store API, then store page-state, then JSON-LD, then LLM."""
 
         # API-first: try structured extractor if available
         if store_url and store_slug in self._api_extractors:
@@ -229,7 +243,36 @@ class PriceParser:
                     extra={"store": store_slug},
                 )
 
-        # JSON-LD second: exact structured data from the already-fetched page
+        # Store-HTML tier: a store whose page embeds richer structured state than its
+        # JSON-LD. For Rusta this tier is what keeps a rea honest — the JSON-LD carries only
+        # the current price, so falling through would record the campaign price as ordinarie.
+        if html_content and store_url and store_slug in self._html_extractors:
+            try:
+                page_result = self._html_extractors[store_slug].extract_from_html(
+                    html_content, store_url, product_name
+                )
+                if page_result is not None:
+                    logger.info(
+                        "Price extracted via page state",
+                        extra={
+                            "method": "page_state",
+                            "store": store_slug,
+                            "product": product_name,
+                        },
+                    )
+                    return page_result
+                logger.debug(
+                    "Page-state extractor returned None, falling back to JSON-LD",
+                    extra={"store": store_slug},
+                )
+            except Exception as e:
+                logger.warning(
+                    "Page-state extractor failed, falling back to JSON-LD: %s",
+                    e,
+                    extra={"store": store_slug},
+                )
+
+        # JSON-LD next: exact structured data from the already-fetched page
         if html_content:
             try:
                 jsonld_result = self._jsonld_extractor.extract_from_html(html_content, product_name)
