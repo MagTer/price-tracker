@@ -409,6 +409,28 @@ class TestPriceParser:
             assert result.confidence == 0.8
 
     @pytest.mark.asyncio
+    async def test_extract_with_model_drops_an_inverted_offer(self) -> None:
+        """A pure-LLM extraction (no JSON-LD on the page) can invert the offer directly —
+        same "2 för 130 kr" misreading the enrichment guard exists for."""
+        parser = PriceParser()
+        data = {
+            "price": 69.46,
+            "offer_price": 130.00,
+            "offer_type": "kampanj",
+            "offer_details": "2 för 130 kr",
+            "in_stock": True,
+            "confidence": 0.9,
+        }
+
+        with patch.object(parser, "_call_model_json", new_callable=AsyncMock, return_value=data):
+            result = await parser._extract_with_model("prompt", "deepseek/deepseek-v4-flash")
+
+        assert result.price_sek == Decimal("69.46")
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+        assert result.offer_details is None
+
+    @pytest.mark.asyncio
     async def test_extract_price_uses_primary_model_first(self) -> None:
         """Test that extract_price tries price_tracker model first."""
         parser = PriceParser()
@@ -958,6 +980,50 @@ class TestEnrichWithLlm:
         # base is NOT mutated
         assert base.offer_price_sek is None
         assert base.raw_response.get("enriched") is None
+
+    @pytest.mark.asyncio
+    async def test_an_inverted_offer_is_refused_wholesale(self) -> None:
+        """The prod shape (2026-07-27): base price 69.46, LLM read "2 för 130 kr" and
+        offered the BUNDLE price 130. An offer is what you PAY — lower than price_sek by
+        definition — and coalesce(offer, price) means an inverted offer silently re-prices
+        the link in every ranking and watch. Type and details fall with it: they describe
+        the offer just rejected."""
+        parser = PriceParser()
+        base = _jsonld_base(price="69.46")
+        llm = _llm_result(
+            confidence=0.9,
+            offer_price_sek=Decimal("130.00"),
+            offer_type="kampanj",
+            offer_details="2 för 130 kr",
+            store_unit_price_sek=Decimal("154.36"),
+        )
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Bryggkaffe"
+            )
+
+        assert enriched.offer_price_sek is None
+        assert enriched.offer_type is None
+        assert enriched.offer_details is None
+        # The rest of the enrichment still lands — only the offer claim was bogus.
+        assert enriched.store_unit_price_sek == Decimal("154.36")
+
+    @pytest.mark.asyncio
+    async def test_an_offer_equal_to_the_price_is_no_offer(self) -> None:
+        parser = PriceParser()
+        base = _jsonld_base(price="69.46")
+        llm = _llm_result(confidence=0.9, offer_price_sek=Decimal("69.46"), offer_type="kampanj")
+
+        with patch.object(parser, "_extract_with_model", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = llm
+            enriched = await parser.enrich_with_llm(
+                base, text_content="page", store_slug="ica", product_name="Bryggkaffe"
+            )
+
+        assert enriched.offer_price_sek is None
+        assert enriched.offer_type is None
 
     @pytest.mark.asyncio
     async def test_base_fields_survive_when_already_set(self) -> None:

@@ -472,6 +472,27 @@ class PriceParser:
             if getattr(base, field) is None and getattr(result, field) is not None
         }
 
+        # An offer is what you PAY during a campaign — LOWER than price_sek by definition
+        # (the invariant the whole campaign model rests on). An LLM reading a multi-buy
+        # happily reports the BUNDLE price as the offer (prod 2026-07-27: base price 69.46,
+        # enriched offer 130.00 from "2 för 130 kr"), and since rankings and watches run on
+        # effective_price = coalesce(offer, price), an inverted offer silently re-prices
+        # the link. Refuse the WHOLE offer claim — type and details describe the offer
+        # just rejected, so keeping them would label a non-offer as "kampanj".
+        offer_candidate = updates.get("offer_price_sek")
+        if offer_candidate is not None and (
+            base.price_sek is None or offer_candidate >= base.price_sek
+        ):
+            logger.warning(
+                "Enrichment suggested offer %s against price %s - an offer must be lower "
+                "than the price; dropping the offer fields",
+                offer_candidate,
+                base.price_sek,
+                extra={"product": product_name, "store": store_slug},
+            )
+            for field in ("offer_price_sek", "offer_type", "offer_details"):
+                updates.pop(field, None)
+
         # Keep the base raw_response (its "source" stays truthful — an enriched
         # JSON-LD check still counts as jsonld in the scheduler stats) and mark
         # the enrichment on top.
@@ -661,12 +682,29 @@ Only output the JSON object, no explanation or markdown."""
             str(data["package_unit"]).strip().lower() if data.get("package_unit") else None
         )
 
+        # Same invariant as the enrichment merge: an offer is lower than the price, full
+        # stop. A model that read "2 för 130 kr" puts the bundle price here, and a pure-LLM
+        # extraction (no JSON-LD on the page) would then record the inversion directly.
+        offer_price = _to_decimal(data.get("offer_price"))
+        offer_type = data.get("offer_type")
+        offer_details = data.get("offer_details")
+        if offer_price is not None and (price is None or offer_price >= price):
+            logger.warning(
+                "Model offered %s against price %s - an offer must be lower than the "
+                "price; dropping the offer fields",
+                offer_price,
+                price,
+            )
+            offer_price = None
+            offer_type = None
+            offer_details = None
+
         return PriceExtractionResult(
             price_sek=price,
             store_unit_price_sek=store_unit_price,
-            offer_price_sek=_to_decimal(data.get("offer_price")),
-            offer_type=data.get("offer_type"),
-            offer_details=data.get("offer_details"),
+            offer_price_sek=offer_price,
+            offer_type=offer_type,
+            offer_details=offer_details,
             in_stock=data.get("in_stock", True),
             confidence=float(data.get("confidence", 0.5)),
             pack_size=pack_size,
