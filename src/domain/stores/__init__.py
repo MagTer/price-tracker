@@ -12,6 +12,7 @@ def get_store_hints() -> dict[str, str]:
         "kronans": KRONANS_HINTS,
         "apohem": APOHEM_HINTS,
         "rusta": RUSTA_HINTS,
+        "clasohlson": CLASOHLSON_HINTS,
     }
 
 
@@ -89,6 +90,18 @@ Rusta (retail chain) uses these patterns:
 - Club Rusta member prices marked "Club Rusta"
 - Some items are sold in-store only ("Kop i varuhus") but still show a price
 - Stock wording: "Finns i lager", "Slut i lager"
+"""
+
+CLASOHLSON_HINTS = """
+Clas Ohlson (retail chain) uses these patterns:
+- Regular price shown as "X kr" or "179,90" (comma decimals, non-breaking-space
+  thousands separator: "1 290,00")
+- On sale BOTH prices show side by side - the struck-through larger value is the
+  ordinarie, the smaller is what you pay now
+- Comparison price in parentheses right after the price: "(1,91/st)" or "(X/l)"
+- Club Clas member prices marked "Klubbpris"
+- "Artikelnr: XX-XXXX" identifies the product
+- Out of stock: "Slut i onlinelagret" / "Ej i lager"
 """
 
 DOZ_HINTS = """
