@@ -459,7 +459,12 @@
                     <input type="number" id="edit-frequency" value="72" min="72" max="240" class="form-input">
                 </div>
             </div>
+            <!-- Same shape as the product dialog: the destructive action sits with the fields
+                 it destroys, far left of Spara. It was "Avlänka" on the row — jargon, not
+                 Swedish, and a third button on every link row for something done twice a year. -->
             <div class="form-actions">
+                <button type="button" class="btn btn-danger admin-only" id="edit-pkg-delete"
+                        onclick="deleteLinkFromDialog()">Radera länk</button>
                 <button type="submit" class="btn btn-primary">Spara</button>
                 <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Avbryt</button>
             </div>
@@ -2297,7 +2302,6 @@ function buildLinksTable(rows, unit) {
             ${IS_ADMIN ? `<td>
                 <button class="action-btn" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">Redigera</button>
                 <button class="action-btn" data-link-action="check" data-id="${escapeHtml(r.product_store_id)}">Kontrollera nu</button>
-                <button class="action-btn" data-link-action="unlink" data-id="${escapeHtml(r.product_store_id)}">Avlänka</button>
             </td>` : ''}
         </tr>`;
     }
@@ -2453,10 +2457,21 @@ async function checkLinkNow(productStoreId) {
     }
 }
 
+// The dialog knows WHICH link is open, so the confirmation can name the butik and the
+// package instead of asking about "butikslänken" while three of them are on screen.
+function deleteLinkFromDialog() {
+    unlinkStore(document.getElementById('edit-pkg-link-id').value);
+}
+
 async function unlinkStore(productStoreId) {
-    if (!confirm('Ta bort butikslänken och dess prishistorik?')) return;
+    const link = (productLinks || []).find(l => l.product_store_id === productStoreId);
+    const what = link
+        ? [link.store_name, link.package_size].filter(Boolean).join(' ')
+        : 'butikslänken';
+    if (!confirm('Radera länken till ' + what + ' och hela dess prishistorik?')) return;
     try {
         await apiDelete('/product-stores/' + productStoreId);
+        closeModal('modal-edit-packaging');
         showToast('Länk borttagen');
         await reloadProductLinks();
         loadProducts();
@@ -2687,8 +2702,6 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
         showEditPackagingModal(id);
     } else if (action === 'check') {
         checkLinkNow(id);
-    } else if (action === 'unlink') {
-        unlinkStore(id);
     }
 });
 
