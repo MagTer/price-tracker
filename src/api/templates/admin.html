@@ -464,7 +464,7 @@
                  Swedish, and a third button on every link row for something done twice a year. -->
             <div class="form-actions">
                 <button type="button" class="btn btn-danger admin-only" id="edit-pkg-delete"
-                        onclick="deleteLinkFromDialog()">Radera länk</button>
+                        onclick="deleteLinkFromDialog()">Ta bort länk</button>
                 <button type="submit" class="btn btn-primary">Spara</button>
                 <button type="button" class="btn" onclick="closeModal('modal-edit-packaging')">Avbryt</button>
             </div>
@@ -2468,7 +2468,7 @@ async function unlinkStore(productStoreId) {
     const what = link
         ? [link.store_name, link.package_size].filter(Boolean).join(' ')
         : 'butikslänken';
-    if (!confirm('Radera länken till ' + what + ' och hela dess prishistorik?')) return;
+    if (!confirm('Ta bort länken till ' + what + ' och hela dess prishistorik?')) return;
     try {
         await apiDelete('/product-stores/' + productStoreId);
         closeModal('modal-edit-packaging');
