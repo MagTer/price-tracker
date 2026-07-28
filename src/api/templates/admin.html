@@ -26,7 +26,6 @@
     <div class="card-header">
         <div class="card-title">Produkter</div>
         <div class="header-actions">
-            <input type="text" id="product-search" placeholder="Sök produkter…" class="search-input">
             <!-- ONE primary button. Snabbtillägg is the 95 % path; two blue buttons side by
                  side mean neither is the primary one. The manual form and the backup plumbing
                  are real but rare, so they live behind the overflow instead of competing with
@@ -42,6 +41,29 @@
                 </div>
             </details>
         </div>
+    </div>
+    <!-- Filters, on their own row because five controls in the card header would push the
+         primary button off the line. Every one of them is answered from the list already in
+         memory — no round trip, no debounce. The <select>s are FILLED FROM THE DATA (only
+         categories and butiker that actually occur), so there is no second copy of the
+         taxonomy here; the canonical order is read back off the injected category <select>. -->
+    <div class="filter-bar">
+        <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
+        <select id="filter-category" class="search-input"></select>
+        <select id="filter-store" class="search-input"></select>
+        <select id="filter-status" class="search-input">
+            <option value="">Alla produkter</option>
+            <option value="offer">Har erbjudande</option>
+            <option value="needs_amount">Saknar mängd</option>
+            <option value="no_price">Saknar pris</option>
+        </select>
+        <select id="product-sort" class="search-input">
+            <option value="name">Sortera: namn</option>
+            <option value="aisle">Sortera: butiksordning</option>
+        </select>
+        <button type="button" class="btn btn-sm" id="filter-clear" onclick="clearProductFilters()">Rensa</button>
+        <!-- A filter that hides rows must say how many, always. -->
+        <span class="result-count" id="product-count"></span>
     </div>
     <div id="products-table-container">
         <div class="loading">Laddar produkter…</div>
@@ -742,6 +764,28 @@ th.sortable-col:hover {
     color: var(--warning);
     font-weight: 600;
 }
+/* --- The product filter row. Wraps rather than compressing: on the phone these become two
+   or three lines of full-width controls, which is the right shape for a thumb. --- */
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.filter-bar .search-input { min-width: 150px; }
+/* Left-flowing, right after the controls that changed it — feedback belongs next to the knob.
+   Pushed to the right edge it would also sit under the card header's open overflow menu. */
+.result-count {
+    margin-left: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+@media (max-width: 768px) {
+    .filter-bar .search-input { flex: 1 1 140px; min-width: 0; }
+}
+
 /* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers the
    keyboard). Deliberately NOT used inside the product table: #products-table-container is an
    overflow-x container, which computes overflow-y to auto and would clip a dropdown on the
@@ -1020,9 +1064,12 @@ function buildBestPriceCell(product, links) {
          + `<div class="best-link">${escapeHtml(cheapest.store_name)} &#183; jfr-pris saknas</div>`;
 }
 
-function buildProductsTable(products) {
+function buildProductsTable(products, filtered) {
     if (!products.length) {
-        return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
+        return filtered
+            ? '<div class="empty-state"><div class="empty-state-icon">&#128269;</div>'
+              + '<p>Ingen produkt matchar filtret.</p></div>'
+            : '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
     // The ROW is the primary action: it opens Länkar, the panel this whole table exists to
     // lead into. Five buttons per row (Länkar / Länka / Historik / Redigera / Ta bort) meant
@@ -1054,12 +1101,159 @@ function buildProductsTable(products) {
     return html;
 }
 
+// --- Product filtering, in the browser ---
+//
+// The whole list is already in memory and it is small. Filtering it over the wire bought a
+// round trip per keystroke, a 250 ms debounce and a flash of "Laddar…" — and it made
+// allProducts mean "the products matching the current search", which quietly narrowed the
+// product <select> in the watch dialog to whatever the table happened to be filtered to.
+// allProducts is now always the full list; the filter lives between it and the render.
+// The server keeps its ?search= param: the REST API and MCP still use it.
+const PRODUCT_FILTER_STORAGE = 'pt.product-filters';
+const PRODUCT_FILTER_CONTROLS = [
+    ['product-search', 'search'],
+    ['filter-category', 'category'],
+    ['filter-store', 'store'],
+    ['filter-status', 'status'],
+    ['product-sort', 'sort']
+];
+const PRODUCT_FILTER_KEYS = PRODUCT_FILTER_CONTROLS.map(c => c[1]);
+const EMPTY_PRODUCT_FILTERS = { search: '', category: '', store: '', status: '', sort: 'name' };
+let productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS);
+
+// The canonical category order — the walk order through the shop — read back off a <select>
+// the server injected from domain.categories. THE list stays in one place (Python); this is a
+// view of it, not a copy.
+function categoryOrder() {
+    return Array.from(document.querySelectorAll('#edit-product-category option'))
+        .map(o => o.value)
+        .filter(Boolean);
+}
+
+function productFiltersActive() {
+    return PRODUCT_FILTER_KEYS.some(k => productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]);
+}
+
+function productMatchesFilters(p) {
+    const f = productFilters;
+    if (f.search) {
+        // Every word must appear somewhere, in any order: "lambi hushåll" finds it whether
+        // the brand sits in the name or in the brand column.
+        const hay = [p.name, p.brand, p.category].filter(Boolean).join(' ').toLowerCase();
+        const words = f.search.toLowerCase().split(/\s+/).filter(Boolean);
+        if (!words.every(w => hay.includes(w))) return false;
+    }
+    if (f.category && (p.category || '') !== f.category) return false;
+    const links = p.stores || [];
+    if (f.store && !links.some(s => s.store_name === f.store)) return false;
+    // The three status filters are the three ways a product needs attention — the "saknar
+    // mängd" badge already counts one of them; this is how you work through them in a batch.
+    if (f.status === 'offer' && !links.some(s => s.offer_price_sek != null)) return false;
+    if (f.status === 'needs_amount' && !links.some(s => s.needs_amount === true)) return false;
+    if (f.status === 'no_price' && links.some(s => effectivePrice(s) != null)) return false;
+    return true;
+}
+
+function sortProducts(rows) {
+    const byName = (a, b) => String(a.name).localeCompare(String(b.name), 'sv');
+    if (productFilters.sort !== 'aisle') return rows.slice().sort(byName);
+    // Butiksordning: the taxonomy IS the order you walk the shop in, which is the whole point
+    // of it being ordered (domain/categories.py). Uncategorised sorts LAST — it is the pile
+    // you have not placed yet, not the first aisle.
+    const order = categoryOrder();
+    const idx = p => {
+        const i = order.indexOf(p.category || '');
+        return i === -1 ? order.length : i;
+    };
+    return rows.slice().sort((a, b) => (idx(a) - idx(b)) || byName(a, b));
+}
+
+// Facet options come from the DATA, so a category nobody uses is never offered — and picking
+// one can never produce an empty table by itself.
+function fillFacet(id, key, allLabel, values) {
+    const el = document.getElementById(id);
+    const wanted = productFilters[key];
+    el.innerHTML = `<option value="">${escapeHtml(allLabel)}</option>`
+        + values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+    el.value = wanted;
+    // The stored value no longer exists (product deleted, link removed): drop the filter
+    // rather than leaving a <select> showing "Alla" while still filtering on it.
+    if (el.value !== wanted) productFilters[key] = '';
+}
+
+function buildFacetOptions() {
+    const order = categoryOrder();
+    const categories = Array.from(new Set(allProducts.map(p => p.category).filter(Boolean)))
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    const stores = Array.from(new Set(
+        allProducts.flatMap(p => (p.stores || []).map(s => s.store_name)).filter(Boolean)
+    )).sort((a, b) => String(a).localeCompare(String(b), 'sv'));
+    fillFacet('filter-category', 'category', 'Alla kategorier', categories);
+    fillFacet('filter-store', 'store', 'Alla butiker', stores);
+}
+
+function renderProducts() {
+    const active = productFiltersActive();
+    const rows = sortProducts(allProducts.filter(productMatchesFilters));
+    document.getElementById('products-table-container').innerHTML = buildProductsTable(rows, active);
+    const count = document.getElementById('product-count');
+    count.textContent = rows.length === allProducts.length
+        ? allProducts.length + ' produkter'
+        : rows.length + ' av ' + allProducts.length + ' produkter';
+    document.getElementById('filter-clear').style.display = active ? '' : 'none';
+}
+
+function setProductFilter(key, value) {
+    productFilters[key] = value;
+    saveProductFilters();
+    renderProducts();
+}
+
+function clearProductFilters() {
+    productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS);
+    saveProductFilters();
+    applyFiltersToControls();
+    renderProducts();
+}
+
+// Survives a reload and the back button without touching the hash router (which parses the
+// whole fragment as a page name). sessionStorage, not local: a filter is a working state for
+// this sitting, not a preference.
+function saveProductFilters() {
+    try {
+        sessionStorage.setItem(PRODUCT_FILTER_STORAGE, JSON.stringify(productFilters));
+    } catch (e) { /* private mode / storage full — filtering still works, it just won't stick */ }
+}
+
+function restoreProductFilters() {
+    try {
+        const raw = sessionStorage.getItem(PRODUCT_FILTER_STORAGE);
+        if (raw) {
+            const saved = JSON.parse(raw);
+            for (const key of PRODUCT_FILTER_KEYS) {
+                if (typeof saved[key] === 'string') productFilters[key] = saved[key];
+            }
+        }
+    } catch (e) { productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS); }
+    // State only. The facet <select>s have no options until the products land, and writing a
+    // restored value into an empty <select> would silently reset it to "Alla" — loadProducts
+    // syncs every control once the options exist.
+}
+
+function applyFiltersToControls() {
+    for (const [id, key] of PRODUCT_FILTER_CONTROLS) {
+        const el = document.getElementById(id);
+        el.value = productFilters[key];
+        if (el.value !== productFilters[key]) productFilters[key] = el.value;
+    }
+}
+
 async function loadProducts() {
     try {
-        const search = document.getElementById('product-search').value;
-        const url = search ? `/products?search=${encodeURIComponent(search)}` : '/products';
-        allProducts = await apiGet(url);
-        document.getElementById('products-table-container').innerHTML = buildProductsTable(allProducts);
+        allProducts = await apiGet('/products');
+        buildFacetOptions();
+        applyFiltersToControls();
+        renderProducts();
     } catch (e) {
         document.getElementById('products-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda produkter.</p></div>';
     }
@@ -1171,13 +1365,15 @@ function buildDealRow(d) {
     const jfr = d.unit_price_sek != null
         ? '<div class="best-link">' + escapeHtml(d.unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit)) + '</div>'
         : '';
+    // formatSek, not the raw number: a 13.9 next to a 13.90 kr/liter reads as a different,
+    // truncated price. Money is always to the öre in this app.
     const ord = d.price_sek != null
-        ? '<div class="best-link">ord. ' + escapeHtml(String(d.price_sek)) + ' kr</div>'
+        ? '<div class="best-link">ord. ' + escapeHtml(formatSek(d.price_sek)) + ' kr</div>'
         : '';
     return `<tr>
         <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}</td>
         <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
-        <td><span class="price-good">${d.offer_price_sek} kr</span>${jfr}${ord}</td>
+        <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${jfr}${ord}</td>
         <td>${dealComparisonCell(d)}</td>
         <td><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
         <td>${dealSeenCell(d)}</td>
@@ -2401,12 +2597,14 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
-// Search debounce
-let searchTimeout;
-document.getElementById('product-search').addEventListener('input', () => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(loadProducts, 250);
-});
+// Filters re-render from memory, so they fire on every keystroke — no debounce to tune and
+// no request to wait for. 'input' on the text box, 'change' on the selects.
+for (const [id, key] of PRODUCT_FILTER_CONTROLS) {
+    const el = document.getElementById(id);
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', (e) => {
+        setProductFilter(key, e.target.value);
+    });
+}
 
 // <details> menus open themselves; nothing closes them. Two lines here do both cases a user
 // expects: picking an item, and clicking anywhere else.
@@ -2515,6 +2713,7 @@ window.addEventListener('hashchange', renderPage);
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
     renderPage();
+    restoreProductFilters();
     await loadStores();
     loadProducts();
     loadDeals();
