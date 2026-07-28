@@ -1,3 +1,5 @@
+from infra.check_log import CheckAttemptLog
+from infra.db import async_session_factory
 from infra.email import ResendEmailService
 from infra.fetcher import WebFetcher
 from infra.rate_limiter import StoreRateLimiter
@@ -7,6 +9,7 @@ _fetcher_instance: WebFetcher | None = None
 _email_service_instance: ResendEmailService | None = None
 _rate_limiter_instance: StoreRateLimiter | None = None
 _block_registry_instance: StoreBlockRegistry | None = None
+_check_log_instance: CheckAttemptLog | None = None
 
 
 def get_fetcher() -> WebFetcher:
@@ -39,6 +42,19 @@ def get_block_registry() -> StoreBlockRegistry:
     if _block_registry_instance is None:
         _block_registry_instance = StoreBlockRegistry()
     return _block_registry_instance
+
+
+def get_check_log() -> CheckAttemptLog:
+    """THE durable record of outgoing checks, shared by the scheduler and every interactive path.
+
+    Its own session factory, not the request's session: the endpoints raise on a failed or
+    blocked check before they commit, and a row in that transaction dies with it — losing
+    exactly the attempts worth recording.
+    """
+    global _check_log_instance
+    if _check_log_instance is None:
+        _check_log_instance = CheckAttemptLog(async_session_factory)
+    return _check_log_instance
 
 
 def get_email_service() -> ResendEmailService:

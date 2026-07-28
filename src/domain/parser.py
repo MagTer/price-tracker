@@ -670,6 +670,14 @@ Only output the JSON object, no explanation or markdown."""
         """Extract using specified model via OpenRouter."""
         data = await self._call_model_json(prompt, model)
 
+        # Stamp WHICH model answered, in the same raw_response["source"] slot every structured
+        # extractor already uses (extraction_source is its one reader). The LLM path was the
+        # only tier that left it unset, so it could be identified solely by elimination — and
+        # "which model" is exactly what makes the cascade's cost readable afterwards. The key
+        # is ours, not the model's: it is set after the response is parsed, never asked for.
+        if isinstance(data, dict):
+            data["source"] = f"llm:{model}"
+
         # Extract values. The unit price is REPORTED, never synthesized: this field carries
         # only what the store printed (D-05), so a page/store mismatch stays detectable
         # instead of being papered over by our own arithmetic. When the page prints nothing

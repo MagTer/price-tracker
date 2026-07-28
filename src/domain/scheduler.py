@@ -21,7 +21,14 @@ from domain.models import (
 from domain.notifier import PriceNotifier
 from domain.parser import PriceExtractionResult, PriceParser
 from domain.pricing import unit_price_py
-from domain.protocols import IBlockRegistry, IEmailService, IFetcher, IRateLimiter
+from domain.protocols import (
+    IBlockRegistry,
+    ICheckAttemptLog,
+    IEmailService,
+    IFetcher,
+    IRateLimiter,
+)
+from domain.result import extraction_source
 from domain.schedule import effective_schedule, next_check_time
 from domain.service import PriceCheckOutcome, perform_price_check
 
@@ -46,6 +53,7 @@ class PriceCheckScheduler:
         email_service: IEmailService | None = None,
         rate_limiter: IRateLimiter | None = None,
         block_registry: IBlockRegistry | None = None,
+        attempt_log: ICheckAttemptLog | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.fetcher = fetcher
@@ -66,6 +74,10 @@ class PriceCheckScheduler:
 
             block_registry = StoreBlockRegistry()
         self.block_registry = block_registry
+        # THE durable per-check record (check_attempts). None in tests = recording off; app.py
+        # passes the process-wide instance. Nothing here depends on it, by design: telemetry
+        # must never be able to stop a check.
+        self.attempt_log = attempt_log
         # Create notifier wrapper if email service is provided
         self.notifier: PriceNotifier | None = None
         if email_service is not None:
@@ -82,6 +94,7 @@ class PriceCheckScheduler:
             "checks_success": 0,
             "checks_failed": 0,
             "checks_api": 0,
+            "checks_page_state": 0,
             "checks_jsonld": 0,
             "checks_llm": 0,
             "alerts_sent": 0,
@@ -332,6 +345,8 @@ class PriceCheckScheduler:
             session=session,
             fetcher=self.fetcher,
             parser=self.parser,
+            attempt_log=self.attempt_log,
+            attempt_source="scheduler",
         )
 
         if outcome.failure_reason == "fetch_failed":
@@ -364,11 +379,18 @@ class PriceCheckScheduler:
 
         # Track extraction source (API/JSON-LD vs LLM). An ENRICHED jsonld check
         # still counts as jsonld — enrichment keeps raw_response["source"] intact.
+        #
+        # The store-HTML tier gets its OWN counter: "rusta_page"/"clasohlson_page" used to fall
+        # through to the else and count as LLM checks, so every Rusta and Clas Ohlson check
+        # inflated the one number anybody reads to judge what the cascade costs — while those
+        # tiers call no model at all. These counters are per-process bookkeeping; the durable
+        # per-check record is the check_attempts table.
         extraction = outcome.extraction
-        raw = extraction.raw_response or {}
-        source = raw.get("source") if isinstance(raw, dict) else None
+        source = extraction_source(extraction)
         if source == "willys_api":
             self._stats["checks_api"] += 1
+        elif source.endswith("_page"):
+            self._stats["checks_page_state"] += 1
         elif source == "jsonld":
             self._stats["checks_jsonld"] += 1
         else:

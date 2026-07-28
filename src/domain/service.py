@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,8 +23,8 @@ from domain.pricing import (
     unit_price_expr,
     unit_price_py,
 )
-from domain.protocols import IFetcher
-from domain.result import PriceExtractionResult, StoreBlockedError
+from domain.protocols import ICheckAttemptLog, IFetcher
+from domain.result import PriceExtractionResult, StoreBlockedError, extraction_source
 from domain.schedule import effective_schedule, is_inherited
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,16 @@ class PriceCheckOutcome:
     blocked: bool = False
 
 
+def _attempt_outcome(outcome: PriceCheckOutcome) -> str:
+    """The check_attempts vocabulary for one outcome. Blocked outranks everything: it is the
+    store's state, and it is the reason a failure is not this link's fault."""
+    if outcome.blocked:
+        return "blocked"
+    if outcome.success:
+        return "ok"
+    return outcome.failure_reason or "error"
+
+
 async def perform_price_check(
     *,
     product_store: ProductStore,
@@ -86,6 +97,8 @@ async def perform_price_check(
     session: AsyncSession,
     fetcher: IFetcher,
     parser: PriceParser,
+    attempt_log: ICheckAttemptLog | None = None,
+    attempt_source: str = "unknown",
 ) -> PriceCheckOutcome:
     """THE fetch → extract → enrich → apply-scrape → record flow, exactly once.
 
@@ -93,7 +106,67 @@ async def perform_price_check(
     copy (service.check_price) is deleted. Does NOT commit: the caller owns the
     transaction (the scheduler batches per-item sessions, the endpoint uses the request
     session).
+
+    Wraps the flow so that EVERY outcome lands in ``check_attempts`` from one place. Doing it
+    per caller would leave the hole this table exists to close: a failure writes no price
+    point and (when blocked) does not even touch ``last_checked_at``, so a caller that forgets
+    produces silence that looks exactly like "nothing was due". ``attempt_log`` defaults to
+    None — recording OFF — because the several hundred existing tests call this with mock
+    sessions and no database to write to; a static gate keeps production callers honest.
+
+    An exception that escapes the flow is recorded as "error" and re-raised: the scheduler's
+    catch-all counts those, and they were otherwise the one failure with no durable trace.
     """
+    started = time.monotonic()
+    try:
+        outcome = await _run_price_check(
+            product_store=product_store,
+            product=product,
+            store=store,
+            session=session,
+            fetcher=fetcher,
+            parser=parser,
+        )
+    except Exception as e:
+        if attempt_log is not None:
+            await attempt_log.record(
+                store_id=store.id,
+                product_store_id=product_store.id,
+                outcome="error",
+                source=attempt_source,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                detail=str(e),
+            )
+        raise
+
+    if attempt_log is not None:
+        await attempt_log.record(
+            store_id=store.id,
+            product_store_id=product_store.id,
+            outcome=_attempt_outcome(outcome),
+            source=attempt_source,
+            # None rather than "unknown" when nothing was extracted at all: a fetch that never
+            # reached an extractor has no tier, and calling that "unknown" would put it in the
+            # same bucket as a tier we failed to identify.
+            extraction_source=(
+                extraction_source(outcome.extraction) if outcome.extraction is not None else None
+            ),
+            duration_ms=int((time.monotonic() - started) * 1000),
+            detail=outcome.fetch_error,
+        )
+    return outcome
+
+
+async def _run_price_check(
+    *,
+    product_store: ProductStore,
+    product: Product,
+    store: Store,
+    session: AsyncSession,
+    fetcher: IFetcher,
+    parser: PriceParser,
+) -> PriceCheckOutcome:
+    """The flow itself. Split out only so perform_price_check can record every exit once."""
     fetch_result = await fetcher.fetch(product_store.store_url)
     if not fetch_result.get("ok") or not fetch_result.get("text"):
         return PriceCheckOutcome(
@@ -135,8 +208,7 @@ async def perform_price_check(
     # the four JSON-LD stores without this. Two precise triggers keep the LLM cost
     # near zero; the API and LLM paths already carry all fields, and a discarded
     # extraction has no price.
-    raw = extraction.raw_response if isinstance(extraction.raw_response, dict) else {}
-    if extraction.price_sek is not None and raw.get("source") == "jsonld":
+    if extraction.price_sek is not None and extraction_source(extraction) == "jsonld":
         # The link's latest prior point — keyed on product_store_id, never on the
         # (product_id, store_id) pair (no longer unique; the AST gate enforces this).
         prior_stmt = (

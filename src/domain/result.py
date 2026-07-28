@@ -55,3 +55,28 @@ class PriceExtractionResult:
     package_amount: Decimal | None  # Amount of product in the package as printed (0.5, 400, 24)
     package_unit: str | None  # Unit that amount is in: "st", "ml", "l", "g", "kg"
     raw_response: dict[str, str | float | bool | None]
+
+
+def extraction_source(result: PriceExtractionResult | None) -> str:
+    """WHICH ladder tier produced this extraction — THE reader of ``raw_response["source"]``.
+
+    Every extractor stamps its own marker ("willys_api", "rusta_page", "clasohlson_page",
+    "jsonld"); the LLM path stamps "llm:<model>". The value is deliberately raw rather than
+    bucketed into a tier: which MODEL answered is what makes LLM spend readable, and grouping
+    is a display decision.
+
+    It exists because the same `isinstance(raw, dict)` dance had been written three times —
+    the scheduler's per-tier counters, the JSON-LD enrichment trigger in perform_price_check,
+    and the check log — over a loosely-typed JSONB dict where a typo returns None and simply
+    reads as "the LLM answered". One definition, like pricing and schedule.
+
+    An ENRICHED JSON-LD result still reports "jsonld": enrich_with_llm keeps the base
+    raw_response precisely so a routine enrichment cannot masquerade as an LLM extraction.
+    """
+    if result is None:
+        return "unknown"
+    raw = result.raw_response
+    if not isinstance(raw, dict):
+        return "unknown"
+    source = raw.get("source")
+    return source if isinstance(source, str) and source else "unknown"

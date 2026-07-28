@@ -17,6 +17,7 @@ from infra.db import async_session_factory, engine
 from infra.logbuffer import install as install_log_buffer
 from infra.providers import (
     get_block_registry,
+    get_check_log,
     get_email_service,
     get_fetcher,
     get_rate_limiter,
@@ -56,6 +57,10 @@ async def lifespan(app: FastAPI):
             # Share the process-wide circuit breaker too: a bot wall found by the scheduler
             # must silence the "Kolla nu" button and quick-add as well, and vice versa.
             block_registry=get_block_registry(),
+            # Durable per-check telemetry (check_attempts). The scheduler is the bulk of the
+            # traffic, so without this wiring the table would only ever hold the handful of
+            # checks a human triggered by hand.
+            attempt_log=get_check_log(),
         )
         await scheduler.start()
         app.state.scheduler = scheduler

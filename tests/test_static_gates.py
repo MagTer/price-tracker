@@ -333,6 +333,47 @@ def test_category_selects_use_the_injected_placeholder() -> None:
     )
 
 
+def _perform_price_check_calls() -> list[tuple[Path, ast.Call]]:
+    """Every `perform_price_check(...)` CALL in src/ (the definition itself is not a call)."""
+    found: list[tuple[Path, ast.Call]] = []
+    for path in SRC_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "perform_price_check"
+            ):
+                found.append((path, node))
+    return found
+
+
+def test_every_price_check_caller_records_its_attempt() -> None:
+    """A caller that omits `attempt_log` silently stops recording — and looks like idleness.
+
+    check_attempts is the ONLY durable evidence of a check that produced no price: a failure
+    writes no price point, and a blocked check does not even touch `last_checked_at`. So a
+    caller that forgets the argument does not degrade the data, it removes it — and the gap
+    reads exactly like "nothing was due", which is the misreading the table exists to prevent.
+
+    `attempt_log` defaults to None on purpose (several hundred existing tests call the flow
+    with mock sessions and no database), so the default cannot be the enforcement. This is.
+    """
+    calls = _perform_price_check_calls()
+    assert calls, "No perform_price_check call sites found — has the flow been renamed?"
+
+    missing = [
+        f"{path.relative_to(REPO_ROOT)}:{node.lineno}"
+        for path, node in calls
+        if not any(kw.arg == "attempt_log" for kw in node.keywords)
+    ]
+    assert not missing, (
+        "perform_price_check called without attempt_log at: "
+        + ", ".join(missing)
+        + " — that check would leave no trace when it fails or is blocked."
+    )
+
+
 _FILTER_CONTROLS_RE = re.compile(
     r"const PRODUCT_FILTER_CONTROLS\s*=\s*\[(.*?)\];",
     re.DOTALL,

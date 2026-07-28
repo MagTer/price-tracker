@@ -55,7 +55,12 @@ from domain.service import PriceTrackerService, perform_price_check
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
 from infra.logbuffer import get_log_buffer
-from infra.providers import get_block_registry, get_fetcher, get_rate_limiter
+from infra.providers import (
+    get_block_registry,
+    get_check_log,
+    get_fetcher,
+    get_rate_limiter,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -111,17 +116,38 @@ def _guard_store_not_blocked(store: Store) -> None:
     )
 
 
-def _record_store_outcome(store: Store, *, blocked: bool, success: bool, source: str) -> None:
+async def _record_store_outcome(
+    store: Store, *, blocked: bool, success: bool, source: str, log_attempt: bool = False
+) -> None:
     """Feed an interactive fetch's result back into the SHARED circuit breaker.
 
     Without this the breaker only ever learned about blocks the scheduler found, so a manual
     re-check that hit a wall left the scheduler poking the same store a minute later.
+
+    ``log_attempt`` additionally records the fetch in ``check_attempts``, and is for the
+    QUICK-ADD PREVIEW only: it fetches before any link exists, so it never passes through
+    perform_price_check (which records every other caller from one place) — yet it is real
+    load on the store and real WAF exposure, and leaving it out would understate what we cost
+    a store on the exact days products get added. Every other caller here must leave it False
+    or its check lands in the table twice.
     """
     registry = get_block_registry()
     if blocked:
         registry.record_block(store.id, store_name=store.name, source=source)
     elif success:
         registry.record_success(store.id, store_name=store.name)
+
+    if log_attempt:
+        # Awaited, not detached: this runs on paths that raise an HTTPException on the very
+        # next line, and a fire-and-forget task there can be garbage-collected before it runs
+        # (and in tests, outrun the fixture that owns the database). CheckAttemptLog owns its
+        # own transaction and never raises, so awaiting it cannot fail the request either.
+        await get_check_log().record(
+            store_id=store.id,
+            product_store_id=None,
+            outcome="blocked" if blocked else ("ok" if success else "fetch_failed"),
+            source=source,
+        )
 
 
 def _extend_scheduler_pause(request: Request) -> None:
@@ -621,15 +647,15 @@ async def quick_add_preview(
                 # to the page fetch below — a SECOND request at the host that just walled the
                 # first — and only that one tripped the breaker. Trip it now and answer with
                 # the same 503 + Retry-After the next click would get.
-                _record_store_outcome(
-                    store, blocked=True, success=False, source="quick-add-preview"
+                await _record_store_outcome(
+                    store, blocked=True, success=False, source="quick-add-preview", log_attempt=True
                 )
                 _guard_store_not_blocked(store)
                 raise HTTPException(status_code=502, detail=f"Kunde inte hämta sidan: {e}") from e
             if api_meta is not None:
                 # The API answered — the store is talking to us; reset the breaker's escalation.
-                _record_store_outcome(
-                    store, blocked=False, success=True, source="quick-add-preview"
+                await _record_store_outcome(
+                    store, blocked=False, success=True, source="quick-add-preview", log_attempt=True
                 )
                 name = api_meta.name
                 brand = api_meta.brand
@@ -650,19 +676,28 @@ async def quick_add_preview(
             # and walk the JSON-LD → LLM ladder.
             fetch_result = await get_fetcher().fetch(url)
             if not fetch_result.get("ok"):
-                if fetch_result.get("blocked"):
-                    # Feed the wall back into the SHARED breaker and say so in Swedish: the old
-                    # "Kunde inte hämta sidan: blocked (HTTP 202)" invited a retry, which is the
-                    # single worst response to a WAF challenge.
-                    _record_store_outcome(
-                        store, blocked=True, success=False, source="quick-add-preview"
-                    )
+                # Recorded for EVERY failure, not just a wall: a blocked fetch feeds the
+                # SHARED breaker (and says so in Swedish — the old "Kunde inte hämta sidan:
+                # blocked (HTTP 202)" invited a retry, the single worst response to a WAF
+                # challenge), while a plain 404 changes no breaker state but is still an
+                # attempt that happened. blocked=False, success=False touches neither branch.
+                blocked = bool(fetch_result.get("blocked"))
+                await _record_store_outcome(
+                    store,
+                    blocked=blocked,
+                    success=False,
+                    source="quick-add-preview",
+                    log_attempt=True,
+                )
+                if blocked:
                     _guard_store_not_blocked(store)
                 raise HTTPException(
                     status_code=502,
                     detail=f"Kunde inte hämta sidan: {fetch_result.get('error')}",
                 )
-            _record_store_outcome(store, blocked=False, success=True, source="quick-add-preview")
+            await _record_store_outcome(
+                store, blocked=False, success=True, source="quick-add-preview", log_attempt=True
+            )
 
             html = fetch_result.get("html") or ""
 
@@ -1040,11 +1075,13 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
             session=session,
             fetcher=get_fetcher(),
             parser=PriceParser(),
+            attempt_log=get_check_log(),
+            attempt_source="quick-add",
         )
         # "Reached the store" — NOT outcome.success: a page that loaded fine but had no
         # extractable price still proves the store is answering us, and must reset the
         # breaker's escalation. Only a fetch failure leaves the strike count standing.
-        _record_store_outcome(
+        await _record_store_outcome(
             store,
             blocked=outcome.blocked,
             success=outcome.failure_reason != "fetch_failed",
@@ -1673,8 +1710,10 @@ async def trigger_price_check(
             session=session,
             fetcher=get_fetcher(),
             parser=PriceParser(),
+            attempt_log=get_check_log(),
+            attempt_source="manual-check",
         )
-        _record_store_outcome(
+        await _record_store_outcome(
             store,
             blocked=outcome.blocked,
             success=outcome.failure_reason != "fetch_failed",

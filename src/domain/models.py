@@ -242,6 +242,56 @@ class PricePoint(Base):
         )
 
 
+class CheckAttempt(Base):
+    """One row per outgoing price check — including the ones that produced no price.
+
+    WHY a second table when price_points already records every successful check: a failure
+    writes nothing. A blocked check does not even set ``last_checked_at`` (v0.29.2), because a
+    wall is not an observation. So the database has always held a record of what the stores
+    said and NO record of what they refused to say — the only trace of a bot wall was a WARNING
+    in the in-memory ring buffer, which resets on restart. Reliability per store ("ICA answered
+    87 % of the time in July") is therefore unanswerable from data we already have, and it is
+    the one kind of data that cannot be backfilled: every day without this table is a day of
+    evidence permanently lost.
+
+    ONE ROW PER CHECK, not per HTTP request. A Willys check makes two requests (the page fetch
+    and the REST call); what is being measured is "did we get a price", so it is one attempt.
+
+    A SKIP IS NOT AN ATTEMPT. When the breaker is open the scheduler defers a store's due links
+    without fetching; writing a row per deferral would measure the schedule rather than the
+    stores. The block rows plus the breaker's escalating cooldown already say what it cost.
+
+    ``product_store_id`` is nullable because the quick-add PREVIEW fetches a page before any
+    link exists, and that fetch is real load and real WAF exposure. It is also ON DELETE SET
+    NULL: removing a link must not fail on an audit row, and the store-level reliability
+    history is worth more than the association it loses.
+    """
+
+    __tablename__ = "check_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stores.id"), index=True)
+    product_store_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("product_stores.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    checked_at: Mapped[datetime] = mapped_column(DateTime, index=True, default=_utc_now)
+    # "ok" | "no_price" | "fetch_failed" | "blocked" | "error" — the PriceCheckOutcome states,
+    # plus "error" for an exception that never produced an outcome at all.
+    outcome: Mapped[str] = mapped_column(String(20), index=True)
+    # Who ran it: "scheduler" | "manual-check" | "quick-add" | "quick-add-preview". The
+    # scheduler's cadence and a human mashing "Kolla nu" are different kinds of load.
+    source: Mapped[str] = mapped_column(String(30))
+    # Which ladder tier answered, verbatim from the extraction's raw_response["source"]:
+    # "willys_api" | "rusta_page" | "clasohlson_page" | "jsonld" | "llm:<model>" | "unknown".
+    # Stored raw rather than bucketed — which MODEL answered is what makes LLM cost readable,
+    # and grouping into tiers is a display decision that can change without losing data.
+    extraction_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The failure text, truncated. Carries the HTTP status on a wall ("HTTP 405"), which is
+    # what distinguishes ICA's challenge shapes from each other.
+    detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class PriceWatch(Base):
     """User's price watch configuration for a product.
 
