@@ -52,6 +52,7 @@ from domain.quickadd import (
 from domain.result import StoreBlockedError
 from domain.schedule import effective_schedule, is_inherited, next_check_time
 from domain.service import PriceTrackerService, perform_price_check
+from domain.stats import build_statistics
 from domain.tenant import DEFAULT_TENANT_ID
 from infra.db import async_session_factory
 from infra.logbuffer import get_log_buffer
@@ -2781,6 +2782,34 @@ async def scheduler_status(
     return status
 
 
+@router.get("/stats")
+async def get_statistics(
+    weeks: int = 0,
+    session: AsyncSession = Depends(get_db),
+    admin_email: str = Depends(require_auth),
+) -> dict[str, object]:
+    """Everything the Statistik page shows, computed by domain.stats.
+
+    A thin passthrough on purpose: the computation is THE definition and lives in the domain
+    (Gotcha 4 is what a second copy in here turns into). GET-only, and the module it calls has
+    no write path at all — statistics must never be able to influence check scheduling.
+
+    Args:
+        weeks: Window in weeks; 0 (the default) means since the first observation. A fixed
+            12-week window renders four days of history inside a quarter-long frame and reads
+            as broken, so "sedan start" is the honest default while the history is young.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email). Readable by every authenticated
+        reader, like /export and /logs.
+    """
+    try:
+        return await build_statistics(session, weeks=weeks if weeks > 0 else None)
+    except Exception as e:
+        LOGGER.exception("Failed to build statistics")
+        raise HTTPException(status_code=500, detail="Failed to build statistics") from e
+
+
 @router.get("/logs")
 async def get_logs(
     limit: int = 200,
@@ -3185,6 +3214,10 @@ def _get_admin_sidebar_html() -> str:
             <a href="#/produkter" class="nav-item" data-page="produkter">
                 <span class="nav-icon">&#128230;</span>
                 Produkter
+            </a>
+            <a href="#/statistik" class="nav-item" data-page="statistik">
+                <span class="nav-icon">&#128200;</span>
+                Statistik
             </a>
             <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
                 <span class="nav-icon">&#128276;</span>

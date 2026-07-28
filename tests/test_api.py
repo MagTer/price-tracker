@@ -366,11 +366,12 @@ class TestAdminDashboard:
         """The sections are hash-routed pages picked from the left menu — a long
         product list must never push the deals out of sight."""
         r = client.get("/")
-        for page in ("produkter", "erbjudanden", "bevakningar", "loggar"):
+        pages = ("produkter", "erbjudanden", "statistik", "bevakningar", "loggar")
+        for page in pages:
             assert f'data-page="{page}"' in r.text, f"nav/page missing for {page}"
             assert f'href="#/{page}"' in r.text
         # The page sections themselves exist for the router to toggle.
-        assert r.text.count('class="app-page"') == 4
+        assert r.text.count('class="app-page"') == len(pages)
 
     def test_schedule_is_store_level_and_hidden_from_add_flows(self, client):
         """The check schedule is a STORE property since v0.13.0: the add flows (quick-add,

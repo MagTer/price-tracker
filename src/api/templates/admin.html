@@ -94,6 +94,36 @@
 </div>
 </section>
 
+<!-- Statistik: cross-product questions the per-product history modal structurally cannot ask.
+     READ-ONLY by construction — nothing here may feed back into check scheduling (see
+     domain/stats.py), so the page has a period picker and a refresh button, and no other
+     controls at all. Every panel states what it was computed from, so a thin answer reads as
+     thin instead of as a confident flat line; the page therefore needs no "come back later"
+     gate and matures on its own as history accumulates. -->
+<section class="app-page" data-page="statistik">
+<div class="card">
+    <div class="card-header">
+        <div>
+            <div class="card-title">Statistik</div>
+            <div class="best-link" id="stats-basis"></div>
+        </div>
+        <div class="header-actions">
+            <select id="stats-period" class="search-input" onchange="loadStatistics()">
+                <option value="0">Sedan start</option>
+                <option value="4">Senaste 4 veckorna</option>
+                <option value="12">Senaste 12 veckorna</option>
+                <option value="26">Senaste 26 veckorna</option>
+                <option value="52">Senaste året</option>
+            </select>
+            <button class="btn" onclick="loadStatistics()">↻ Uppdatera</button>
+        </div>
+    </div>
+    <div id="stats-container">
+        <div class="loading">Laddar statistik…</div>
+    </div>
+</div>
+</section>
+
 <section class="app-page" data-page="bevakningar">
 <div class="card">
     <div class="card-header">
@@ -854,6 +884,37 @@ th.sortable-col:hover {
 /* The link dialog can be opened FROM the links panel, so it has to stack above it. */
 #modal-link-store { z-index: 210; }
 
+/* --- Statistik: sections stacked in one card, each carrying its own basis line so a number
+   can never be read without what it was computed from. --- */
+.stats-section { margin-bottom: 28px; }
+.stats-section:last-child { margin-bottom: 0; }
+.stats-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.stats-basis {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin-bottom: 10px;
+}
+.stats-health {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+}
+.stats-health-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+}
+.stats-health-box .stat-value { font-size: 20px; }
+/* A count that leads somewhere says so. */
+.stats-health-box.clickable { cursor: pointer; }
+.stats-health-box.clickable:hover { border-color: var(--primary); }
+.stats-health-box.clickable:hover .stat-value { color: var(--primary-dark); }
+
 /* --- Erbjudanden: two groups, one heading each. The second is collapsed because a campaign
    that is not the cheapest way to buy the product is an ANSWER ("yes, we saw it — it still
    loses to Willys"), not a recommendation. --- */
@@ -1458,6 +1519,193 @@ async function loadDeals() {
         container.innerHTML = html;
     } catch (e) {
         document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div>';
+    }
+}
+
+// --- Statistik ---
+//
+// Everything on this page is computed server-side by domain/stats.py (THE definition); this
+// renders it and adds nothing of its own. Two rules it does enforce visually:
+//   * a change of null is an em dash, never "0,0 %" — one observation is not a trend
+//   * every panel prints what it was computed from, so thin data looks thin
+// Loaded on demand when the page is shown, like Loggar.
+
+let statsData = null;
+let statsSort = { column: 'change_pct', direction: 'desc' };
+
+// The period picker's own labels, so the basis line can say which window it means.
+const STATS_PERIODS = {
+    '0': 'sedan start', '4': 'senaste 4 veckorna', '12': 'senaste 12 veckorna',
+    '26': 'senaste 26 veckorna', '52': 'senaste året'
+};
+
+function formatPct(value, decimals = 1) {
+    if (value == null) return '&#8212;';
+    const sign = value > 0 ? '+' : '';
+    return sign + value.toFixed(decimals) + ' %';
+}
+
+// Cheaper is good, dearer is bad — the colour carries the meaning at a glance, and a change
+// too small to matter stays neutral rather than shouting about rounding.
+function changeCell(value) {
+    if (value == null) return '<span class="best-link">&#8212;</span>';
+    const cls = value <= -0.5 ? 'price-good' : (value >= 0.5 ? 'price-bad' : '');
+    return '<span class="' + cls + '">' + formatPct(value) + '</span>';
+}
+
+function statsBasis(text) {
+    return '<div class="stats-basis">' + text + '</div>';
+}
+
+function buildStatsProducts(data) {
+    const rows = statsSort.column
+        ? sortRows(data.products, statsSort.column, statsSort.direction)
+        : data.products;
+    const priced = data.coverage.products_priced;
+    const total = data.coverage.products;
+    let html = '<div class="stats-section"><div class="stats-title">Prisutveckling per produkt</div>'
+        + statsBasis(`${priced} av ${total} produkter har ett jämförpris · `
+            + `${data.period.observations} observationer i perioden · `
+            + 'jfr-pris är det billigaste per enhet över produktens alla länkar');
+    if (!rows.length) {
+        return html + '<div class="empty-state"><p>Ingen produkt har ett jämförpris ännu — '
+            + 'en länk behöver en mängd för att kunna jämföras.</p></div></div>';
+    }
+    html += `<table><thead><tr>
+        <th class="sortable-col" data-stats-sort="name">Produkt</th>
+        <th class="sortable-col" data-stats-sort="current_unit_price">Billigast nu</th>
+        <th class="sortable-col" data-stats-sort="change_pct">Förändring</th>
+        <th>Lägst–högst</th>
+        <th class="sortable-col" data-stats-sort="observations">Obs.</th>
+        <th>Billigast var</th>
+    </tr></thead><tbody>`;
+    for (const r of rows) {
+        const unit = unitPriceHeading(r.unit);
+        const span = (r.low_unit_price != null && r.high_unit_price != null)
+            ? escapeHtml(formatSek(r.low_unit_price) + ' – ' + formatSek(r.high_unit_price))
+            : '&#8212;';
+        const where = [r.cheapest_store, r.cheapest_package].filter(Boolean).join(' · ');
+        html += `<tr>
+            <td>${escapeHtml(r.name)}${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
+            <td><span class="unit-price">${escapeHtml(formatSek(r.current_unit_price))} ${escapeHtml(unit)}</span></td>
+            <td>${changeCell(r.change_pct)}</td>
+            <td class="best-link">${span}</td>
+            <td>${r.observations}</td>
+            <td class="best-link">${escapeHtml(where || '—')}</td>
+        </tr>`;
+    }
+    return html + '</tbody></table></div>';
+}
+
+function buildStatsStores(data) {
+    const rows = data.stores;
+    let html = '<div class="stats-section"><div class="stats-title">Butiksjämförelse</div>'
+        + statsBasis('matchad korg — bara produkter som minst två butiker har, annars jämförs '
+            + 'butikernas sortiment i stället för deras priser · minus betyder billigare än '
+            + 'det bästa alternativet, plus betyder dyrare');
+    if (!rows.length) {
+        return html + '<div class="empty-state"><p>Inga butiker att jämföra ännu.</p></div></div>';
+    }
+    html += `<table><thead><tr>
+        <th>Butik</th><th>Jämförda produkter</th><th>Billigast</th><th>Snitt mot bästa alternativ</th>
+    </tr></thead><tbody>`;
+    for (const r of rows) {
+        const share = r.compared_products
+            ? `${r.cheapest_count} av ${r.compared_products}`
+            : '&#8212;';
+        html += `<tr>
+            <td>${escapeHtml(r.store_name)}</td>
+            <td>${r.compared_products || '&#8212;'}</td>
+            <td>${share}</td>
+            <td>${changeCell(r.avg_premium_pct)}</td>
+        </tr>`;
+    }
+    return html + '</tbody></table></div>';
+}
+
+function buildStatsOffers(data) {
+    const rows = data.stores.filter(r => r.offers > 0);
+    const judged = data.stores.reduce((sum, r) => sum + (r.offers_judged || 0), 0);
+    const offers = data.stores.reduce((sum, r) => sum + (r.offers || 0), 0);
+    let html = '<div class="stats-section"><div class="stats-title">Erbjudanden</div>'
+        + statsBasis(`${offers} erbjudanden i perioden, varav ${judged} kunde jämföras mot ett `
+            + 'annat alternativ · rabatten är butikens egen framing, kolumnen längst till '
+            + 'höger är vår');
+    if (!rows.length) {
+        return html + '<div class="empty-state"><p>Inga erbjudanden i perioden.</p></div></div>';
+    }
+    html += `<table><thead><tr>
+        <th>Butik</th><th>Erbjudanden</th><th>Snittrabatt</th><th>Varav faktiskt billigast</th>
+    </tr></thead><tbody>`;
+    for (const r of rows) {
+        const cheapest = r.offers_judged
+            ? `${r.offers_cheapest} av ${r.offers_judged}`
+            : '<span class="best-link">kunde inte jämföras</span>';
+        html += `<tr>
+            <td>${escapeHtml(r.store_name)}</td>
+            <td>${r.offers}</td>
+            <td>${r.avg_discount_pct != null ? escapeHtml(r.avg_discount_pct.toFixed(1)) + ' %' : '&#8212;'}</td>
+            <td>${cheapest}</td>
+        </tr>`;
+    }
+    return html + '</tbody></table></div>';
+}
+
+// The health panel is COUNTS with a way in, never lists: the lists already exist on Produkter,
+// where the facets can filter them. A second list here would be a second thing to maintain.
+function buildStatsHealth(data) {
+    const c = data.coverage;
+    const box = (value, label, filter) => {
+        const attr = filter ? ` data-stats-filter="${filter}"` : '';
+        const cls = filter ? 'stats-health-box clickable' : 'stats-health-box';
+        return `<div class="${cls}"${attr}><div class="stat-value">${value}</div>`
+            + `<div class="stat-label">${label}</div></div>`;
+    };
+    const stale = c.stalest_days != null
+        ? `${c.stalest_days} dygn`
+        : '&#8212;';
+    return '<div class="stats-section"><div class="stats-title">Täckning</div>'
+        + statsBasis('att göra-lista, inte statistik — siffrorna leder till produktlistan där '
+            + 'de kan filtreras fram')
+        + '<div class="stats-health">'
+        + box(c.links_without_amount, 'Länkar utan mängd', 'needs_amount')
+        + box(c.products_single_store, 'Produkter i bara en butik', null)
+        + box(c.links_never_checked, 'Länkar aldrig kollade', null)
+        + box(stale, 'Äldsta kontroll', null)
+        + box(c.attempts, 'Kontrollförsök loggade', null)
+        + '</div></div>';
+}
+
+function renderStatistics() {
+    if (!statsData) return;
+    const data = statsData;
+    const container = document.getElementById('stats-container');
+    container.innerHTML = buildStatsProducts(data) + buildStatsStores(data)
+        + buildStatsOffers(data) + buildStatsHealth(data);
+
+    // The honest header: how much history there actually is. Trends over a few days are
+    // noise, and the page says so rather than letting a table imply otherwise.
+    const el = document.getElementById('stats-basis');
+    const days = data.period.days_of_history;
+    const parts = [];
+    if (data.period.first_observation) {
+        parts.push('Historik sedan ' + formatWhen(data.period.first_observation).split(' ').slice(0, 3).join(' ')
+            + ' (' + days + ' dygn)');
+    }
+    parts.push('period: ' + (STATS_PERIODS[String(data.period.weeks || 0)] || 'sedan start'));
+    if (days < 42) parts.push('trender under några veckor är mest brus');
+    el.textContent = parts.join(' · ');
+}
+
+async function loadStatistics() {
+    const container = document.getElementById('stats-container');
+    container.innerHTML = '<div class="loading">Laddar statistik…</div>';
+    try {
+        const weeks = document.getElementById('stats-period').value;
+        statsData = await apiGet('/stats?weeks=' + encodeURIComponent(weeks));
+        renderStatistics();
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda statistik.</p></div>';
     }
 }
 
@@ -2705,15 +2953,40 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
     }
 });
 
-// --- Hash router: the sidebar's three pages ---
+// Statistics table sorting and the links from Täckning into the product list's facets.
+// Sorting re-renders from the cached payload — no refetch, same as the links panel.
+document.getElementById('stats-container').addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-stats-sort]');
+    if (th) {
+        const column = th.getAttribute('data-stats-sort');
+        statsSort = {
+            column: column,
+            direction: (statsSort.column === column && statsSort.direction === 'asc') ? 'desc' : 'asc'
+        };
+        renderStatistics();
+        return;
+    }
+    // A health count is a way IN to the list it counts: set the facet and go, instead of
+    // making the reader re-derive the filter that produced the number.
+    const box = e.target.closest('[data-stats-filter]');
+    if (box) {
+        clearProductFilters();
+        setProductFilter('status', box.getAttribute('data-stats-filter'));
+        applyFiltersToControls();
+        location.hash = '#/produkter';
+    }
+});
+
+// --- Hash router: the sidebar's pages ---
 //
-// One served page, three visible ones. All data still loads up front (the sets are small),
+// One served page, one visible at a time. All data still loads up front (the sets are small),
 // so switching pages is instant and deep links (#/produkter) land right. Unknown or
 // missing hash falls back to Erbjudanden (the start page) rather than a blank screen.
 
 const PAGES = {
     produkter: 'Produkter',
     erbjudanden: 'Aktuella erbjudanden',
+    statistik: 'Statistik',
     bevakningar: 'Prisbevakningar',
     loggar: 'Loggar'
 };
@@ -2735,9 +3008,11 @@ function renderPage() {
     }
     const crumb = document.getElementById('breadcrumb-current');
     if (crumb) crumb.textContent = PAGES[page];
-    // Loggar is loaded lazily — only when shown, and re-fetched on each visit so it is
-    // fresh without polling. The other pages preload their (small) data sets up front.
+    // Loggar and Statistik are loaded lazily — only when shown, and re-fetched on each visit
+    // so they are fresh without polling. Statistik walks every price point server-side, which
+    // is cheap but pointless to do for someone who never opens the page.
     if (page === 'loggar') loadLogs();
+    if (page === 'statistik') loadStatistics();
 }
 
 window.addEventListener('hashchange', renderPage);
