@@ -13,7 +13,7 @@
     </a>
     <a class="stat-box" href="#/erbjudanden">
         <div class="stat-value" id="stat-deals">-</div>
-        <div class="stat-label">Erbjudanden</div>
+        <div class="stat-label">Köpvärda erbjudanden</div>
     </a>
     <div class="stat-box">
         <div class="stat-value" id="stat-scheduler">-</div>
@@ -723,6 +723,33 @@ th.sortable-col:hover {
     color: var(--warning);
     font-weight: 600;
 }
+/* --- Erbjudanden: two groups, one heading each. The second is collapsed because a campaign
+   that is not the cheapest way to buy the product is an ANSWER ("yes, we saw it — it still
+   loses to Willys"), not a recommendation. --- */
+.deal-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 4px 0 8px;
+}
+.deal-group-extra {
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+}
+.deal-group-extra > summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    list-style-position: inside;
+}
+.deal-group-extra > summary:hover { color: var(--text); }
+/* Muted, not hidden: an offer older than the check cadence may already be over. */
+.deal-stale { color: var(--text-muted); }
+
 /* Hash-routed pages: exactly one .app-page is visible; the sidebar picks it. */
 .app-page { display: none; }
 .app-page.active { display: block; }
@@ -800,7 +827,17 @@ async function loadStats() {
         ]);
         document.getElementById('stat-products').textContent = products.length;
         document.getElementById('stat-watches').textContent = watches.length || 0;
-        document.getElementById('stat-deals').textContent = deals.length;
+        // The COUNT that means something: campaigns that are actually the cheapest way to buy
+        // the product. Counting every offer made the box lead with a number half of which the
+        // deals page itself files under "ej billigast" — the tooltip still gives the total.
+        const dealGroups = rankDeals(deals);
+        const dealsEl = document.getElementById('stat-deals');
+        dealsEl.textContent = dealGroups.best.length;
+        dealsEl.title = [
+            dealGroups.best.length + ' billigast per enhet',
+            dealGroups.unknown.length + ' kan inte jämföras',
+            dealGroups.worse.length + ' kampanjer som ändå inte är billigast'
+        ].join('\n');
         // Paused (auto-set while you add products) overrides the PÅ/AV state — it's why the
         // background prices aren't refreshing, so say so instead of showing a misleading "PÅ".
         const schedEl = document.getElementById('stat-scheduler');
@@ -983,18 +1020,59 @@ function renderFreshness(sched) {
     el.textContent = parts.join(' · ');
 }
 
-// Is this offer actually the cheapest way to buy the product per unit? The discount
-// percentage is the STORE's framing; this cell is ours.
+// --- Erbjudanden: a campaign is only news if it is the cheapest way to buy the product ---
+//
+// The store's discount percentage is the STORE's framing: 30 % off a bad price is still a bad
+// price. Ours is the cross-link kr/unit, and it splits the page in three:
+//   BEST    — nothing else beats it per unit. This is the answer to "vad ska jag köpa?"
+//   WORSE   — a real campaign, but another link is still cheaper per unit. Information, not news.
+//   UNKNOWN — no honest comparison exists (no amount on this link, or no other link at all).
+// Ranking on checked_at put all three in one recency-ordered pile, so a campaign we happened to
+// check last landed above a genuine win.
+const DEAL_BEST = 'best';
+const DEAL_WORSE = 'worse';
+const DEAL_UNKNOWN = 'unknown';
+
+function classifyDeal(d) {
+    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return DEAL_UNKNOWN;
+    return d.unit_price_sek <= d.best_alt_unit_price_sek ? DEAL_BEST : DEAL_WORSE;
+}
+
+// Signed kr/unit against the product's next-best link: positive = this offer wins by that much,
+// negative = it loses by that much. Null when there is nothing to compare against.
+function dealSavings(d) {
+    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return null;
+    return d.best_alt_unit_price_sek - d.unit_price_sek;
+}
+
+function dealAltLabel(d) {
+    return d.best_alt_store + (d.best_alt_package_size ? ' ' + d.best_alt_package_size : '');
+}
+
+// The cell that turns a percentage into a decision. It names the margin in kr/unit, not just
+// the verdict — "0,45 kr/l billigare än Willys" is what you act on.
 function dealComparisonCell(d) {
-    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return '&#8212;';
-    const alt = d.best_alt_store + (d.best_alt_package_size ? ' ' + d.best_alt_package_size : '');
-    const altPrice = d.best_alt_unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit);
-    if (d.unit_price_sek <= d.best_alt_unit_price_sek) {
+    const kind = classifyDeal(d);
+    const unitLabel = unitPriceHeading(d.unit);
+    if (kind === DEAL_UNKNOWN) {
+        const why = d.unit_price_sek == null
+            ? 'jfr-pris saknas — länken har ingen mängd'
+            : 'enda länken för produkten';
+        return '<span class="badge badge-muted">Kan inte jämföras</span>'
+            + '<div class="best-link">' + escapeHtml(why) + '</div>';
+    }
+    const margin = dealSavings(d);
+    if (kind === DEAL_BEST) {
+        const lead = margin > 0
+            ? formatSek(margin) + ' ' + unitLabel + ' billigare än ' + dealAltLabel(d)
+            : 'lika billigt som ' + dealAltLabel(d);
         return '<span class="price-good">Billigast</span>'
-            + '<div class="best-link">näst bäst: ' + escapeHtml(alt + ' · ' + altPrice) + '</div>';
+            + '<div class="best-link">' + escapeHtml(lead) + '</div>';
     }
     return '<span class="price-warn">Ej billigast</span>'
-        + '<div class="best-link">' + escapeHtml(alt + ': ' + altPrice) + '</div>';
+        + '<div class="best-link">'
+        + escapeHtml(formatSek(-margin) + ' ' + unitLabel + ' dyrare än ' + dealAltLabel(d))
+        + '</div>';
 }
 
 // Every store-name emission is a way IN to the store's own page — the app's endpoint
@@ -1003,6 +1081,63 @@ function storeLinkHtml(name, url) {
     if (!url) return escapeHtml(name);
     return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">'
         + escapeHtml(name) + ' &#8599;</a>';
+}
+
+// An offer seen days ago may already be over — the deals window is 7 days wide while most
+// links are checked weekly. Say WHEN, in the same Swedish format as everywhere else (the raw
+// ISO slice this replaced was the only date in the app that wasn't), and mute the old ones.
+const DEAL_STALE_HOURS = 48;
+
+function dealSeenCell(d) {
+    if (!d.checked_at) return '&#8212;';
+    const seen = parseUtc(d.checked_at);
+    const stale = seen && !isNaN(seen) && (Date.now() - seen.getTime()) > DEAL_STALE_HOURS * 3600000;
+    const text = escapeHtml(formatWhen(d.checked_at) || String(d.checked_at).slice(0, 10));
+    return stale
+        ? '<span class="deal-stale" title="Äldre än två dygn — kampanjen kan ha hunnit ta slut">' + text + '</span>'
+        : text;
+}
+
+function buildDealRow(d) {
+    const pct = d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent;
+    const jfr = d.unit_price_sek != null
+        ? '<div class="best-link">' + escapeHtml(d.unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit)) + '</div>'
+        : '';
+    const ord = d.price_sek != null
+        ? '<div class="best-link">ord. ' + escapeHtml(String(d.price_sek)) + ' kr</div>'
+        : '';
+    return `<tr>
+        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}</td>
+        <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
+        <td><span class="price-good">${d.offer_price_sek} kr</span>${jfr}${ord}</td>
+        <td>${dealComparisonCell(d)}</td>
+        <td><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
+        <td>${dealSeenCell(d)}</td>
+    </tr>`;
+}
+
+function buildDealTable(rows) {
+    return '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Erbjudande</th>'
+        + '<th>Jämförelse</th><th>Rabatt</th><th>Sett</th></tr></thead><tbody>'
+        + rows.map(buildDealRow).join('')
+        + '</tbody></table>';
+}
+
+// Best buys first, and among them the one that beats its alternative by the most. Recency is
+// a column, not a ranking: it says when we looked, which is our schedule's business, not a
+// reason to put one campaign above another.
+function rankDeals(deals) {
+    const byMargin = (a, b) => (dealSavings(b) - dealSavings(a))
+        || (b.discount_percent - a.discount_percent)
+        || String(b.checked_at).localeCompare(String(a.checked_at));
+    const byDiscount = (a, b) => (b.discount_percent - a.discount_percent)
+        || String(b.checked_at).localeCompare(String(a.checked_at));
+    return {
+        best: deals.filter(d => classifyDeal(d) === DEAL_BEST).sort(byMargin),
+        // Least-bad first: those are the ones a small further drop would make worth buying.
+        worse: deals.filter(d => classifyDeal(d) === DEAL_WORSE).sort(byMargin),
+        unknown: deals.filter(d => classifyDeal(d) === DEAL_UNKNOWN).sort(byDiscount)
+    };
 }
 
 async function loadDeals() {
@@ -1015,25 +1150,27 @@ async function loadDeals() {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>Inga aktiva erbjudanden just nu.</p></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Erbjudande</th><th>Jämförelse</th><th>Rabatt</th><th>Sett</th></tr></thead><tbody>';
-        for (const d of deals) {
-            const pct = d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent;
-            const jfr = d.unit_price_sek != null
-                ? '<div class="best-link">' + escapeHtml(d.unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit)) + '</div>'
-                : '';
-            const ord = d.price_sek != null
-                ? '<div class="best-link">ord. ' + escapeHtml(String(d.price_sek)) + ' kr</div>'
-                : '';
-            html += `<tr>
-                <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}</td>
-                <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
-                <td><span class="price-good">${d.offer_price_sek} kr</span>${jfr}${ord}</td>
-                <td>${dealComparisonCell(d)}</td>
-                <td><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
-                <td>${d.checked_at ? escapeHtml(String(d.checked_at).slice(0, 10)) : '&#8212;'}</td>
-            </tr>`;
+        const groups = rankDeals(deals);
+        // The unjudgeable ones ride along with the buyable ones rather than being hidden: they
+        // are not KNOWN to be bad, and the fix (give the link its mängd) is one click away.
+        const top = groups.best.concat(groups.unknown);
+        let html = '';
+        if (top.length) {
+            html += `<div class="deal-group-title">Värt att köpa
+                <span class="badge badge-success">${top.length}</span></div>`
+                + buildDealTable(top);
+        } else {
+            html += '<div class="deal-group-title">Värt att köpa</div>'
+                + '<div class="empty-state"><p>Inget av veckans erbjudanden är billigast per '
+                + 'enhet — allt ligger i listan nedan.</p></div>';
         }
-        html += '</tbody></table>';
+        // Collapsed, not deleted: this is the answer to "men ICA har ju kampanj på den?".
+        if (groups.worse.length) {
+            html += `<details class="deal-group-extra">
+                <summary>Kampanjer som ändå inte är billigast (${groups.worse.length})</summary>
+                ${buildDealTable(groups.worse)}
+            </details>`;
+        }
         container.innerHTML = html;
     } catch (e) {
         document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div>';
