@@ -331,3 +331,35 @@ def test_category_selects_use_the_injected_placeholder() -> None:
         'A free-text <input name="category"> is back — category must be a <select> fed by the '
         "canonical taxonomy, not an open string field."
     )
+
+
+_FILTER_CONTROLS_RE = re.compile(
+    r"const PRODUCT_FILTER_CONTROLS\s*=\s*\[(.*?)\];",
+    re.DOTALL,
+)
+
+
+def test_product_filter_controls_exist_in_the_markup() -> None:
+    """Every id the filter wiring binds to must exist in the served page.
+
+    The wiring loop calls document.getElementById(id).addEventListener at TOP LEVEL. A renamed
+    or deleted control does not degrade the filter — getElementById returns null, the property
+    access throws while the script is still loading, and EVERY handler below it never binds.
+    The page then renders and simply does nothing: no row actions, no dialogs, no toasts. That
+    is a blank-looking bug with no error anywhere the operator will see it.
+
+    Same shape as the aisle-order read: categoryOrder() reads #edit-product-category's options
+    back out of the DOM, so that id is load-bearing too.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    table = _FILTER_CONTROLS_RE.search(html)
+    assert table is not None, "PRODUCT_FILTER_CONTROLS not found in admin.html"
+
+    ids = re.findall(r"\['([\w-]+)',\s*'(\w+)'\]", table.group(1))
+    assert len(ids) == 5, f"Expected 5 filter controls, parsed {len(ids)} — has the shape changed?"
+
+    for element_id, _key in ids + [("edit-product-category", "category")]:
+        assert f'id="{element_id}"' in html, (
+            f"admin.html binds to #{element_id} but never renders it — the script throws while "
+            "loading and the whole page goes inert."
+        )
