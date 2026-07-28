@@ -27,11 +27,20 @@
         <div class="card-title">Produkter</div>
         <div class="header-actions">
             <input type="text" id="product-search" placeholder="Sök produkter…" class="search-input">
+            <!-- ONE primary button. Snabbtillägg is the 95 % path; two blue buttons side by
+                 side mean neither is the primary one. The manual form and the backup plumbing
+                 are real but rare, so they live behind the overflow instead of competing with
+                 the control used on every add. -->
             <button class="btn btn-primary admin-only" onclick="showQuickAddModal()">⚡ Snabbtillägg</button>
-            <button class="btn btn-primary admin-only" onclick="showCreateProductModal()">+ Ny produkt</button>
-            <!-- Exportera is a GET: a reader may take a copy of what they can already see. -->
-            <button class="btn" onclick="loadExport()">Exportera</button>
-            <button class="btn admin-only" onclick="showImportModal()">Importera</button>
+            <details class="menu">
+                <summary class="btn" title="Fler åtgärder">&#8943;</summary>
+                <div class="menu-items">
+                    <button type="button" class="menu-item admin-only" onclick="showCreateProductModal()">+ Ny produkt (manuellt)</button>
+                    <!-- Exportera is a GET: a reader may take a copy of what they can already see. -->
+                    <button type="button" class="menu-item" onclick="loadExport()">Exportera säkerhetskopia</button>
+                    <button type="button" class="menu-item admin-only" onclick="showImportModal()">Importera…</button>
+                </div>
+            </details>
         </div>
     </div>
     <div id="products-table-container">
@@ -176,7 +185,11 @@
                 <div class="best-link">Alla länkars mängder och hela prishistoriken är uttryckta i
                     enheten. Fel enhet? Ta bort produkten och skapa om den.</div>
             </div>
+            <!-- Ta bort sits with the fields it destroys, not on the product row: it is rare,
+                 irreversible, and does not deserve permanent space next to weekly actions. -->
             <div class="form-actions">
+                <button type="button" class="btn btn-danger admin-only" id="edit-product-delete"
+                        onclick="deleteProductFromDialog()">Ta bort produkt</button>
                 <button type="submit" class="btn btn-primary">Spara</button>
                 <button type="button" class="btn" onclick="closeModal('modal-edit-product')">Avbryt</button>
             </div>
@@ -354,9 +367,15 @@
      a question the old one-row-per-product table structurally could not ask. -->
 <div class="modal" id="modal-product-links" style="display:none;">
     <div class="modal-content modal-large">
+        <!-- "Länka butik" lives HERE, not on the product row: the decision needs the list of
+             butiker the product already has, which is exactly what this panel shows. -->
         <div class="modal-header">
             <h3 id="product-links-title">Länkar</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-product-links')">&times;</button>
+            <div class="header-actions">
+                <button type="button" class="btn btn-sm btn-primary admin-only"
+                        id="links-add-btn" onclick="addLinkFromPanel()">+ Länka butik</button>
+                <button class="btn btn-sm" onclick="closeModal('modal-product-links')">&times;</button>
+            </div>
         </div>
         <div id="product-links-table"></div>
     </div>
@@ -723,6 +742,54 @@ th.sortable-col:hover {
     color: var(--warning);
     font-weight: 600;
 }
+/* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers the
+   keyboard). Deliberately NOT used inside the product table: #products-table-container is an
+   overflow-x container, which computes overflow-y to auto and would clip a dropdown on the
+   last row. In a card header there is nothing to clip against. --- */
+.menu { position: relative; display: inline-block; }
+.menu > summary {
+    list-style: none;
+    cursor: pointer;
+    line-height: 1;
+}
+.menu > summary::-webkit-details-marker { display: none; }
+.menu-items {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    min-width: 210px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    z-index: 60;
+}
+.menu-item {
+    padding: 8px 10px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.menu-item:hover { background: var(--bg); }
+/* Destructive, and pushed to the far left of a right-aligned .form-actions so it can never be
+   the button you hit on the way to Spara. */
+.btn-danger { color: var(--error); border-color: #fecaca; margin-right: auto; }
+.btn-danger:hover { background: #fee2e2; border-color: var(--error); }
+/* The product row IS the Länkar button — that panel is what the table leads into. */
+.product-row { cursor: pointer; }
+.product-name { font-weight: 500; }
+.product-row:hover .product-name { color: var(--primary); }
+/* The link dialog can be opened FROM the links panel, so it has to stack above it. */
+#modal-link-store { z-index: 210; }
+
 /* --- Erbjudanden: two groups, one heading each. The second is collapsed because a campaign
    that is not the cheapest way to buy the product is an ANSWER ("yes, we saw it — it still
    loses to Willys"), not a recommendation. --- */
@@ -957,8 +1024,12 @@ function buildProductsTable(products) {
     if (!products.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
     }
-    // A reader still gets an Åtgärder column: Länkar and Historik are reads, and they are
-    // the two that answer "where is it cheapest" — the point of the table.
+    // The ROW is the primary action: it opens Länkar, the panel this whole table exists to
+    // lead into. Five buttons per row (Länkar / Länka / Historik / Redigera / Ta bort) meant
+    // 75 buttons on a 15-product list, two of which differed by one letter while doing
+    // completely different things. What is left is the pair you press weekly; the rest moved
+    // to where its context already is — Länka into the Länkar panel, Ta bort into the edit
+    // dialog next to the fields it destroys.
     let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const links = p.stores || [];
@@ -967,18 +1038,15 @@ function buildProductsTable(products) {
         // Distinct display names, so two pack sizes at one butik still count as one.
         const storeCount = new Set(links.map(s => s.store_name)).size;
         const storeCell = storeCount ? String(storeCount) : '&#8212;';
-        html += `<tr>
-            <td>${escapeHtml(p.name)}</td>
+        html += `<tr class="product-row" data-action="links" data-id="${escapeHtml(p.id)}">
+            <td><span class="product-name">${escapeHtml(p.name)}</span></td>
             <td>${escapeHtml(p.brand || '-')}</td>
             <td>${escapeHtml(p.category || '-')}</td>
             <td>${storeCell}</td>
             <td>${buildBestPriceCell(p, links)}</td>
             <td>
-                <button class="action-btn" data-action="links" data-id="${escapeHtml(p.id)}">Länkar</button>
-                ${IS_ADMIN ? `<button class="action-btn" data-action="link" data-id="${escapeHtml(p.id)}">Länka</button>` : ''}
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
-                ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>
-                <button class="action-btn" data-action="delete" data-id="${escapeHtml(p.id)}">Ta bort</button>` : ''}
+                ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>` : ''}
             </td>
         </tr>`;
     }
@@ -1438,16 +1506,37 @@ async function handleEditProduct(e) {
     }
 }
 
+// The dialog's destructive action. It knows which product is open, so the confirmation can
+// name what actually disappears — a bare "all dess data" hides that the price history of
+// every link goes with it.
+function deleteProductFromDialog() {
+    deleteProduct(document.getElementById('edit-product-id').value);
+}
+
 async function deleteProduct(id) {
-    if (!confirm('Ta bort produkten och all dess data?')) return;
+    const p = (allProducts || []).find(x => x.id === id);
+    const links = p ? (p.stores || []).length : 0;
+    const what = p ? '”' + p.name + '”' : 'produkten';
+    const scope = links
+        ? ', ' + links + ' butikslänk' + (links === 1 ? '' : 'ar') + ' och all prishistorik'
+        : ' och all dess data';
+    if (!confirm('Ta bort ' + what + scope + '?')) return;
     try {
         await apiDelete('/products/' + id);
+        closeModal('modal-edit-product');
+        closeModal('modal-product-links');
         showToast('Produkt borttagen');
         loadProducts();
         loadStats();
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
     }
+}
+
+// Opened from the Länkar panel, which already knows the product and its unit.
+function addLinkFromPanel() {
+    if (!productLinksFor) return;
+    showLinkStoreModal(productLinksFor.id, productLinksFor.unit);
 }
 
 // productUnit labels the amount field and picks the entry helpers — the link never asks for
@@ -1478,6 +1567,9 @@ async function handleLinkStore(e) {
         e.target.reset();
         showToast('Butik länkad');
         loadProducts();
+        // Opened from the Länkar panel (which stays open underneath): show the new row there
+        // instead of leaving the panel claiming the product has one link fewer than it does.
+        if (productLinksFor && productLinksFor.id === productId) reloadProductLinks();
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
     }
@@ -1945,8 +2037,8 @@ function unitPriceHeading(unit) {
 function buildLinksTable(rows, unit) {
     if (!rows.length) {
         return '<div class="empty-state"><div class="empty-state-icon">&#128279;</div>' +
-               '<p>Inga länkar än. En produkt utan länkar är helt okej — använd <strong>Länka</strong>' +
-               '-knappen på produktraden för att lägga till en butikssida.</p></div>';
+               '<p>Inga länkar än. En produkt utan länkar är helt okej — använd ' +
+               '<strong>+ Länka butik</strong> här ovanför för att lägga till en butikssida.</p></div>';
     }
     let html = `<div class="links-table"><table><thead><tr>
         <th class="sortable-col" data-sort="store_name">Butik</th>
@@ -2316,26 +2408,31 @@ document.getElementById('product-search').addEventListener('input', () => {
     searchTimeout = setTimeout(loadProducts, 250);
 });
 
+// <details> menus open themselves; nothing closes them. Two lines here do both cases a user
+// expects: picking an item, and clicking anywhere else.
+document.addEventListener('click', (e) => {
+    const insideMenu = e.target.closest('.menu');
+    const pickedItem = e.target.closest('.menu-item');
+    for (const menu of document.querySelectorAll('details.menu[open]')) {
+        if (menu !== insideMenu || pickedItem) menu.open = false;
+    }
+});
+
 // Delegated product action handlers — avoids embedding product names in
 // inline onclick attributes (which breaks for names containing quotes).
 document.getElementById('products-table-container').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-action]');
+    // A row action wins over the row itself; the row is the fallback and opens Länkar.
+    const btn = e.target.closest('button[data-action]') || e.target.closest('tr[data-action]');
     if (!btn) return;
     const id = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
+    const product = (allProducts || []).find(p => p.id === id);
     if (action === 'links') {
-        const product = (allProducts || []).find(p => p.id === id);
         showProductLinks(id, product ? product.name : '', product ? product.unit : null);
-    } else if (action === 'link') {
-        const product = (allProducts || []).find(p => p.id === id);
-        showLinkStoreModal(id, product ? product.unit : null);
     } else if (action === 'history') {
-        const product = (allProducts || []).find(p => p.id === id);
         showPriceHistory(id, product ? product.name : '', product ? product.unit : null);
     } else if (action === 'edit') {
         showEditProductModal(id);
-    } else if (action === 'delete') {
-        deleteProduct(id);
     }
 });
 
