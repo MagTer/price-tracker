@@ -827,10 +827,25 @@ th.sortable-col:hover {
    the button you hit on the way to Spara. */
 .btn-danger { color: var(--error); border-color: #fecaca; margin-right: auto; }
 .btn-danger:hover { background: #fee2e2; border-color: var(--error); }
-/* The product row IS the Länkar button — that panel is what the table leads into. */
+/* The product row IS the Länkar button — that panel is what the table leads into. The NAME
+   carries the visible affordance (and is a real <button>, so it takes focus and Enter); the
+   rest of the row is a convenience target, quiet until hover. */
 .product-row { cursor: pointer; }
-.product-name { font-weight: 500; }
-.product-row:hover .product-name { color: var(--primary); }
+.product-name {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-weight: 500;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+.product-row:hover .product-name { color: var(--primary); text-decoration: underline; }
+.product-name:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* NOT clickable: a whole-row target under the empty space beside the buttons reads as an
+   invisible third button. Only the buttons act in this cell. */
+.product-row td.row-actions { cursor: default; }
 /* The link dialog can be opened FROM the links panel, so it has to stack above it. */
 #modal-link-store { z-index: 210; }
 
@@ -1086,12 +1101,12 @@ function buildProductsTable(products, filtered) {
         const storeCount = new Set(links.map(s => s.store_name)).size;
         const storeCell = storeCount ? String(storeCount) : '&#8212;';
         html += `<tr class="product-row" data-action="links" data-id="${escapeHtml(p.id)}">
-            <td><span class="product-name">${escapeHtml(p.name)}</span></td>
+            <td><button type="button" class="product-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></td>
             <td>${escapeHtml(p.brand || '-')}</td>
             <td>${escapeHtml(p.category || '-')}</td>
             <td>${storeCell}</td>
             <td>${buildBestPriceCell(p, links)}</td>
-            <td>
+            <td class="row-actions">
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
                 ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>` : ''}
             </td>
@@ -2619,8 +2634,12 @@ document.addEventListener('click', (e) => {
 // Delegated product action handlers — avoids embedding product names in
 // inline onclick attributes (which breaks for names containing quotes).
 document.getElementById('products-table-container').addEventListener('click', (e) => {
-    // A row action wins over the row itself; the row is the fallback and opens Länkar.
-    const btn = e.target.closest('button[data-action]') || e.target.closest('tr[data-action]');
+    // A row action wins over the row itself; the row is the fallback and opens Länkar. The
+    // ÅTGÄRDER cell is deliberately NOT part of that fallback: the empty space beside two
+    // buttons is where a user expects only buttons to do something, so a whole-row target
+    // there behaves as an invisible third button.
+    const btn = e.target.closest('button[data-action]')
+        || (e.target.closest('td.row-actions') ? null : e.target.closest('tr[data-action]'));
     if (!btn) return;
     const id = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
