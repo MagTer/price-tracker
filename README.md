@@ -2,7 +2,8 @@
 
 Standalone Swedish grocery and pharmacy price tracker. Tracks prices at **ICA,
 Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta and Clas Ohlson**, records price history, and alerts on drops via
-email. It is single-user (Magnus only) and was extracted from the
+email. It is single-owner (one admin who can change anything; every other
+authenticated user reads) and was extracted from the
 `ai-agent-platform` monolith; it exposes its capabilities back to the agent
 platform through an MCP server.
 
@@ -23,9 +24,13 @@ distinguishable everywhere a store name is shown (v0.6.0).
   `stores`, `products`, `product_stores`, `price_points`, `watches`).
 - **Price extraction chain** (per check, first hit wins):
   1. Store API (Willys public REST) where available.
-  2. **JSON-LD** (`schema.org` Product/Offer parsed from raw HTML) — exact
+  2. **Store page-state** where the page carries more than its JSON-LD does
+     (Rusta's `window.CURRENT_PAGE` hydration JSON, Clas Ohlson's BEM price
+     markup — both hide the ordinarie at a rea and the printed jämförpris
+     from JSON-LD).
+  3. **JSON-LD** (`schema.org` Product/Offer parsed from raw HTML) — exact
      prices, no LLM cost.
-  3. **LLM cascade** via OpenRouter as fallback. Extractions below
+  4. **LLM cascade** via OpenRouter as fallback. Extractions below
      `PRICE_PARSER_MIN_CONFIDENCE` are discarded (a gap beats a hallucinated
      price).
 - **MCP server** (`fastmcp`) mounted at `/mcp/` exposing 4 tools:
@@ -69,7 +74,7 @@ distinguishable everywhere a store name is shown (v0.6.0).
 | `OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | OpenRouter endpoint (OpenAI-compatible). |
 | `OPENROUTER_HTTP_REFERER` | no | `""` | Optional OpenRouter attribution header. |
 | `OPENROUTER_APP_TITLE` | no | `Price Tracker` | Optional OpenRouter attribution header. |
-| `PRICE_PARSER_MODEL_CASCADE` | no | `meta-llama/llama-4-scout,anthropic/claude-haiku-4.5` | Comma-separated model fallback order. |
+| `PRICE_PARSER_MODEL_CASCADE` | no | `deepseek/deepseek-v4-flash,meta-llama/llama-4-scout` | Comma-separated model fallback order. |
 | `PRICE_PARSER_MIN_CONFIDENCE` | no | `0.6` | Acceptance floor; LLM extractions below this are discarded. |
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
@@ -190,7 +195,7 @@ docker compose down -v
 docker compose up -d postgres
 
 # 3. Start the app: its command runs `alembic upgrade head`, which now executes the
-#    rewritten 0001 against an empty database and re-seeds the five stores.
+#    rewritten 0001 against an empty database and re-seeds the stores.
 docker compose up -d
 
 # 4. VERIFY — do not skip; the failure this guards against is silent.

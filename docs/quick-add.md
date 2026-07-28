@@ -20,15 +20,17 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 
 | Field | Mechanism | LLM involved? |
 |---|---|---|
-| Store | Hostname match against the 5 seeded `Store.base_url` values | Never |
+| Store | Hostname match against the seeded `Store.base_url` values | Never |
 | Butik label (v0.6.0) | The URL's `/stores/<id>/` segment — ICA prices per physical butik. Known ids (`quickadd.KNOWN_STORE_LABELS`) map to names ("ICA Maxi Sandviken"); unknown ids fall back to "ICA \<id\>"; no segment → no label (nationally priced chains) | Never |
 | Sister-butik links (v0.7.0) | Butiker in the same `quickadd.SIBLING_STORE_GROUPS` group: the sibling URL is the pasted URL with `/stores/<id>/` swapped (product slug + id are chain-wide on handlaprivatkund.ica.se — verified live 2026-07-21: same potatissallad, 13.20 kr at Maxi vs 12.25 kr at Björksätra). Offered as a pre-checked opt-out in the confirm step | Never |
-| Check schedule (v0.13.0) | None — the link INHERITS the store's schedule (`stores.check_weekdays` / `check_frequency_hours`, resolved by `domain/schedule.py`): ICA måndagar, Willys mån+fre, apoteken var 72:e timme, allt förmiddag. The confirm shows a read-only info line; the per-link override lives in the link-edit dialog. (v0.9.0's `OFFER_WEEKDAYS` prefill was this idea materialized per link — superseded) | Never |
-| Name, brand | schema.org JSON-LD `Product` node in the page (`JsonLdExtractor.extract_product_metadata`) | No — exact and free on ICA/Apotea/Med24/DOZ/Kronans/Apohem |
+| Check schedule (v0.13.0) | None — the link INHERITS the store's schedule (`stores.check_weekdays` / `check_frequency_hours`, resolved by `domain/schedule.py`): ICA måndagar, Willys mån+fre, övriga var 72:e timme, allt förmiddag (Europe/Stockholm sedan v0.33.0). The confirm shows a read-only info line; the per-link override lives in the link-edit dialog. (v0.9.0's `OFFER_WEEKDAYS` prefill was this idea materialized per link — superseded) | Never |
+| Identity + package, stores with a structured API (v0.25.1 — Willys) | `WillysApiExtractor.extract_metadata` reads the REST API; the page is never fetched (Willys is an SPA whose HTML carries no JSON-LD and no price) | Never |
+| Identity + package, stores with richer page state (v0.31.0 — Rusta) | `RustaExtractor.extract_metadata_from_html` reads `window.CURRENT_PAGE` from the fetched page — its `subTitle` carries the package text Rusta's bare JSON-LD names drop | Never |
+| Name, brand | schema.org JSON-LD `Product` node in the page (`JsonLdExtractor.extract_product_metadata`) | No — exact and free on ICA, the pharmacies (Apotea/Med24/DOZ/Kronans/Apohem) and Clas Ohlson |
 | Price (display only) | Same JSON-LD offer | No |
 | Package (amount/unit/label) | Regex over the product title: `500 ml`, `24-pack`, `8 rullar` … (`quickadd.parse_package_from_name`) | No |
 | Comparison unit (`st`/`liter`/`kg`) | Derived from the package unit via `PKG_UNITS` (`quickadd.derive_unit`) | No |
-| Everything above, when the page has no usable JSON-LD (typically Willys) | `PriceParser.extract_product_metadata` — one cheap cascade call (llama-4-scout → haiku), same acceptance floor as price extraction | Yes, fallback only |
+| Everything above, when no structured tier answered | `PriceParser.extract_product_metadata` — one cheap cascade call (`PRICE_PARSER_MODEL_CASCADE`, deepseek → llama-4-scout), same acceptance floor as price extraction | Yes, fallback only |
 | Existing-product suggestions | Token overlap (3+ chars, åäö included) between the extracted name and existing product names+brands (`quickadd.suggest_existing_products`) | Never |
 
 All decision logic lives in **`src/domain/quickadd.py`** as pure functions — no HTTP, no
