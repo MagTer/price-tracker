@@ -634,18 +634,29 @@ class PriceCheckScheduler:
                 self._last_summary_date = slot
                 return
 
+            # The send reports failure as a return value, not an exception —
+            # ResendEmailService.send never raises. Only a TRUE send stamps the dedup
+            # date: a False left unstamped means the 5-minute loop retries for the
+            # rest of the local Monday, instead of counting a lost email as sent and
+            # standing down until next week.
+            sent = False
             try:
-                await self.notifier.send_weekly_summary(
+                sent = await self.notifier.send_weekly_summary(
                     to_email=SUMMARY_EMAIL,
                     deals=deals,
                     watched_products=watched_products,
                 )
-                self._stats["summaries_sent"] += 1
-                logger.info(f"Sent weekly summary to {SUMMARY_EMAIL}")
             except Exception as e:
                 logger.error(f"Failed to send weekly summary to {SUMMARY_EMAIL}: {e}")
 
-        self._last_summary_date = slot
+        if sent:
+            self._stats["summaries_sent"] += 1
+            logger.info(f"Sent weekly summary to {SUMMARY_EMAIL}")
+            self._last_summary_date = slot
+        else:
+            logger.warning(
+                f"Weekly summary to {SUMMARY_EMAIL} failed - retrying while Monday lasts"
+            )
 
     async def _watched_products_summary(
         self, session: AsyncSession

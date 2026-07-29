@@ -870,6 +870,70 @@ class TestWeeklySummary:
         mock_send.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_weekly_summary_failure_is_not_counted_as_sent(self) -> None:
+        """send_weekly_summary reports failure as a RETURN VALUE (ResendEmailService
+        never raises) — a False must not stamp the dedup date, not count in the stats,
+        and the next cycle the same Monday must retry. The old code discarded the bool:
+        a transient Resend outage at noon lost the whole week's buy list while the log
+        claimed success."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(side_effect=[False, True])
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[self._buy_row()]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+            assert scheduler._last_summary_date is None  # failure: no stand-down
+            assert scheduler._stats["summaries_sent"] == 0
+
+            # The retry is a full new pass — rewire the strict one-shot session.
+            self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+            mock_dt.now.return_value = monday + timedelta(minutes=5)
+            await scheduler._check_weekly_summary()  # the retry succeeds
+
+        assert mock_send.call_count == 2
+        assert scheduler._last_summary_date == monday.date()
+        assert scheduler._stats["summaries_sent"] == 1
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_exception_is_retried_the_same_monday(self) -> None:
+        """A notifier that RAISES is the same story as one that returns False —
+        logged, not stamped, retried while Monday lasts."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(side_effect=RuntimeError("template bug"))
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[self._buy_row()]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        assert scheduler._last_summary_date is None
+        assert scheduler._stats["summaries_sent"] == 0
+
+    @pytest.mark.asyncio
     async def test_weekly_summary_reports_lowest_unit_price_across_links(self) -> None:
         """Lowest kr/enhet over the latest point per link — not the most recent link's price.
 
