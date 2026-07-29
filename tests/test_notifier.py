@@ -260,6 +260,39 @@ class TestPriceNotifier:
         # UNKNOWN says WHY no comparison exists (this row has no kr/unit -> no amount).
         assert "kan inte jämföras — länken saknar mängd" in html
 
+    def test_unknown_with_a_unit_price_never_claims_to_be_the_only_link(self) -> None:
+        """best_alt is also None when sibling links exist but none is comparable (no mängd
+        on them) — 'enda länken för produkten' was a false statement that hid the fix."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [_deal(product_name="Sukrin", verdict="unknown", unit="st", unit_price=5.0)]
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "kan inte jämföras — ingen annan jämförbar länk" in html
+        assert "enda länken" not in html
+
+    def test_a_worse_deal_fed_defensively_gets_the_honest_sentence(self) -> None:
+        """The scheduler filters WORSE out, but _ranked_store_groups keeps them for any
+        caller that does not — and that row IS comparable, so it must say 'dyrare än',
+        not the UNKNOWN wording."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            _deal(
+                product_name="Kaffe",
+                verdict="worse",
+                unit="kg",
+                unit_price=7.07,
+                savings=-1.24,
+                best_alt_store="Willys",
+                best_alt_package_size="450 g",
+            )
+        ]
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "1,24 kr/kg dyrare än Willys 450 g" in html
+        assert "kan inte jämföras" not in html
+
     def test_build_summary_html_dates_stale_deals_in_swedish(self) -> None:
         """A deal seen more than 48h ago is dated ('sett fredag 24/7'), never hidden —
         the campaign may be over, and saying when we looked is the honest version."""
@@ -342,7 +375,7 @@ class TestPriceNotifier:
         # Should have watched products section
         assert "Dina bevakade produkter" in html
         assert "Mjolk Arla Standard 3%" in html
-        assert "19.90 kr" in html
+        assert "19,90 kr" in html  # Swedish decimal comma, same as the deal rows
         assert "ICA Maxi" in html
         assert "Smor Bregott Original" in html
         assert "Coop" in html
@@ -372,9 +405,24 @@ class TestPriceNotifier:
 
         html = notifier._build_summary_html(deals=[], watched_products=watched)
 
-        assert "5.83 kr/st" in html
-        assert "129.00 kr" in html
+        assert "5,83 kr/st" in html
+        assert "129,00 kr" in html
         assert "Lägsta pris" in html
+
+    def test_watched_product_without_a_price_renders_a_dash_not_none(self) -> None:
+        """A watch created before the first successful check has no price yet — the row
+        must say so with an em dash, not interpolate a raw None ("None kr")."""
+        mock_service = MockEmailService()
+        notifier = PriceNotifier(email_service=mock_service)
+
+        watched: list[dict[str, str | Decimal | None]] = [
+            {"name": "Ny produkt", "lowest_price": None, "store_name": "", "price_label": None},
+        ]
+
+        html = notifier._build_summary_html(deals=[], watched_products=watched)
+
+        assert "None" not in html
+        assert "&mdash;" in html
 
     def test_build_summary_html_has_no_arbitrary_cap(self) -> None:
         """The buy list IS the shopping decision — a 'top 10 by recency' cap silently

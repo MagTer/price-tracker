@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from domain.deals import DEAL_BEST, DEAL_STALE_HOURS, DEAL_UNKNOWN, DealRow
+from domain.deals import DEAL_BEST, DEAL_STALE_HOURS, DEAL_UNKNOWN, DEAL_WORSE, DealRow
 from domain.protocols.email import EmailMessage, IEmailService
 from domain.schedule import STORE_TIMEZONE
 
@@ -337,9 +337,18 @@ class PriceNotifier:
                 else f"lika billigt som {alt}"
             )
             return f'<span style="color: #16a34a;">{html.escape(text)}</span>'
+        if deal.verdict == DEAL_WORSE:
+            # The scheduler filters WORSE out of the weekly email, but _ranked_store_groups
+            # keeps them defensively for any caller that does not — and that caller must
+            # get the honest sentence, not the UNKNOWN wording for a row that IS comparable.
+            margin = abs(deal.savings_per_unit_sek or 0.0)
+            text = f"{_sek(margin)} {unit_label} dyrare än {alt}"
+            return f'<span style="color: #b45309;">{html.escape(text)}</span>'
         # UNKNOWN rides with the buyable ones (it is not KNOWN to be bad) but says
-        # honestly why no comparison exists — same wording as the portal.
-        why = "länken saknar mängd" if deal.unit_price_sek is None else "enda länken för produkten"
+        # honestly why no comparison exists — same wording as the portal. NOT "enda
+        # länken": best_alt is also None when sibling links exist but none is
+        # comparable (no mängd), and that wording hid the actual fix.
+        why = "länken saknar mängd" if deal.unit_price_sek is None else "ingen annan jämförbar länk"
         return f'<span style="color: #64748b;">{html.escape(f"kan inte jämföras — {why}")}</span>'
 
     def _build_summary_html(
@@ -377,23 +386,30 @@ class PriceNotifier:
             watched_rows = ""
             for product in watched_products:
                 name = product.get("name", "")
-                lowest_price = product.get("lowest_price", "N/A")
+                lowest_price = product.get("lowest_price")
                 store_name = product.get("store_name", "")
                 # "kr/st"-style when the row carries a computed kr/enhet, plain "kr"
                 # for the absolute-price fallback (and for rows without a label).
                 price_label = product.get("price_label") or "kr"
 
+                # A watch created before the first successful check has no price yet —
+                # an em dash, not the raw None ("None kr") the f-string used to print.
+                # Absence is not a number; same rule as the statistics page.
+                if isinstance(lowest_price, Decimal | float | int):
+                    price_cell = f"{_sek(lowest_price)} {html.escape(str(price_label))}"
+                else:
+                    price_cell = "&mdash;"
+
                 # Escape all user-controlled data
                 safe_name = html.escape(str(name))
                 safe_store_name = html.escape(str(store_name))
-                safe_price_label = html.escape(str(price_label))
 
                 watched_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_name}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {lowest_price} {safe_price_label}</td>
+                        {price_cell}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {safe_store_name}</td>
                 </tr>"""
