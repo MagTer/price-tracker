@@ -186,6 +186,10 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 (PricePoint.product_store_id == alt_latest.c.ps_id)
                 & (PricePoint.checked_at == alt_latest.c.checked_at),
             )
+            # Same is_active filter as the deal query itself: an inactive link's frozen
+            # last price is not a shelf anyone can buy from, and letting it win as
+            # best_alt flips a genuine BEST to WORSE — which the weekly email then drops.
+            .where(ProductStore.is_active.is_(True))
             .where(ProductStore.product_id.in_(product_ids))
         )
         for alt_ps, alt_store, alt_pp in (await session.execute(alt_stmt)).all():
