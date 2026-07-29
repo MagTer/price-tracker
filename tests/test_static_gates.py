@@ -404,3 +404,31 @@ def test_product_filter_controls_exist_in_the_markup() -> None:
             f"admin.html binds to #{element_id} but never renders it — the script throws while "
             "loading and the whole page goes inert."
         )
+
+
+def test_every_getelementbyid_literal_resolves_to_markup() -> None:
+    """EVERY id the script looks up must exist in the served page, not just the six
+    filter controls.
+
+    The failure mode is the one the filter-controls gate describes — a null lookup at
+    script top level kills every handler below it and the page renders inert — but two
+    bindings added after that gate (#filter-more's phone fold, #stats-container's sort
+    delegation) had the same shape and no coverage. This gate is the general form: all
+    getElementById string literals in the JS fragment, checked against the template AND
+    the wrapper markup admin.py renders around it (which owns e.g. #user-email).
+
+    Every id in this app is static by design (the portal is ONE served page); if a
+    legitimately dynamic id ever appears, exempt it here explicitly with a comment.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    admin_py = (SRC_ROOT / "api" / "admin.py").read_text(encoding="utf-8")
+    js = html.split("<!-- SECTION_SEPARATOR -->")[2]
+
+    ids = sorted(set(re.findall(r"getElementById\('([\w-]+)'\)", js)))
+    assert len(ids) >= 60, f"Parsed only {len(ids)} ids — has the extraction broken?"
+
+    missing = [i for i in ids if f'id="{i}"' not in html and f'id="{i}"' not in admin_py]
+    assert not missing, (
+        f"admin.html's script binds to {missing} but no markup renders them — "
+        "getElementById returns null, the script throws while loading, and the page goes inert."
+    )
