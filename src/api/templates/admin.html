@@ -923,6 +923,9 @@ th.sortable-col:hover {
     cursor: pointer;
 }
 .product-row:hover .product-name { color: var(--primary); text-decoration: underline; }
+/* On Erbjudanden the name button sits in a row with no whole-row target, so it must
+   reveal itself on its own hover — on Produkter this is subsumed by the row rule above. */
+.product-name:hover { color: var(--primary); text-decoration: underline; }
 .product-name:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 /* NOT clickable: a whole-row target under the empty space beside the buttons reads as an
    invisible third button. Only the buttons act in this cell. */
@@ -1626,7 +1629,7 @@ function buildDealRow(d) {
     // name in a phone-only block. Four content-heavy columns honestly do not fit 390px, and
     // the verdict is the one thing that must not be the column that gets clipped.
     return `<tr>
-        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div>${dealStaleInline(d)}</td>
+        <td><button type="button" class="product-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div>${dealStaleInline(d)}</td>
         <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
         <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${villkor}${jfr}${ord}</td>
         <td class="col-secondary">${dealComparisonCell(d)}</td>
@@ -1662,11 +1665,17 @@ function rankDeals(deals) {
     };
 }
 
+// Cached so the history-button handler can resolve name + unit for the modal without a
+// round trip — the deals wire already carries both. NOT allProducts: Erbjudanden can be
+// the first page shown, before the product list has ever loaded.
+let allDeals = [];
+
 async function loadDeals() {
     try {
         const filter = document.getElementById('deal-filter').value;
         const url = filter ? `/deals?store_type=${encodeURIComponent(filter)}` : '/deals';
         const deals = await apiGet(url);
+        allDeals = deals;
         const container = document.getElementById('deals-table-container');
         if (!deals.length) {
             container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>Inga aktiva erbjudanden just nu.</p></div>';
@@ -3133,6 +3142,18 @@ document.getElementById('price-history-modes').addEventListener('click', (e) => 
     const btn = e.target.closest('button[data-history-mode]');
     if (!btn) return;
     setHistoryMode(btn.getAttribute('data-history-mode'));
+});
+
+// The deal row's product name opens the same history modal the Produkter page uses — on
+// Erbjudanden the question behind the click is "är det här priset faktiskt bra historiskt?",
+// so the name leads to the graph, not the links panel. Only the name is a target: the rest
+// of the row stays quiet, because the store cell is already a link OUT to the butik.
+document.getElementById('deals-table-container').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-deal-action]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-id');
+    const deal = (allDeals || []).find(d => d.product_id === id);
+    showPriceHistory(id, deal ? deal.product_name : '', deal ? deal.unit : null);
 });
 
 // Links-panel actions and column sorting — delegated, like the product table. No inline
