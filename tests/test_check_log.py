@@ -95,7 +95,7 @@ class TestExtractionSource:
 
     @pytest.mark.parametrize(
         "source",
-        ["willys_api", "rusta_page", "clasohlson_page", "jsonld", "llm:deepseek"],
+        ["willys_api", "rusta_page", "clasohlson_page", "lyko_page", "jsonld", "llm:deepseek"],
     )
     def test_reports_the_stamped_tier(self, source: str) -> None:
         assert extraction_source(_extraction("10.00", source)) == source

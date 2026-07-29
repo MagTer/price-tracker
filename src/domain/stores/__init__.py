@@ -13,6 +13,7 @@ def get_store_hints() -> dict[str, str]:
         "apohem": APOHEM_HINTS,
         "rusta": RUSTA_HINTS,
         "clasohlson": CLASOHLSON_HINTS,
+        "lyko": LYKO_HINTS,
     }
 
 
@@ -102,6 +103,21 @@ Clas Ohlson (retail chain) uses these patterns:
 - Club Clas member prices marked "Klubbpris"
 - "Artikelnr: XX-XXXX" identifies the product
 - Out of stock: "Slut i onlinelagret" / "Ej i lager"
+"""
+
+LYKO_HINTS = """
+Lyko (beauty/hygiene webshop) uses these patterns:
+- Price shown as "X kr" (comma decimals, e.g. "104,25 kr")
+- On sale the previous price shows struck through as "Tid. pris X kr" or
+  "Utan kampanj X kr" - the LARGER value is the ordinarie, the smaller is what you pay
+- "Rek. pris" is the manufacturer's recommended price, NOT a campaign - a product
+  showing only "Rek. pris" is at its ordinary price and is NOT on sale
+- "Utan paketpris" shows what a gift set's parts cost separately - also not a campaign
+- No comparison price (jamforpris) is printed anywhere on the site
+- Package size stated in the title and as a separate size field ("500 ml", "10 st")
+- Member prices marked "Lyko Club"
+- Stock wording: "Kop", "Bevaka" or "Slut i lager" (physical-store availability is
+  shown separately and says nothing about the webshop)
 """
 
 DOZ_HINTS = """

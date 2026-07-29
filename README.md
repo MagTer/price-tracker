@@ -1,7 +1,7 @@
 # price-tracker
 
 Standalone Swedish grocery and pharmacy price tracker. Tracks prices at **ICA,
-Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta and Clas Ohlson**, records price history, and alerts on drops via
+Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta, Clas Ohlson and Lyko**, records price history, and alerts on drops via
 email. It is single-owner (one admin who can change anything; every other
 authenticated user reads) and was extracted from the
 `ai-agent-platform` monolith; it exposes its capabilities back to the agent
@@ -25,9 +25,9 @@ distinguishable everywhere a store name is shown (v0.6.0).
 - **Price extraction chain** (per check, first hit wins):
   1. Store API (Willys public REST) where available.
   2. **Store page-state** where the page carries more than its JSON-LD does
-     (Rusta's `window.CURRENT_PAGE` hydration JSON, Clas Ohlson's BEM price
-     markup — both hide the ordinarie at a rea and the printed jämförpris
-     from JSON-LD).
+     (Rusta's and Lyko's `window.CURRENT_PAGE` hydration JSON, Clas Ohlson's
+     BEM price markup — all three hide the ordinarie at a rea from JSON-LD,
+     which carries only the current price).
   3. **JSON-LD** (`schema.org` Product/Offer parsed from raw HTML) — exact
      prices, no LLM cost.
   4. **LLM cascade** via OpenRouter as fallback. Extractions below
@@ -91,7 +91,7 @@ everything a second deployment needs.
 2. **Database:** point `DATABASE_URL` at an empty Postgres 16 database. The container's
    start command runs `alembic upgrade head`, which creates the schema and seeds the
    supported stores (ICA, Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta,
-   Clas Ohlson).
+   Clas Ohlson, Lyko).
 3. **Auth:** the app does NOT do login itself. It trusts the `X-Auth-Request-Email`
    header from your reverse proxy (any forward-auth setup works — oauth2-proxy, Authelia,
    Cloudflare Access…) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:

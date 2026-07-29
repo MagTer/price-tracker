@@ -61,9 +61,9 @@ def extraction_source(result: PriceExtractionResult | None) -> str:
     """WHICH ladder tier produced this extraction — THE reader of ``raw_response["source"]``.
 
     Every extractor stamps its own marker ("willys_api", "rusta_page", "clasohlson_page",
-    "jsonld"); the LLM path stamps "llm:<model>". The value is deliberately raw rather than
-    bucketed into a tier: which MODEL answered is what makes LLM spend readable, and grouping
-    is a display decision.
+    "lyko_page", "jsonld"); the LLM path stamps "llm:<model>". The value is deliberately raw
+    rather than bucketed into a tier: which MODEL answered is what makes LLM spend readable,
+    and grouping is a display decision.
 
     It exists because the same `isinstance(raw, dict)` dance had been written three times —
     the scheduler's per-tier counters, the JSON-LD enrichment trigger in perform_price_check,

@@ -24,6 +24,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from domain.extractors.base import read_json_object
 from domain.quickadd import parse_package_from_name
 from domain.result import PriceExtractionResult, ProductMetadata
 
@@ -40,31 +41,6 @@ _ARTICLE_CODE_RE = re.compile(r"-(\d{6,})/?(?:[?#]|$)")
 # anything except an explicit empty marker counts as in stock (missing → True, matching
 # the JSON-LD extractor's optimistic default).
 _OUT_OF_STOCK_LEVELS = frozenset({"none", "outofstock", "empty"})
-
-
-def _read_json_object(text: str, start: int) -> str | None:
-    """The balanced ``{...}`` starting at ``start``, string-escape aware, or None."""
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(start, len(text)):
-        char = text[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-        elif char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
 
 
 def _to_decimal(value: Any) -> Decimal | None:
@@ -210,7 +186,7 @@ class RustaExtractor:
         if not script_match:
             logger.debug("No window.CURRENT_PAGE in Rusta page")
             return None
-        raw = _read_json_object(html, script_match.end() - 1)
+        raw = read_json_object(html, script_match.end() - 1)
         if raw is None:
             logger.debug("Unbalanced window.CURRENT_PAGE object")
             return None

@@ -282,7 +282,8 @@ class CheckAttempt(Base):
     # scheduler's cadence and a human mashing "Kolla nu" are different kinds of load.
     source: Mapped[str] = mapped_column(String(30))
     # Which ladder tier answered, verbatim from the extraction's raw_response["source"]:
-    # "willys_api" | "rusta_page" | "clasohlson_page" | "jsonld" | "llm:<model>" | "unknown".
+    # "willys_api" | "rusta_page" | "clasohlson_page" | "lyko_page" | "jsonld" | "llm:<model>"
+    # | "unknown".
     # Stored raw rather than bucketed — which MODEL answered is what makes LLM cost readable,
     # and grouping into tiers is a display decision that can change without losing data.
     extraction_source: Mapped[str | None] = mapped_column(String(40), nullable=True)

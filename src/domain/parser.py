@@ -14,6 +14,7 @@ from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.base import HtmlPriceExtractor, PriceExtractor
 from domain.extractors.clasohlson import ClasOhlsonExtractor
 from domain.extractors.jsonld import JsonLdExtractor
+from domain.extractors.lyko import LykoExtractor
 from domain.extractors.rusta import RustaExtractor
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
@@ -144,14 +145,15 @@ def _build_metadata_context(html_content: str, fallback_text: str, *, budget: in
 _API_EXTRACTORS: dict[str, WillysApiExtractor] = {"willys": WillysApiExtractor()}
 
 # THE registry of store-HTML extractors — stores whose PAGE carries richer structure than
-# their JSON-LD (Rusta: window.CURRENT_PAGE hydration state; Clas Ohlson: the BEM price
-# markup — both hide the ordinarie at a rea and the printed jämförpris from JSON-LD). Same
-# sharing contract as _API_EXTRACTORS, one tier further down the ladder: these parse the
-# already-fetched page and never make an HTTP call of their own, which is why they need no
-# ledger slot and can never raise StoreBlockedError.
+# their JSON-LD (Rusta and Lyko: window.CURRENT_PAGE hydration state; Clas Ohlson: the BEM
+# price markup — all three hide the ordinarie at a rea from JSON-LD, which carries only the
+# current price). Same sharing contract as _API_EXTRACTORS, one tier further down the ladder:
+# these parse the already-fetched page and never make an HTTP call of their own, which is why
+# they need no ledger slot and can never raise StoreBlockedError.
 _HTML_EXTRACTORS: dict[str, HtmlPriceExtractor] = {
     "rusta": RustaExtractor(),
     "clasohlson": ClasOhlsonExtractor(),
+    "lyko": LykoExtractor(),
 }
 
 
