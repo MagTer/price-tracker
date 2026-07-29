@@ -1245,8 +1245,8 @@ class TestDealsEndpoints:
         mock_session.execute.side_effect = [
             _rows(
                 [
-                    (pp24, product, store, ps24),
-                    (pp8, product, store, ps8),
+                    (pp24, ps24, product, store),
+                    (pp8, ps8, product, store),
                 ]
             ),
             # The alternatives query: latest point per link across the product's links.
@@ -1277,6 +1277,15 @@ class TestDealsEndpoints:
         assert by_pack["8-pack"]["best_alt_package_size"] == "24-pack"
         assert by_pack["8-pack"]["best_alt_unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)
 
+        # THE verdict (domain/deals.py) rides on the wire since v0.41.0 — the portal and
+        # the weekly email read it instead of re-deriving the comparison.
+        assert by_pack["24-pack"]["verdict"] == "best"
+        assert by_pack["24-pack"]["savings_per_unit_sek"] == pytest.approx(
+            49.90 / 8 - 119.90 / 24, rel=1e-2
+        )
+        assert by_pack["8-pack"]["verdict"] == "worse"
+        assert by_pack["8-pack"]["savings_per_unit_sek"] < 0
+
     def test_deals_are_still_ordered_by_recency(self, client, mock_session):
         """The computed kr/unit is EXPOSED on each deal, not adopted as the sort key.
         Re-ranking deals is a behavior change to an unrelated feature.
@@ -1291,8 +1300,8 @@ class TestDealsEndpoints:
         mock_session.execute.side_effect = [
             _rows(
                 [
-                    (pp_pricey, product, store, pricey),
-                    (pp_cheap, product, store, cheap),
+                    (pp_pricey, pricey, product, store),
+                    (pp_cheap, cheap, product, store),
                 ]
             ),
             _rows([]),  # no alternatives resolved — best_alt stays None
@@ -1303,6 +1312,9 @@ class TestDealsEndpoints:
         # ...even though the 8-pack is the more expensive one per unit.
         assert deals[0]["unit_price_sek"] > deals[1]["unit_price_sek"]
         assert all(d["best_alt_unit_price_sek"] is None for d in deals)
+        # No alternative -> no verdict beyond "unknown", and no invented 0.0 margin.
+        assert all(d["verdict"] == "unknown" for d in deals)
+        assert all(d["savings_per_unit_sek"] is None for d in deals)
 
     def test_deals_flag_a_cheaper_store(self, client, mock_session):
         """The whole point of the comparison: an offer at one store is flagged against the
@@ -1315,7 +1327,7 @@ class TestDealsEndpoints:
         pp_cheap = _pp(ps_cheap, price="119.90")  # 5.00 kr/st ordinarie
 
         mock_session.execute.side_effect = [
-            _rows([(pp_offer, product, willys, ps_offer)]),
+            _rows([(pp_offer, ps_offer, product, willys)]),
             _rows([(ps_offer, willys, pp_offer), (ps_cheap, ica, pp_cheap)]),
         ]
 
@@ -1326,6 +1338,7 @@ class TestDealsEndpoints:
         # The offer is PRICIER per unit than ICA's ordinarie — exactly what the user
         # must be able to see.
         assert deals[0]["unit_price_sek"] > deals[0]["best_alt_unit_price_sek"]
+        assert deals[0]["verdict"] == "worse"
 
     def test_deals_window_is_seven_days(self, client, mock_session):
         """Most links are checked WEEKLY (Monday schedule) — a 24h window shows an empty
@@ -1345,7 +1358,7 @@ class TestDealsEndpoints:
         pp = _pp(ps, price="139.90", offer="119.90")
         pp.offer_type = None
         mock_session.execute.side_effect = [
-            _rows([(pp, product, store, ps)]),
+            _rows([(pp, ps, product, store)]),
             _rows([]),
         ]
         deals = client.get("/deals").json()

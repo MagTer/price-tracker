@@ -1,11 +1,60 @@
 """Tests for price notifier module."""
 
+import uuid
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
 
+from domain.deals import DealRow
 from domain.notifier import PriceNotifier
 from domain.protocols.email import EmailMessage, EmailResult
+
+
+def _deal(
+    product_name: str = "Mjolk Arla",
+    store_name: str = "ICA Maxi",
+    offer_price: float = 19.90,
+    unit_price: float | None = None,
+    unit: str | None = None,
+    package_size: str | None = None,
+    store_url: str = "https://example.com/produkt",
+    verdict: str = "unknown",
+    savings: float | None = None,
+    best_alt_store: str | None = None,
+    best_alt_package_size: str | None = None,
+    best_alt_unit_price: float | None = None,
+    checked_at: datetime | None = None,
+    discount_percent: float = 10.0,
+    offer_type: str = "kampanj",
+) -> DealRow:
+    """A DealRow as the scheduler hands them to the notifier (naive-UTC checked_at)."""
+    return DealRow(
+        product_id=uuid.uuid4(),
+        product_name=product_name,
+        product_store_id=uuid.uuid4(),
+        store_name=store_name,
+        store_slug="ica",
+        store_url=store_url,
+        package_size=package_size,
+        unit=unit,
+        price_sek=None,
+        offer_price_sek=offer_price,
+        unit_price_sek=unit_price,
+        offer_type=offer_type,
+        offer_details=None,
+        checked_at=checked_at if checked_at is not None else datetime(2026, 7, 27, 8, 0, 0),
+        discount_percent=discount_percent,
+        best_alt_unit_price_sek=best_alt_unit_price,
+        best_alt_store=best_alt_store,
+        best_alt_package_size=best_alt_package_size,
+        verdict=verdict,
+        savings_per_unit_sek=savings,
+    )
+
+
+# A "now" a few hours after the default checked_at — rows are FRESH unless a test says so.
+_NOW = datetime(2026, 7, 27, 11, 0, 0)
 
 
 class MockEmailService:
@@ -114,84 +163,159 @@ class TestPriceNotifier:
         mock_service = MockEmailService()
         notifier = PriceNotifier(email_service=mock_service)
 
-        html = notifier._build_summary_html(deals=[], watched_products=[])
+        html = notifier._build_summary_html(deals=[], watched_products=[], now=_NOW)
 
-        # Should have basic structure
+        # Should have basic structure — and say honestly that there is nothing to buy.
         assert "<!DOCTYPE html>" in html
-        assert "Veckans prisöversikt" in html
-        assert "Här är en sammanfattning" in html
-
-        # Should NOT have tables or sections for empty data
-        assert "Aktuella erbjudanden" not in html
+        assert "Veckans inköpslista" in html
+        assert "Inga köpvärda erbjudanden" in html
         assert "Dina bevakade produkter" not in html
 
-    def test_build_summary_html_with_deals(self) -> None:
-        """Test _build_summary_html with deals."""
-        mock_service = MockEmailService()
-        notifier = PriceNotifier(email_service=mock_service)
+    def test_build_summary_html_groups_deals_per_butik(self) -> None:
+        """One section per butik = one leg of the shopping round. The store name is a
+        HEADING, not a column — the email answers 'vilken butik ska jag åka till?'."""
+        notifier = PriceNotifier(email_service=MockEmailService())
 
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": "Mjolk Arla",
-                "store_name": "ICA Maxi",
-                "offer_price_sek": Decimal("19.90"),
-                "offer_type": "stammispris",
-            },
-            {
-                "product_name": "Smor Bregott",
-                "store_name": "Willys",
-                "offer_price_sek": Decimal("29.90"),
-                "offer_type": "kampanj",
-            },
+        deals = [
+            _deal(product_name="Smor Bregott", store_name="Willys", offer_price=29.90),
+            _deal(product_name="Mjolk Arla", store_name="ICA Maxi", offer_price=19.90),
         ]
 
-        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
 
-        # Should have deals section
-        assert "Aktuella erbjudanden" in html
-        assert "Mjolk Arla" in html
+        assert "<h3" in html
         assert "ICA Maxi" in html
-        assert "19.90 kr" in html
-        assert "stammispris" in html
-        assert "Smor Bregott" in html
         assert "Willys" in html
-        assert "kampanj" in html
-
+        assert "Mjolk Arla" in html
+        assert "Smor Bregott" in html
+        # Swedish money: decimal comma, always to the öre.
+        assert "19,90 kr" in html
+        assert "29,90 kr" in html
+        # Butiker alphabetically — deterministic, not recency-ordered.
+        assert html.index("ICA Maxi") < html.index("Willys")
         # Should NOT have watched products section
         assert "Dina bevakade produkter" not in html
+
+    def test_build_summary_html_ranks_sure_wins_before_uncomparable(self) -> None:
+        """Within a butik: BEST by margin (biggest win first), then UNKNOWN — the same
+        order as the portal's 'Värt att köpa'."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            _deal(product_name="Okand mangd", store_name="Willys", verdict="unknown"),
+            _deal(
+                product_name="Liten vinst",
+                store_name="Willys",
+                verdict="best",
+                unit_price=5.00,
+                savings=0.10,
+                best_alt_store="ICA",
+            ),
+            _deal(
+                product_name="Stor vinst",
+                store_name="Willys",
+                verdict="best",
+                unit_price=4.00,
+                savings=2.50,
+                best_alt_store="ICA",
+            ),
+        ]
+
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert html.index("Stor vinst") < html.index("Liten vinst") < html.index("Okand mangd")
+
+    def test_build_summary_html_names_the_margin_and_the_alternative(self) -> None:
+        """The verdict is a sentence you act on — '1,24 kr/st billigare än ICA 8-pack' —
+        and an equal price says 'lika billigt', never a bare badge."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            _deal(
+                product_name="Lambi",
+                store_name="Willys",
+                verdict="best",
+                unit="st",
+                unit_price=5.00,
+                savings=1.24,
+                best_alt_store="ICA",
+                best_alt_package_size="8-pack",
+            ),
+            _deal(
+                product_name="Bregott",
+                store_name="Willys",
+                verdict="best",
+                unit="kg",
+                unit_price=89.00,
+                savings=0.0,
+                best_alt_store="Coop",
+            ),
+            _deal(product_name="Sukrin", store_name="Willys", verdict="unknown"),
+        ]
+
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "1,24 kr/st billigare än ICA 8-pack" in html
+        assert "lika billigt som Coop" in html
+        # UNKNOWN says WHY no comparison exists (this row has no kr/unit -> no amount).
+        assert "kan inte jämföras — länken saknar mängd" in html
+
+    def test_build_summary_html_dates_stale_deals_in_swedish(self) -> None:
+        """A deal seen more than 48h ago is dated ('sett fredag 24/7'), never hidden —
+        the campaign may be over, and saying when we looked is the honest version."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            # Friday 2026-07-24 06:30 UTC — well over 48h before Monday 11:00.
+            _deal(
+                product_name="Gammal kampanj",
+                store_name="Apotea",
+                checked_at=datetime(2026, 7, 24, 6, 30, 0),
+            ),
+            # Monday morning — fresh, no dating.
+            _deal(
+                product_name="Farsk kampanj",
+                store_name="Willys",
+                checked_at=datetime(2026, 7, 27, 7, 0, 0),
+            ),
+        ]
+
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "sett fredag 24/7" in html
+        assert "kan ha hunnit ta slut" in html
+        # Exactly ONE dated row — the fresh one carries no 'sett'.
+        assert html.count("sett ") == 1
 
     def test_build_summary_html_links_deals_to_the_store_page(self) -> None:
         """The email is read in the aisle: the product name links to the store's page,
         and the jfr-pris renders under the offer price when known."""
         notifier = PriceNotifier(email_service=MockEmailService())
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": "Mjolk Arla",
-                "store_name": "ICA Maxi",
-                "store_url": "https://handlaprivatkund.ica.se/stores/1/products/mjolk",
-                "unit": "liter",
-                "unit_price_sek": Decimal("13.27"),
-                "offer_price_sek": Decimal("19.90"),
-                "offer_type": "stammispris",
-            },
+        deals = [
+            _deal(
+                product_name="Mjolk Arla",
+                store_name="ICA Maxi",
+                store_url="https://handlaprivatkund.ica.se/stores/1/products/mjolk",
+                unit="liter",
+                unit_price=13.27,
+                offer_price=19.90,
+            ),
         ]
-        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
         assert 'href="https://handlaprivatkund.ica.se/stores/1/products/mjolk"' in html
-        assert "13.27 kr/liter" in html
+        assert "13,27 kr/liter" in html
 
     def test_build_summary_html_never_links_unsafe_schemes(self) -> None:
         """A javascript: store_url must degrade to plain text, not a link."""
         notifier = PriceNotifier(email_service=MockEmailService())
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": "Mjolk Arla",
-                "store_name": "ICA Maxi",
-                "store_url": "javascript:alert(1)",
-                "offer_price_sek": Decimal("19.90"),
-                "offer_type": "kampanj",
-            },
+        deals = [
+            _deal(
+                product_name="Mjolk Arla",
+                store_name="ICA Maxi",
+                store_url="javascript:alert(1)",
+            ),
         ]
-        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
         assert "javascript:" not in html
         assert "Mjolk Arla" in html
 
@@ -252,30 +376,21 @@ class TestPriceNotifier:
         assert "129.00 kr" in html
         assert "Lägsta pris" in html
 
-    def test_build_summary_html_limits_deals_to_top_10(self) -> None:
-        """Test _build_summary_html limits deals to top 10."""
+    def test_build_summary_html_has_no_arbitrary_cap(self) -> None:
+        """The buy list IS the shopping decision — a 'top 10 by recency' cap silently
+        dropped real wins, so every row the scheduler hands over must render."""
         mock_service = MockEmailService()
         notifier = PriceNotifier(email_service=mock_service)
 
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": f"Product {i}",
-                "store_name": "Store",
-                "offer_price_sek": Decimal("10.00"),
-                "offer_type": "kampanj",
-            }
+        deals = [
+            _deal(product_name=f"Product {i}", store_name="Store", offer_price=10.00)
             for i in range(20)
         ]
 
-        html = notifier._build_summary_html(deals=deals, watched_products=[])
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
 
-        # Should contain first 10 products
-        for i in range(10):
+        for i in range(20):
             assert f"Product {i}" in html
-
-        # Should NOT contain products beyond 10
-        for i in range(10, 20):
-            assert f"Product {i}" not in html
 
     @pytest.mark.asyncio
     async def test_send_price_alert_success(self) -> None:
@@ -326,14 +441,7 @@ class TestPriceNotifier:
         mock_service = MockEmailService(should_succeed=True)
         notifier = PriceNotifier(email_service=mock_service)
 
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": "Mjolk",
-                "store_name": "ICA",
-                "offer_price_sek": Decimal("19.90"),
-                "offer_type": "kampanj",
-            }
-        ]
+        deals = [_deal(product_name="Mjolk", store_name="ICA")]
         watched: list[dict[str, str | Decimal | None]] = [
             {"name": "Smor", "lowest_price": Decimal("29.90"), "store_name": "Coop"}
         ]
@@ -349,7 +457,7 @@ class TestPriceNotifier:
 
         sent_msg = mock_service.sent_messages[0]
         assert sent_msg.to == ["user@example.com"]
-        assert "Veckans prisöversikt" in sent_msg.subject
+        assert "Veckans inköpslista" in sent_msg.subject
         assert "Mjolk" in sent_msg.html_body
         assert "Smor" in sent_msg.html_body
 
@@ -435,13 +543,16 @@ class TestPriceNotifier:
         mock_service = MockEmailService()
         notifier = PriceNotifier(email_service=mock_service)
 
-        deals: list[dict[str, str | Decimal | None]] = [
-            {
-                "product_name": '<script>alert("deal")</script>',
-                "store_name": '<img src=x onerror="bad()">',
-                "offer_price_sek": Decimal("19.90"),
-                "offer_type": "<b>evil</b>",
-            }
+        deals = [
+            _deal(
+                product_name='<script>alert("deal")</script>',
+                store_name='<img src=x onerror="bad()">',
+                verdict="best",
+                unit_price=5.0,
+                savings=1.0,
+                best_alt_store='<b onload="evil()">Alt</b>',
+                package_size="<script>pack</script>",
+            )
         ]
         watched: list[dict[str, str | Decimal | None]] = [
             {
@@ -451,7 +562,7 @@ class TestPriceNotifier:
             }
         ]
 
-        html = notifier._build_summary_html(deals=deals, watched_products=watched)
+        html = notifier._build_summary_html(deals=deals, watched_products=watched, now=_NOW)
 
         # All HTML should be escaped
         assert "<script>" not in html

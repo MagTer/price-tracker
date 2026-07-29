@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.categories import normalize_category
+from domain.deals import current_deals
 from domain.link_health import broken_links
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
@@ -573,16 +574,13 @@ class PriceTrackerService:
     ) -> list[dict[str, str | float | None]]:
         """Get links whose LATEST price point is an offer, at most 7 days old.
 
-        Latest-per-link is the join, not a Python dedupe: a superseded offer (a newer
-        point on the same link without one) can never appear, because that newer point
-        IS the link's latest row and has no offer. The 7-day bound is a staleness
-        cutoff — the old fixed 24h window showed nothing between checks, since most
-        links are checked weekly.
+        THE query and the verdict live in domain/deals.py (`current_deals`) — this method
+        is the dict adapter MCP's find_deals reads. Its former private copy was one of the
+        three deal definitions that had already drifted apart (Gotcha 4).
 
-        Ordering stays RECENCY-based, deliberately. Now that kr/unit is computed it could rank
-        these rows, but re-ranking find_deals is a behavior change to an unrelated feature; the
-        decision here is to EXPOSE the number and not re-rank on it. Each row carries the
-        computed `unit_price_sek` so a consumer that wants to sort by it can.
+        Ordering stays RECENCY-based, and each row carries the computed `unit_price_sek`
+        plus the `verdict`/`savings_per_unit_sek` pair, so a consumer that wants to rank
+        or filter on them can.
 
         Args:
             store_type: Filter by store type (grocery, pharmacy, etc.). Optional.
@@ -592,63 +590,28 @@ class PriceTrackerService:
         """
         async with self.session_factory() as session:
             try:
-                cutoff = _utc_now() - timedelta(days=7)
-
-                latest = (
-                    select(
-                        PricePoint.product_store_id.label("ps_id"),
-                        func.max(PricePoint.checked_at).label("checked_at"),
-                    )
-                    .group_by(PricePoint.product_store_id)
-                    .subquery()
-                )
-
-                stmt = (
-                    select(PricePoint, ProductStore, Product, Store)
-                    .join(
-                        latest,
-                        (PricePoint.product_store_id == latest.c.ps_id)
-                        & (PricePoint.checked_at == latest.c.checked_at),
-                    )
-                    .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-                    .join(Product, ProductStore.product_id == Product.id)
-                    .join(Store, ProductStore.store_id == Store.id)
-                    .where(PricePoint.offer_price_sek.is_not(None))
-                    .where(PricePoint.checked_at >= cutoff)
-                    .order_by(PricePoint.checked_at.desc())
-                )
-
-                if store_type:
-                    stmt = stmt.where(Store.store_type == store_type)
-
-                result = await session.execute(stmt)
-                rows = result.all()
-
-                deals: list[dict[str, str | float | None]] = []
-
-                for price_point, product_store, product, store in rows:
-                    deals.append(
-                        {
-                            "product_id": str(product.id),
-                            "product_name": product.name,
-                            "product_store_id": str(product_store.id),
-                            "store_name": link_store_name(product_store, store),
-                            # For the weekly email: link straight to the store's page and
-                            # label the jfr-pris with the product's unit.
-                            "store_url": product_store.store_url,
-                            "unit": product.unit,
-                            "package_size": product_store.package_size,
-                            "regular_price_sek": float(price_point.price_sek),
-                            "offer_price_sek": float(price_point.offer_price_sek),
-                            "unit_price_sek": _computed_unit_price(
-                                price_point.offer_price_sek, product_store.package_quantity
-                            ),
-                            # Swedish fallback — MCP and the email surface this as-is.
-                            "offer_type": price_point.offer_type or "erbjudande",
-                        }
-                    )
-
-                return deals
+                rows = await current_deals(session, store_type=store_type)
+                return [
+                    {
+                        "product_id": str(row.product_id),
+                        "product_name": row.product_name,
+                        "product_store_id": str(row.product_store_id),
+                        "store_name": row.store_name,
+                        # For the weekly email: link straight to the store's page and
+                        # label the jfr-pris with the product's unit.
+                        "store_url": row.store_url,
+                        "unit": row.unit,
+                        "package_size": row.package_size,
+                        "regular_price_sek": row.price_sek,
+                        "offer_price_sek": row.offer_price_sek,
+                        "unit_price_sek": row.unit_price_sek,
+                        # Swedish fallback — MCP and the email surface this as-is.
+                        "offer_type": row.offer_type,
+                        "verdict": row.verdict,
+                        "savings_per_unit_sek": row.savings_per_unit_sek,
+                    }
+                    for row in rows
+                ]
 
             except SQLAlchemyError:
                 logger.exception("Failed to get current deals")

@@ -35,6 +35,7 @@ from api.schemas import (
     StoreResponse,
 )
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
+from domain.deals import current_deals
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.link_health import LinkHealth, broken_links
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
@@ -1813,124 +1814,34 @@ async def get_current_deals(
         Requires IAP header auth (X-Auth-Request-Email).
     """
     try:
-        # 7 days, matching service.get_current_deals: most links are checked WEEKLY (Monday
-        # offer-day schedule), so the old 24h window left this page empty from Tuesday on.
-        # This route had kept 24h when the service was fixed — Gotcha 4's duplication again.
-        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=7)
-
-        stmt = (
-            select(PricePoint, Product, Store, ProductStore)
-            .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-            .join(Product, ProductStore.product_id == Product.id)
-            .join(Store, ProductStore.store_id == Store.id)
-            .where(PricePoint.offer_price_sek.is_not(None))
-            .where(PricePoint.checked_at >= cutoff)
-            .order_by(PricePoint.checked_at.desc())
-        )
-
-        if store_type:
-            stmt = stmt.where(Store.store_type == store_type)
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        # Deduplicate by LINK (keep latest). The old key was the (product, store) pair, which
-        # was single-valued only because of the constraint this phase dropped: a 24-pack and an
-        # 8-pack of one product at one store are now legitimate, and the pair key collapsed
-        # them into ONE arbitrary deal row — silently, with no error, one pack size simply
-        # vanishing from the list.
-        seen: set[uuid.UUID] = set()
-        picked: list[tuple[PricePoint, Product, Store, ProductStore]] = []
-        for price_point, product, store, product_store in rows:
-            if product_store.id in seen:
-                continue
-            seen.add(product_store.id)
-            picked.append((price_point, product, store, product_store))
-
-        # Cheapest CURRENT jfr-pris per product across ALL its links (latest point per
-        # link, no staleness cutoff — it is the platform's best knowledge). This is what
-        # turns "20% rabatt" into a decision: the discount is the STORE's framing, the
-        # cross-link unit price is ours.
-        alternatives: dict[uuid.UUID, list[tuple[uuid.UUID, float, str, str | None]]] = {}
-        if picked:
-            product_ids = {product.id for _, product, _, _ in picked}
-            latest = (
-                select(
-                    PricePoint.product_store_id.label("ps_id"),
-                    func.max(PricePoint.checked_at).label("checked_at"),
-                )
-                .group_by(PricePoint.product_store_id)
-                .subquery()
+        # THE deal query + verdict live in domain/deals.py — this route is a serializer.
+        # Its former private copy had already drifted twice (the 24h window, and a dedupe
+        # that kept a link's superseded offer when the latest point had none).
+        rows = await current_deals(session, store_type=store_type)
+        return [
+            DealResponse(
+                product_id=str(row.product_id),
+                product_name=row.product_name,
+                store_name=row.store_name,
+                store_slug=row.store_slug,
+                package_size=row.package_size,
+                unit=row.unit,
+                price_sek=row.price_sek,
+                offer_price_sek=row.offer_price_sek,
+                unit_price_sek=row.unit_price_sek,
+                offer_type=row.offer_type,
+                offer_details=row.offer_details,
+                checked_at=row.checked_at.isoformat(),
+                discount_percent=row.discount_percent,
+                product_url=row.store_url,
+                best_alt_unit_price_sek=row.best_alt_unit_price_sek,
+                best_alt_store=row.best_alt_store,
+                best_alt_package_size=row.best_alt_package_size,
+                verdict=row.verdict,
+                savings_per_unit_sek=row.savings_per_unit_sek,
             )
-            alt_stmt = (
-                select(ProductStore, Store, PricePoint)
-                .join(Store, ProductStore.store_id == Store.id)
-                .join(latest, latest.c.ps_id == ProductStore.id)
-                .join(
-                    PricePoint,
-                    (PricePoint.product_store_id == latest.c.ps_id)
-                    & (PricePoint.checked_at == latest.c.checked_at),
-                )
-                .where(ProductStore.product_id.in_(product_ids))
-            )
-            for alt_ps, alt_store, alt_pp in (await session.execute(alt_stmt)).all():
-                alt_unit_price = _computed_unit_price(
-                    _effective_price(alt_pp), alt_ps.package_quantity
-                )
-                if alt_unit_price is None:
-                    continue
-                alternatives.setdefault(alt_ps.product_id, []).append(
-                    (
-                        alt_ps.id,
-                        alt_unit_price,
-                        link_store_name(alt_ps, alt_store),
-                        alt_ps.package_size,
-                    )
-                )
-
-        deals: list[DealResponse] = []
-        for price_point, product, store, product_store in picked:
-            # Calculate discount percentage
-            discount_percent = 0.0
-            if price_point.price_sek and price_point.offer_price_sek:
-                discount_percent = (
-                    (float(price_point.price_sek) - float(price_point.offer_price_sek))
-                    / float(price_point.price_sek)
-                    * 100
-                )
-
-            alts = [a for a in alternatives.get(product.id, []) if a[0] != product_store.id]
-            best_alt = min(alts, key=lambda a: a[1]) if alts else None
-
-            deals.append(
-                DealResponse(
-                    product_id=str(product.id),
-                    product_name=product.name,
-                    store_name=link_store_name(product_store, store),
-                    store_slug=store.slug,
-                    package_size=product_store.package_size,
-                    unit=product.unit,
-                    price_sek=float(price_point.price_sek) if price_point.price_sek else None,
-                    offer_price_sek=float(price_point.offer_price_sek),
-                    # Exposed, not ranked on: the ordering below stays by RECENCY. Re-ranking
-                    # deals by kr/unit is a behavior change to an unrelated feature; a consumer
-                    # that wants to sort on this number now has it.
-                    unit_price_sek=_computed_unit_price(
-                        _effective_price(price_point), product_store.package_quantity
-                    ),
-                    # Swedish fallback — this string reaches the UI badge as-is.
-                    offer_type=price_point.offer_type or "erbjudande",
-                    offer_details=price_point.offer_details,
-                    checked_at=price_point.checked_at.isoformat(),
-                    discount_percent=discount_percent,
-                    product_url=product_store.store_url,
-                    best_alt_unit_price_sek=best_alt[1] if best_alt else None,
-                    best_alt_store=best_alt[2] if best_alt else None,
-                    best_alt_package_size=best_alt[3] if best_alt else None,
-                )
-            )
-
-        return deals
+            for row in rows
+        ]
     except Exception as e:
         LOGGER.exception("Failed to get current deals")
         raise HTTPException(status_code=500, detail="Failed to retrieve deals") from e

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from domain.deals import DealRow
 from domain.result import PriceExtractionResult
 from domain.schedule import MORNING_END_HOUR, MORNING_START_HOUR, STORE_TIMEZONE
 from domain.scheduler import PriceCheckScheduler
@@ -596,6 +597,42 @@ class TestCheckAlerts:
 
 
 class TestWeeklySummary:
+    """The weekly buy-list email: due Monday after the förmiddag window (Swedish
+    wall-clock via domain/schedule.py), sent to THE configured recipient — decoupled
+    from the watches — with the WORSE deals filtered out before the notifier sees them."""
+
+    RECIPIENT = "magnus@example.com"
+
+    @staticmethod
+    def _buy_row(
+        verdict: str = "best",
+        product_name: str = "Lambi Toalettpapper",
+        store_name: str = "Willys",
+        savings: float | None = 1.24,
+    ) -> DealRow:
+        return DealRow(
+            product_id=uuid.uuid4(),
+            product_name=product_name,
+            product_store_id=uuid.uuid4(),
+            store_name=store_name,
+            store_slug="willys",
+            store_url="https://www.willys.se/produkt/x",
+            package_size="24-pack",
+            unit="st",
+            price_sek=159.90,
+            offer_price_sek=139.90,
+            unit_price_sek=5.83,
+            offer_type="kampanj",
+            offer_details=None,
+            checked_at=datetime(2026, 2, 16, 8, 0, 0),
+            discount_percent=12.5,
+            best_alt_unit_price_sek=7.07,
+            best_alt_store="ICA",
+            best_alt_package_size="8-pack",
+            verdict=verdict,
+            savings_per_unit_sek=savings,
+        )
+
     @pytest.mark.asyncio
     async def test_weekly_summary_skips_non_monday(self) -> None:
         """Non-Monday weekday returns early without any DB queries."""
@@ -614,13 +651,13 @@ class TestWeeklySummary:
         session_factory.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_weekly_summary_skips_before_14h(self) -> None:
-        """Monday before 14:00 returns early without any DB queries."""
+    async def test_weekly_summary_waits_for_the_swedish_window_end(self) -> None:
+        """Monday 10:59 UTC in winter is 11:59 SWEDISH — the förmiddag window is still
+        open and Monday's checks may not be in yet. No DB queries."""
         email_service = MagicMock()
         scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
 
-        # Monday at 13:59
-        monday_early = datetime(2026, 2, 16, 13, 59, 0)  # weekday() == 0
+        monday_early = datetime(2026, 2, 16, 10, 59, 0)  # 11:59 Europe/Stockholm (CET)
         assert monday_early.weekday() == 0
 
         with patch("domain.scheduler.datetime") as mock_dt:
@@ -630,26 +667,52 @@ class TestWeeklySummary:
 
         session_factory.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_weekly_summary_fires_at_swedish_noon_in_summer(self) -> None:
+        """Monday 10:05 UTC in July is 12:05 SWEDISH — due. The old rule ("14:00" on
+        naive UTC) would have sat on its hands until 16:00 Swedish summer time."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        summer_monday = datetime(2026, 7, 27, 10, 5, 0)
+        assert summer_monday.weekday() == 0
+
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[self._buy_row()]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = summer_monday
+            await scheduler._check_weekly_summary()
+
+        mock_send.assert_called_once()
+        assert scheduler._last_summary_date == summer_monday.date()
+
     def _summary_session(
         self,
         session_factory: MagicMock,
-        deals_rows: list,
         watches: list,
         link_rows_per_watch: list[list],
     ) -> AsyncMock:
-        """Wire ONE session whose execute yields deals, then watches, then per-watch links.
+        """Wire ONE session whose execute yields watches, then per-watch links.
 
+        The deal rows no longer come through this session — the scheduler resolves them
+        via domain.deals.current_deals, which tests patch at the scheduler's import site.
         The strict side_effect order doubles as the restart-guard-deletion assertion:
         if the old "recent alert within 10h" query ever comes back, it consumes the
-        deals result and the flow derails immediately.
+        watches result and the flow derails immediately.
         """
-        deals_result = MagicMock()
-        deals_result.all.return_value = deals_rows
-
         watches_result = MagicMock()
         watches_result.unique.return_value.scalars.return_value.all.return_value = watches
 
-        results = [deals_result, watches_result]
+        results: list[MagicMock] = [watches_result]
         for link_rows in link_rows_per_watch:
             links_result = MagicMock()
             links_result.all.return_value = link_rows
@@ -696,6 +759,117 @@ class TestWeeklySummary:
         return pp, ps, store
 
     @pytest.mark.asyncio
+    async def test_weekly_summary_sends_without_any_watch(self) -> None:
+        """THE decoupling: deals alone earn the email, to the CONFIGURED recipient.
+
+        The old sender derived its recipients from the watch rows, so a tracker with
+        products but no alarm sent nothing — the digest existed only as a side effect
+        of the watch feature."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[self._buy_row()]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        mock_send.assert_called_once()
+        assert mock_send.call_args.kwargs["to_email"] == self.RECIPIENT
+        assert [d.product_name for d in mock_send.call_args.kwargs["deals"]] == [
+            "Lambi Toalettpapper"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_excludes_worse_deals(self) -> None:
+        """BEST + UNKNOWN ride; WORSE is information, not news — same split as the
+        portal's 'Värt att köpa'."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        best = self._buy_row(verdict="best", product_name="Vinnare")
+        unknown = self._buy_row(verdict="unknown", product_name="Ojämförbar", savings=None)
+        worse = self._buy_row(verdict="worse", product_name="Förlorare", savings=-0.5)
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[best, unknown, worse]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        sent = mock_send.call_args.kwargs["deals"]
+        assert [d.product_name for d in sent] == ["Vinnare", "Ojämförbar"]
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_skips_without_recipient(self) -> None:
+        """No SUMMARY_EMAIL and no ALLOWED_ENTRA_EMAIL: warn and stand down for the
+        week — never crash, never guess an address."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", ""),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        mock_send.assert_not_called()
+        session_factory.assert_not_called()
+        assert scheduler._last_summary_date == monday.date()
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_sends_once_per_monday(self) -> None:
+        """The in-memory dedup keys on the LOCAL Monday date — a second cycle the same
+        afternoon must not send again."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch(
+                "domain.scheduler.current_deals",
+                AsyncMock(return_value=[self._buy_row()]),
+            ),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+            mock_dt.now.return_value = monday + timedelta(hours=2)
+            await scheduler._check_weekly_summary()
+
+        mock_send.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_weekly_summary_reports_lowest_unit_price_across_links(self) -> None:
         """Lowest kr/enhet over the latest point per link — not the most recent link's price.
 
@@ -709,7 +883,6 @@ class TestWeeklySummary:
         watch = self._watch()
         self._summary_session(
             session_factory,
-            deals_rows=[],
             watches=[watch],
             link_rows_per_watch=[
                 [
@@ -723,6 +896,8 @@ class TestWeeklySummary:
         mock_send = AsyncMock(return_value=True)
         with (
             patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", AsyncMock(return_value=[])),
             patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
         ):
             mock_dt.now.return_value = monday
@@ -751,7 +926,6 @@ class TestWeeklySummary:
         # Offer makes the 24-pack 119.90 -> 5.00 kr/st (link's regular would be 6.66).
         self._summary_session(
             session_factory,
-            deals_rows=[],
             watches=[watch],
             link_rows_per_watch=[[self._link_row("159.90", "24", "Willys", offer="119.90")]],
         )
@@ -760,6 +934,8 @@ class TestWeeklySummary:
         mock_send = AsyncMock(return_value=True)
         with (
             patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", AsyncMock(return_value=[])),
             patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
         ):
             mock_dt.now.return_value = monday
@@ -778,7 +954,6 @@ class TestWeeklySummary:
         watch = self._watch()
         self._summary_session(
             session_factory,
-            deals_rows=[],
             watches=[watch],
             link_rows_per_watch=[
                 [
@@ -792,6 +967,8 @@ class TestWeeklySummary:
         mock_send = AsyncMock(return_value=True)
         with (
             patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", AsyncMock(return_value=[])),
             patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
         ):
             mock_dt.now.return_value = monday

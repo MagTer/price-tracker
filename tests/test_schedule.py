@@ -23,6 +23,7 @@ from domain.schedule import (
     next_check_time,
     next_morning_retry,
     weekday_slot,
+    weekly_summary_slot,
 )
 
 
@@ -323,3 +324,43 @@ class TestSwedishWallClock:
         winter_tuesday = datetime(2026, 1, 20, 15, 30, 0)
         nxt = next_check_time([], 72, winter_tuesday)
         assert in_morning_window(nxt)
+
+
+class TestWeeklySummarySlot:
+    """The weekly summary is due Monday from the END of the förmiddag window, Swedish
+    wall-clock — the first moment the week's Monday checks (ICA and Willys both) are in.
+    The old rule was "Monday 14:00" applied on naive UTC: 15/16 Swedish depending on DST."""
+
+    def test_due_from_noon_swedish_winter(self):
+        # Winter (CET, UTC+1): 11:00 UTC == 12:00 local.
+        monday = datetime(2026, 2, 16, 11, 0, 0)
+        assert monday.weekday() == 0
+        assert weekly_summary_slot(monday) == monday.date()
+
+    def test_not_due_before_noon_swedish_winter(self):
+        assert weekly_summary_slot(datetime(2026, 2, 16, 10, 59, 0)) is None
+
+    def test_due_from_noon_swedish_summer(self):
+        # Summer (CEST, UTC+2): 10:00 UTC == 12:00 local — an hour EARLIER in UTC.
+        assert weekly_summary_slot(datetime(2026, 7, 27, 10, 0, 0)) == datetime(2026, 7, 27).date()
+
+    def test_not_due_before_noon_swedish_summer(self):
+        assert weekly_summary_slot(datetime(2026, 7, 27, 9, 59, 0)) is None
+
+    def test_not_due_on_other_weekdays(self):
+        tuesday = datetime(2026, 2, 17, 15, 0, 0)
+        assert tuesday.weekday() == 1
+        assert weekly_summary_slot(tuesday) is None
+
+    def test_swedish_monday_night_is_not_utc_monday(self):
+        """Monday 23:30 UTC is Tuesday 00:30 in Sweden — no longer Monday, no summary.
+        The weekday is judged by the SWEDISH clock, same rule as the check window."""
+        monday_2330_utc = datetime(2026, 2, 16, 23, 30, 0)
+        assert monday_2330_utc.weekday() == 0  # UTC still says Monday...
+        assert weekly_summary_slot(monday_2330_utc) is None  # ...Sweden says Tuesday
+
+    def test_slot_is_the_local_monday_date(self):
+        """Late Monday evening local: the slot is that Monday — the sender's dedup key
+        must not flip at a UTC midnight that is 01:00/02:00 Swedish."""
+        monday_evening = datetime(2026, 2, 16, 22, 0, 0)  # 23:00 local, still Monday
+        assert weekly_summary_slot(monday_evening) == datetime(2026, 2, 16).date()

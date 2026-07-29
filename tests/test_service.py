@@ -35,11 +35,15 @@ def _make_link(
     """Mock ProductStore (a link). Every attribute the row-dict builders read is set."""
     link = MagicMock()
     link.id = uuid.uuid4()
+    link.product_id = uuid.uuid4()
     link.store_id = store_id or uuid.uuid4()
     link.store_url = store_url
     link.package_size = package_size
     link.package_quantity = package_quantity
     link.scraped_package_quantity = scraped_package_quantity
+    # An UNLABELED link: link_store_name must fall back to the chain name — a bare
+    # MagicMock's auto-created store_label is truthy and would leak into store_name.
+    link.store_label = None
     return link
 
 
@@ -211,7 +215,9 @@ class TestPriceTrackerService:
 
         mock_result = MagicMock()
         mock_result.all.return_value = [(mock_price, mock_link, mock_product, mock_store)]
-        mock_session.execute.return_value = mock_result
+        alt_result = MagicMock()
+        alt_result.all.return_value = []
+        mock_session.execute.side_effect = [mock_result, alt_result]
 
         service = PriceTrackerService(mock_session_factory)
         deals = await service.get_current_deals(store_type="grocery")
@@ -222,6 +228,9 @@ class TestPriceTrackerService:
         assert deals[0]["package_size"] == "1 liter"
         # The offer price is what you actually pay, so it is what kr/unit is computed from.
         assert deals[0]["unit_price_sek"] == 19.90
+        # No other link -> no honest comparison: THE verdict says so, with no fake margin.
+        assert deals[0]["verdict"] == "unknown"
+        assert deals[0]["savings_per_unit_sek"] is None
 
     @pytest.mark.asyncio
     async def test_deals_two_links_same_store(self, mock_session_factory: Mock) -> None:
@@ -267,12 +276,21 @@ class TestPriceTrackerService:
             price_sek=Decimal("64.90"), offer_price_sek=Decimal("59.90"), offer_type="kampanj"
         )
 
+        # Both links belong to THE product — the alternatives lookup keys on it.
+        link_24.product_id = product_id
+        link_8.product_id = product_id
+
         mock_result = MagicMock()
         mock_result.all.return_value = [
             (price_24, link_24, mock_product, mock_store),
             (price_8, link_8, mock_product, mock_store),
         ]
-        mock_session.execute.return_value = mock_result
+        alt_result = MagicMock()
+        alt_result.all.return_value = [
+            (link_24, mock_store, price_24),
+            (link_8, mock_store, price_8),
+        ]
+        mock_session.execute.side_effect = [mock_result, alt_result]
 
         service = PriceTrackerService(mock_session_factory)
         deals = await service.get_current_deals()
@@ -282,6 +300,9 @@ class TestPriceTrackerService:
         by_size = {d["package_size"]: d for d in deals}
         assert by_size["24-pack"]["unit_price_sek"] == 5.83  # 139.90 / 24
         assert by_size["8-pack"]["unit_price_sek"] == 7.49  # 59.90 / 8
+        # The 24-pack beats its sibling per unit; MCP consumers can now read the verdict.
+        assert by_size["24-pack"]["verdict"] == "best"
+        assert by_size["8-pack"]["verdict"] == "worse"
 
     @pytest.mark.asyncio
     async def test_record_price_success(self, mock_session_factory: Mock) -> None:

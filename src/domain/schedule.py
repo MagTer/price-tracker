@@ -31,7 +31,7 @@ from __future__ import annotations
 import random
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 from zoneinfo import ZoneInfo
 
@@ -123,6 +123,22 @@ def next_check_time(
     if frequency_hours >= 24:
         target = _naive_utc(_at_morning(_local(target)))
     return target
+
+
+def weekly_summary_slot(now: datetime) -> date | None:
+    """The local Monday date a weekly summary is due for, from naive-UTC ``now`` — else None.
+
+    Due from the END of the förmiddag window on Mondays, Swedish wall-clock: both weekly
+    chains (ICA, Willys) check Monday mornings, so 12:00 local is the first moment "veckans
+    priser" are actually in. The date returned is the LOCAL Monday — the sender's dedup key —
+    because a UTC date flips at 01:00/02:00 Swedish, the same off-by-a-day the v0.33.0
+    civil-time move fixed for the check window. (The old rule was "Monday 14:00" applied
+    directly on naive UTC: 15/16 Swedish depending on DST, drifting an hour twice a year.)
+    """
+    local_now = _local(now)
+    if local_now.weekday() != 0 or local_now.hour < MORNING_END_HOUR:
+        return None
+    return local_now.date()
 
 
 def next_morning_retry(now: datetime) -> datetime:

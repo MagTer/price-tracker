@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import random
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -12,10 +13,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
+from domain.deals import DEAL_WORSE, current_deals
 from domain.models import (
     PricePoint,
     PriceWatch,
-    Product,
     ProductStore,
     Store,
     link_store_name,
@@ -31,10 +32,23 @@ from domain.protocols import (
     IRateLimiter,
 )
 from domain.result import extraction_source
-from domain.schedule import effective_schedule, next_check_time_for_link, next_morning_retry
+from domain.schedule import (
+    effective_schedule,
+    next_check_time_for_link,
+    next_morning_retry,
+    weekly_summary_slot,
+)
 from domain.service import PriceCheckOutcome, perform_price_check
 
 logger = logging.getLogger(__name__)
+
+# The weekly summary recipient. Decoupled from the watches on purpose (v0.41.0): the
+# buy-list email is the tracker's primary output, and deriving recipients from watch rows
+# meant "no watches → no email" — the digest existed only as a side effect of the alarm
+# feature. Falls back to the admin identity the app already knows (note: that is the
+# Entra UPN, which for most tenants is a deliverable address — set SUMMARY_EMAIL when
+# it is not).
+SUMMARY_EMAIL = os.getenv("SUMMARY_EMAIL") or os.getenv("ALLOWED_ENTRA_EMAIL", "")
 
 
 class PriceCheckScheduler:
@@ -571,171 +585,160 @@ class PriceCheckScheduler:
                     self._stats["alerts_sent"] += 1
 
     async def _check_weekly_summary(self) -> None:
-        """Send weekly summary emails on Mondays at 14:00+."""
+        """Send THE weekly buy-list email once per Monday, after the förmiddag window.
+
+        Timing comes from domain/schedule.py (weekly_summary_slot): Monday from 12:00
+        Swedish wall-clock — the first moment the week's Monday checks (ICA and Willys
+        both) are in. The old rule was "Monday 14:00" applied on naive UTC, i.e. 15/16
+        Swedish depending on DST — the same silent drift v0.33.0 removed from the check
+        window.
+        """
         if not self.notifier:
             return
 
         now = datetime.now(UTC).replace(tzinfo=None)
-
-        # Only on Mondays, after 14:00
-        if now.weekday() != 0 or now.hour < 14:
+        slot = weekly_summary_slot(now)
+        if slot is None:
             return
 
-        # Don't re-send if already sent today. This in-memory dedup is the ONLY
+        # Don't re-send for the same (local) Monday. This in-memory dedup is the ONLY
         # guard: the old "recent alert within 10h" restart heuristic silently
         # suppressed legitimate summaries (any Monday-morning alert killed that
         # afternoon's summary). A rare duplicate after a Monday-afternoon
         # restart is the accepted cost (locked decision).
-        today = now.date()
-        if self._last_summary_date == today:
+        if self._last_summary_date == slot:
             return
 
-        logger.info("Sending weekly summary emails")
+        # The recipient is configuration, not the union of watch emails: the summary
+        # must arrive even when — especially when — no per-product alarm exists.
+        if not SUMMARY_EMAIL:
+            logger.warning(
+                "Weekly summary due but no recipient configured "
+                "(SUMMARY_EMAIL / ALLOWED_ENTRA_EMAIL) - skipping"
+            )
+            self._last_summary_date = slot
+            return
+
+        logger.info("Sending weekly summary email")
 
         async with self.session_factory() as session:
-            cutoff = now - timedelta(days=7)
+            # The buy list: BEST + UNKNOWN, the same split as the portal's "Värt att
+            # köpa" — an offer another link beats per unit is information, not news,
+            # and has no place in an email that IS the shopping decision. THE verdict
+            # comes from domain/deals.py; grouping per butik is the notifier's job.
+            deals = [d for d in await current_deals(session) if d.verdict != DEAL_WORSE]
+            watched_products = await self._watched_products_summary(session)
 
-            # Get deals from last 7 days (price points with offers)
-            deals_stmt = (
-                select(PricePoint, ProductStore, Product, Store)
-                .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-                .join(Product, ProductStore.product_id == Product.id)
-                .join(Store, ProductStore.store_id == Store.id)
-                .where(
-                    ProductStore.is_active.is_(True),
-                    PricePoint.offer_price_sek.isnot(None),
-                    PricePoint.checked_at >= cutoff,
-                )
-                .order_by(PricePoint.checked_at.desc())
-            )
-            deals_result = await session.execute(deals_stmt)
-            deals_rows = deals_result.all()
-
-            deals: list[dict[str, str | Decimal | None]] = []
-            for price_point, _ps, product, store in deals_rows:
-                deals.append(
-                    {
-                        "product_name": product.name,
-                        "store_name": link_store_name(_ps, store),
-                        "offer_price_sek": (
-                            Decimal(str(price_point.offer_price_sek))
-                            if price_point.offer_price_sek
-                            else None
-                        ),
-                        "offer_type": price_point.offer_type,
-                    }
-                )
-
-            # Get active watches with latest price per product
-            watches_stmt = (
-                select(PriceWatch)
-                .where(PriceWatch.is_active.is_(True))
-                .options(joinedload(PriceWatch.product))
-            )
-            watches_result = await session.execute(watches_stmt)
-            watches = watches_result.unique().scalars().all()
-
-            if not watches and not deals:
-                logger.debug("No watches or deals - skipping weekly summary")
-                self._last_summary_date = today
+            if not deals and not watched_products:
+                logger.debug("No deals or watched products - skipping weekly summary")
+                self._last_summary_date = slot
                 return
 
-            # Build watched products: the LOWEST kr/enhet across the product's links
-            # (latest point per link), not "the latest point on the most-recently
-            # checked link" the old ORDER BY checked_at DESC LIMIT 1 produced.
-            watched_products: list[dict[str, str | Decimal | None]] = []
-            product_ids_seen: set[str] = set()
-            for watch in watches:
-                pid = str(watch.product_id)
-                if pid in product_ids_seen:
+            try:
+                await self.notifier.send_weekly_summary(
+                    to_email=SUMMARY_EMAIL,
+                    deals=deals,
+                    watched_products=watched_products,
+                )
+                self._stats["summaries_sent"] += 1
+                logger.info(f"Sent weekly summary to {SUMMARY_EMAIL}")
+            except Exception as e:
+                logger.error(f"Failed to send weekly summary to {SUMMARY_EMAIL}: {e}")
+
+        self._last_summary_date = slot
+
+    async def _watched_products_summary(
+        self, session: AsyncSession
+    ) -> list[dict[str, str | Decimal | None]]:
+        """The watched-products section: current lowest kr/enhet per bevakad produkt."""
+        watches_stmt = (
+            select(PriceWatch)
+            .where(PriceWatch.is_active.is_(True))
+            .options(joinedload(PriceWatch.product))
+        )
+        watches_result = await session.execute(watches_stmt)
+        watches = watches_result.unique().scalars().all()
+
+        # Build watched products: the LOWEST kr/enhet across the product's links
+        # (latest point per link), not "the latest point on the most-recently
+        # checked link" the old ORDER BY checked_at DESC LIMIT 1 produced.
+        watched_products: list[dict[str, str | Decimal | None]] = []
+        product_ids_seen: set[str] = set()
+        for watch in watches:
+            pid = str(watch.product_id)
+            if pid in product_ids_seen:
+                continue
+            product_ids_seen.add(pid)
+
+            # Latest point PER LINK (same shape as service.get_links_for_product).
+            latest = (
+                select(
+                    PricePoint.product_store_id.label("ps_id"),
+                    func.max(PricePoint.checked_at).label("checked_at"),
+                )
+                .group_by(PricePoint.product_store_id)
+                .subquery()
+            )
+            links_stmt = (
+                select(PricePoint, ProductStore, Store)
+                .join(
+                    latest,
+                    (PricePoint.product_store_id == latest.c.ps_id)
+                    & (PricePoint.checked_at == latest.c.checked_at),
+                )
+                .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
+                .join(Store, ProductStore.store_id == Store.id)
+                .where(ProductStore.product_id == watch.product_id)
+            )
+            links_result = await session.execute(links_stmt)
+            link_rows = links_result.all()
+
+            # kr/enhet from domain.pricing — THE single definition. The effective
+            # price is what you actually pay: the offer when there is one.
+            best_unit: Decimal | None = None
+            best_unit_store = ""
+            best_abs: Decimal | None = None
+            best_abs_store = ""
+            for pp, ps, st in link_rows:
+                effective = pp.offer_price_sek if pp.offer_price_sek is not None else pp.price_sek
+                if effective is None:
                     continue
-                product_ids_seen.add(pid)
+                if best_abs is None or effective < best_abs:
+                    best_abs = effective
+                    best_abs_store = link_store_name(ps, st)
+                unit_price = unit_price_py(effective, ps.package_quantity)
+                if unit_price is not None and (best_unit is None or unit_price < best_unit):
+                    best_unit = unit_price
+                    best_unit_store = link_store_name(ps, st)
 
-                # Latest point PER LINK (same shape as service.get_links_for_product).
-                latest = (
-                    select(
-                        PricePoint.product_store_id.label("ps_id"),
-                        func.max(PricePoint.checked_at).label("checked_at"),
-                    )
-                    .group_by(PricePoint.product_store_id)
-                    .subquery()
-                )
-                links_stmt = (
-                    select(PricePoint, ProductStore, Store)
-                    .join(
-                        latest,
-                        (PricePoint.product_store_id == latest.c.ps_id)
-                        & (PricePoint.checked_at == latest.c.checked_at),
-                    )
-                    .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-                    .join(Store, ProductStore.store_id == Store.id)
-                    .where(ProductStore.product_id == watch.product_id)
-                )
-                links_result = await session.execute(links_stmt)
-                link_rows = links_result.all()
+            cent = Decimal("0.01")
+            if best_unit is not None:
+                lowest_price: Decimal | None = best_unit.quantize(cent, rounding=ROUND_HALF_UP)
+                store_name = best_unit_store
+                # The label carries the product's canonical unit ("kr/st").
+                unit = watch.product.unit or "enhet"
+                price_label = f"kr/{unit}"
+            elif best_abs is not None:
+                # No link has a quantity yet: fall back to the lowest absolute
+                # effective price — labeled as such, never passed off as kr/enhet.
+                lowest_price = best_abs.quantize(cent, rounding=ROUND_HALF_UP)
+                store_name = best_abs_store
+                price_label = "kr"
+            else:
+                lowest_price = None
+                store_name = ""
+                price_label = "kr"
 
-                # kr/enhet from domain.pricing — THE single definition. The effective
-                # price is what you actually pay: the offer when there is one.
-                best_unit: Decimal | None = None
-                best_unit_store = ""
-                best_abs: Decimal | None = None
-                best_abs_store = ""
-                for pp, ps, st in link_rows:
-                    effective = (
-                        pp.offer_price_sek if pp.offer_price_sek is not None else pp.price_sek
-                    )
-                    if effective is None:
-                        continue
-                    if best_abs is None or effective < best_abs:
-                        best_abs = effective
-                        best_abs_store = link_store_name(ps, st)
-                    unit_price = unit_price_py(effective, ps.package_quantity)
-                    if unit_price is not None and (best_unit is None or unit_price < best_unit):
-                        best_unit = unit_price
-                        best_unit_store = link_store_name(ps, st)
+            watched_products.append(
+                {
+                    "name": watch.product.name,
+                    "lowest_price": lowest_price,
+                    "store_name": store_name,
+                    "price_label": price_label,
+                }
+            )
 
-                cent = Decimal("0.01")
-                if best_unit is not None:
-                    lowest_price: Decimal | None = best_unit.quantize(cent, rounding=ROUND_HALF_UP)
-                    store_name = best_unit_store
-                    # The label carries the product's canonical unit ("kr/st").
-                    unit = watch.product.unit or "enhet"
-                    price_label = f"kr/{unit}"
-                elif best_abs is not None:
-                    # No link has a quantity yet: fall back to the lowest absolute
-                    # effective price — labeled as such, never passed off as kr/enhet.
-                    lowest_price = best_abs.quantize(cent, rounding=ROUND_HALF_UP)
-                    store_name = best_abs_store
-                    price_label = "kr"
-                else:
-                    lowest_price = None
-                    store_name = ""
-                    price_label = "kr"
-
-                watched_products.append(
-                    {
-                        "name": watch.product.name,
-                        "lowest_price": lowest_price,
-                        "store_name": store_name,
-                        "price_label": price_label,
-                    }
-                )
-
-            # Group by email and send
-            emails: set[str] = {w.email_address for w in watches}
-            for email in emails:
-                try:
-                    await self.notifier.send_weekly_summary(
-                        to_email=email,
-                        deals=deals,
-                        watched_products=watched_products,
-                    )
-                    self._stats["summaries_sent"] += 1
-                    logger.info(f"Sent weekly summary to {email}")
-                except Exception as e:
-                    logger.error(f"Failed to send weekly summary to {email}: {e}")
-
-        self._last_summary_date = today
+        return watched_products
 
     def get_status(self) -> dict[str, Any]:
         """Get scheduler status and statistics."""

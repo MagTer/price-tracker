@@ -237,6 +237,10 @@ class DealResponse(BaseModel):
     best_alt_unit_price_sek: float | None
     best_alt_store: str | None
     best_alt_package_size: str | None
+    # THE verdict from domain/deals.py ("best" / "worse" / "unknown") and the signed
+    # kr/unit margin behind it. The portal groups on these; it no longer re-derives them.
+    verdict: str
+    savings_per_unit_sek: float | None
 
 
 __all__ = [

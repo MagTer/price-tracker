@@ -4,11 +4,53 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from domain.deals import DEAL_BEST, DEAL_STALE_HOURS, DEAL_UNKNOWN, DealRow
 from domain.protocols.email import EmailMessage, IEmailService
+from domain.schedule import STORE_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+_SWEDISH_WEEKDAYS = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
+
+
+def _sek(value: float | Decimal) -> str:
+    """Money to the öre with a Swedish decimal comma — '17,90'.
+
+    A truncated '13.9' next to a '13,90 kr/liter' reads as a different price; money is
+    always to the öre in this app, and the emails are Swedish user text.
+    """
+    return f"{float(value):.2f}".replace(".", ",")
+
+
+def _ranked_store_groups(deals: list[DealRow]) -> list[tuple[str, list[DealRow]]]:
+    """Butiker alphabetically; inside each, sure wins by margin, then the uncomparable.
+
+    One section per butik = one leg of the shopping round. The in-store ranking mirrors
+    the portal's rankDeals: BEST by the kr/unit margin (biggest win first), then UNKNOWN
+    by the store's discount — the only number those rows have.
+    """
+    groups: dict[str, list[DealRow]] = {}
+    for deal in deals:
+        groups.setdefault(deal.store_name, []).append(deal)
+
+    def rank(store_deals: list[DealRow]) -> list[DealRow]:
+        best = sorted(
+            (d for d in store_deals if d.verdict == DEAL_BEST),
+            key=lambda d: -(d.savings_per_unit_sek or 0.0),
+        )
+        unknown = sorted(
+            (d for d in store_deals if d.verdict == DEAL_UNKNOWN),
+            key=lambda d: -d.discount_percent,
+        )
+        # Defensive: the scheduler filters WORSE out, but a caller that does not still
+        # gets a coherent email rather than silently dropped rows.
+        rest = [d for d in store_deals if d.verdict not in (DEAL_BEST, DEAL_UNKNOWN)]
+        return best + unknown + rest
+
+    return [(name, rank(store_deals)) for name, store_deals in sorted(groups.items())]
 
 
 class PriceNotifier:
@@ -71,15 +113,19 @@ class PriceNotifier:
     async def send_weekly_summary(
         self,
         to_email: str,
-        deals: list[dict[str, str | Decimal | None]],
+        deals: list[DealRow],
         watched_products: list[dict[str, str | Decimal | None]],
     ) -> bool:
-        """Send weekly price summary email.
+        """Send the weekly buy-list email.
+
+        `deals` is the pre-filtered buy list (BEST + UNKNOWN from domain/deals.py) —
+        grouping per butik and the in-butik ranking happen here, because they are
+        presentation, not judgement.
 
         Returns:
             True if email was sent successfully.
         """
-        subject = "Veckans prisöversikt – Prisspaning"
+        subject = "Veckans inköpslista – Prisspaning"
         html_body = self._build_summary_html(deals, watched_products)
 
         message = EmailMessage(
@@ -223,81 +269,107 @@ class PriceNotifier:
         </html>
         """
 
-    def _build_summary_html(
-        self,
-        deals: list[dict[str, str | Decimal | None]],
-        watched_products: list[dict[str, str | Decimal | None]],
-    ) -> str:
-        """Build HTML for weekly summary email."""
-        # Build deals section
-        deals_html = ""
-        if deals:
-            deals_rows = ""
-            for deal in deals[:10]:  # Limit to top 10
-                product_name = deal.get("product_name", "")
-                store_name = deal.get("store_name", "")
-                offer_price = deal.get("offer_price_sek", "")
-                offer_type = deal.get("offer_type", "")
-                store_url = deal.get("store_url")
-                unit_price = deal.get("unit_price_sek")
-                unit = deal.get("unit")
+    def _deal_row_html(self, deal: DealRow, now: datetime) -> str:
+        """One buy-list row: product (linked), price + jfr-pris, and the margin that decides.
 
-                # Escape all user-controlled data
-                safe_product_name = html.escape(str(product_name))
-                safe_store_name = html.escape(str(store_name))
-                safe_offer_type = html.escape(str(offer_type))
+        A deal seen more than DEAL_STALE_HOURS ago is dated in Swedish civil time
+        ("sett fredag 24/7"), never hidden — the campaign may already be over, and
+        saying when we looked is the honest version of that. Same rule as the portal's
+        muted Sett column.
+        """
+        safe_name = html.escape(deal.product_name)
+        # The email is read standing in the aisle: the product name links straight
+        # to the store's page (scheme-validated, like the alert emails).
+        if self._is_safe_url(deal.store_url):
+            safe_url = html.escape(deal.store_url, quote=True)
+            product_cell = f'<a href="{safe_url}" style="color: #2563eb;">{safe_name}</a>'
+        else:
+            product_cell = safe_name
+        if deal.package_size:
+            product_cell += (
+                f'<br><span style="color: #64748b; font-size: 0.85em;">'
+                f"{html.escape(deal.package_size)}</span>"
+            )
 
-                # The email is read standing in the aisle: the product name links straight
-                # to the store's page (scheme-validated, like the alert emails).
-                if store_url and self._is_safe_url(str(store_url)):
-                    safe_url = html.escape(str(store_url), quote=True)
-                    product_cell = (
-                        f'<a href="{safe_url}" style="color: #2563eb;">{safe_product_name}</a>'
-                    )
-                else:
-                    product_cell = safe_product_name
+        # Jfr-pris under the absolute price — the comparable number, when known.
+        unit_label = f"kr/{deal.unit}" if deal.unit else "kr/enhet"
+        price_cell = f'<strong style="color: #22c55e;">{_sek(deal.offer_price_sek)} kr</strong>'
+        if deal.unit_price_sek is not None:
+            price_cell += (
+                f'<br><span style="color: #64748b; font-size: 0.85em;">'
+                f"{_sek(deal.unit_price_sek)} {html.escape(unit_label)}</span>"
+            )
 
-                # Jfr-pris under the absolute price — the comparable number, when known.
-                unit_price_html = ""
-                if unit_price is not None:
-                    unit_label = html.escape(f"kr/{unit}" if unit else "kr/enhet")
-                    unit_price_html = (
-                        f'<br><span style="color: #64748b; font-size: 0.85em;">'
-                        f"{float(unit_price):.2f} {unit_label}</span>"
-                    )
+        verdict_cell = self._verdict_html(deal, unit_label)
+        if now - deal.checked_at > timedelta(hours=DEAL_STALE_HOURS):
+            seen_local = deal.checked_at.replace(tzinfo=UTC).astimezone(STORE_TIMEZONE)
+            seen_text = (
+                f"sett {_SWEDISH_WEEKDAYS[seen_local.weekday()]} "
+                f"{seen_local.day}/{seen_local.month} — kan ha hunnit ta slut"
+            )
+            verdict_cell += (
+                f'<br><span style="color: #b45309; font-size: 0.85em;">'
+                f"{html.escape(seen_text)}</span>"
+            )
 
-                deals_rows += f"""
+        return f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
                         {product_cell}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {safe_store_name}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;
-                               color: #22c55e; font-weight: bold;">
-                        {offer_price} kr{unit_price_html}
-                    </td>
+                        {price_cell}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        <span style="background: #f59e0b; color: white;
-                                     padding: 2px 6px; border-radius: 3px;
-                                     font-size: 0.8em;">
-                            {safe_offer_type}
-                        </span>
-                    </td>
+                        {verdict_cell}</td>
                 </tr>"""
 
-            deals_html = f"""
-            <h3 style="color: #1e3a5f; margin-top: 30px;">Aktuella erbjudanden</h3>
+    @staticmethod
+    def _verdict_html(deal: DealRow, unit_label: str) -> str:
+        """The margin as a sentence — '0,45 kr/l billigare än Willys 24-pack' is what
+        you act on; a bare 'Billigast' badge is not."""
+        alt = deal.best_alt_store or ""
+        if deal.best_alt_package_size:
+            alt = f"{alt} {deal.best_alt_package_size}".strip()
+        if deal.verdict == DEAL_BEST:
+            margin = deal.savings_per_unit_sek or 0.0
+            text = (
+                f"{_sek(margin)} {unit_label} billigare än {alt}"
+                if margin > 0
+                else f"lika billigt som {alt}"
+            )
+            return f'<span style="color: #16a34a;">{html.escape(text)}</span>'
+        # UNKNOWN rides with the buyable ones (it is not KNOWN to be bad) but says
+        # honestly why no comparison exists — same wording as the portal.
+        why = "länken saknar mängd" if deal.unit_price_sek is None else "enda länken för produkten"
+        return f'<span style="color: #64748b;">{html.escape(f"kan inte jämföras — {why}")}</span>'
+
+    def _build_summary_html(
+        self,
+        deals: list[DealRow],
+        watched_products: list[dict[str, str | Decimal | None]],
+        now: datetime | None = None,
+    ) -> str:
+        """Build HTML for the weekly buy-list email — one section per butik."""
+        if now is None:
+            now = datetime.now(UTC).replace(tzinfo=None)
+
+        deals_html = ""
+        if deals:
+            for store_name, store_deals in _ranked_store_groups(deals):
+                rows = "".join(self._deal_row_html(deal, now) for deal in store_deals)
+                deals_html += f"""
+            <h3 style="color: #1e3a5f; margin-top: 30px;">{html.escape(store_name)}</h3>
             <table style="width: 100%; border-collapse: collapse;">
                 <thead>
                     <tr style="background: #f3f4f6;">
                         <th style="padding: 8px; text-align: left;">Produkt</th>
-                        <th style="padding: 8px; text-align: left;">Butik</th>
                         <th style="padding: 8px; text-align: left;">Pris</th>
-                        <th style="padding: 8px; text-align: left;">Typ</th>
+                        <th style="padding: 8px; text-align: left;">Jämförelse</th>
                     </tr>
                 </thead>
-                <tbody>{deals_rows}</tbody>
+                <tbody>{rows}</tbody>
             </table>"""
+        else:
+            deals_html = "<p>Inga köpvärda erbjudanden den här veckan.</p>"
 
         # Build watched products section
         watched_html = ""
@@ -345,8 +417,9 @@ class PriceNotifier:
         <head><meta charset="UTF-8"></head>
         <body style="font-family: Arial, sans-serif; max-width: 600px;
                      margin: 0 auto; padding: 20px;">
-            <h2 style="color: #1e3a5f;">Veckans prisöversikt</h2>
-            <p>Här är en sammanfattning av priser och erbjudanden denna vecka.</p>
+            <h2 style="color: #1e3a5f;">Veckans inköpslista</h2>
+            <p>Det här är värt att köpa den här veckan — ett avsnitt per butik.
+               Jämförelsen är mot produktens billigaste andra länk, per enhet.</p>
             {deals_html}
             {watched_html}
 

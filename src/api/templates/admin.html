@@ -1518,20 +1518,22 @@ function renderFreshness(sched) {
 //   UNKNOWN — no honest comparison exists (no amount on this link, or no other link at all).
 // Ranking on checked_at put all three in one recency-ordered pile, so a campaign we happened to
 // check last landed above a genuine win.
+//
+// THE judgement lives in domain/deals.py since v0.41.0 (the weekly email needs the same one) —
+// /deals returns `verdict` and `savings_per_unit_sek`, and these two are READERS of that
+// answer. Do not re-derive the comparison here: that is how the definitions drift apart.
 const DEAL_BEST = 'best';
 const DEAL_WORSE = 'worse';
 const DEAL_UNKNOWN = 'unknown';
 
 function classifyDeal(d) {
-    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return DEAL_UNKNOWN;
-    return d.unit_price_sek <= d.best_alt_unit_price_sek ? DEAL_BEST : DEAL_WORSE;
+    return d.verdict;
 }
 
 // Signed kr/unit against the product's next-best link: positive = this offer wins by that much,
 // negative = it loses by that much. Null when there is nothing to compare against.
 function dealSavings(d) {
-    if (d.unit_price_sek == null || d.best_alt_unit_price_sek == null) return null;
-    return d.best_alt_unit_price_sek - d.unit_price_sek;
+    return d.savings_per_unit_sek;
 }
 
 function dealAltLabel(d) {
