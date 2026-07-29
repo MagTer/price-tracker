@@ -248,3 +248,20 @@ class TestCoverage:
         assert coverage["products_priced"] == 1
         assert coverage["products_single_store"] == 1
         assert coverage["links_without_amount"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_product_with_no_link_counts_in_the_denominator(self, db_session) -> None:
+        """The inner joins cannot see a linkless product, so counting them made the
+        coverage line claim "1 av 1" on a two-product tracker — a health count blind
+        to the least healthy state. "Saknar pris" on Produkter is the list; this is
+        the honest denominator."""
+        ica = await _store(db_session, "ica")
+        linked = await _product(db_session, "Mellanmjölk")
+        await _point(db_session, await _link(db_session, linked, ica, "1"), "20.00")
+        await _product(db_session, "Ny produkt utan länk")
+        await db_session.commit()
+
+        coverage = (await build_statistics(db_session))["coverage"]
+
+        assert coverage["products"] == 2
+        assert coverage["products_priced"] == 1

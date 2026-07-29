@@ -200,6 +200,12 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
         )
     ).all()
 
+    # Counted separately, NOT from the join: a product with no link yet is invisible
+    # to the inner joins above, and using their count as the denominator makes the
+    # coverage line claim "15 av 15" on a 16-product tracker — a health count that
+    # cannot see the least healthy state.
+    total_products = (await session.execute(select(func.count()).select_from(Product))).scalar_one()
+
     links: dict[Any, _Link] = {}
     products: dict[Any, Product] = {}
     links_by_product: dict[Any, list[_Link]] = defaultdict(list)
@@ -314,7 +320,7 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
         row["offers_cheapest"] = offers.get("was_cheapest", 0)
 
     first_observation = all_points[0].checked_at if all_points else None
-    coverage = _coverage(links, links_by_product, stores_by_product, series, now)
+    coverage = _coverage(links, total_products, stores_by_product, series, now)
     # Step 0's table, reported as a bare fact: reliability panels need weeks of it, and until
     # then the honest thing to say is when collection started, not to imply an answer.
     attempt_stmt = select(func.count(CheckAttempt.id), func.min(CheckAttempt.checked_at))
@@ -407,7 +413,7 @@ def _store_names(links: dict[Any, _Link]) -> set[str]:
 
 def _coverage(
     links: dict[Any, _Link],
-    links_by_product: dict[Any, list[_Link]],
+    total_products: int,
     stores_by_product: dict[Any, set[str]],
     series: dict[Any, _ProductSeries],
     now: datetime,
@@ -420,7 +426,7 @@ def _coverage(
     """
     checked = [link.last_checked_at for link in links.values() if link.last_checked_at]
     return {
-        "products": len(links_by_product),
+        "products": total_products,
         "products_priced": sum(1 for s in series.values() if s.last is not None),
         "products_single_store": sum(1 for names in stores_by_product.values() if len(names) < 2),
         "links": len(links),
