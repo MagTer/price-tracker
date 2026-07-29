@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.categories import normalize_category
+from domain.link_health import broken_links
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser
 from domain.pricing import (
@@ -499,6 +500,10 @@ class PriceTrackerService:
                 result = await session.execute(stmt)
                 rows = result.all()
 
+                # THE broken-link judgement (domain/link_health.py) — the badge in the
+                # links panel must agree with the facet the /products route feeds.
+                broken = await broken_links(session, [ps.id for ps, _, _ in rows])
+
                 links: list[dict[str, str | float | bool | datetime | None]] = []
                 for product_store, store, price_point in rows:
                     effective = _effective_price(price_point) if price_point else None
@@ -547,6 +552,13 @@ class PriceTrackerService:
                             "needs_amount": product_store.package_quantity is None,
                             # D-09's derived, self-clearing flag — never persisted.
                             "quantity_mismatch": quantity_mismatch(product_store),
+                            # v0.40.0: repeated non-blocked failures — derived, self-clearing.
+                            "is_broken": product_store.id in broken,
+                            "broken_detail": (
+                                broken[product_store.id].last_detail
+                                if product_store.id in broken
+                                else None
+                            ),
                         }
                     )
 

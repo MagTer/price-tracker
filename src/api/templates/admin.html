@@ -1273,11 +1273,12 @@ function productMatchesFilters(p) {
     // "vad jämför jag inte?" — men var för sig duger de oftast, eftersom nästan allt
     // ligger i båda kedjorna.
     if (f.missing && !missingFromStore(p, f.missing)) return false;
-    // The three status filters are the three ways a product needs attention — the "saknar
+    // The status filters are the ways a product needs attention — the "saknar
     // mängd" badge already counts one of them; this is how you work through them in a batch.
     if (f.status === 'offer' && !links.some(s => s.offer_price_sek != null)) return false;
     if (f.status === 'needs_amount' && !links.some(s => s.needs_amount === true)) return false;
     if (f.status === 'no_price' && links.some(s => effectivePrice(s) != null)) return false;
+    if (f.status === 'broken' && !links.some(s => s.is_broken === true)) return false;
     return true;
 }
 
@@ -1342,6 +1343,28 @@ function buildFacetOptions() {
         .sort((a, b) => a.count - b.count || String(a.name).localeCompare(String(b.name), 'sv'))
         .map(g => ({ value: g.value, label: `Saknar ${g.name} (${g.count})` }));
     fillFacet('filter-missing', 'missing', 'Täckning: alla', gaps);
+
+    // "Trasig länk" is a DATA-driven option among the static status choices: it appears
+    // only when the server flagged at least one link (is_broken — repeated non-blocked
+    // failures, domain/link_health.py), and carries the count like the täckning options.
+    // Offered empty it would be a filter that always returns zero rows — the rule the
+    // other facets already follow. If a stored filter points at a removed option,
+    // applyFiltersToControls clears it.
+    const brokenCount = allProducts.filter(
+        p => (p.stores || []).some(s => s.is_broken === true)
+    ).length;
+    const statusEl = document.getElementById('filter-status');
+    let brokenOpt = statusEl.querySelector('option[value="broken"]');
+    if (brokenCount > 0) {
+        if (!brokenOpt) {
+            brokenOpt = document.createElement('option');
+            brokenOpt.value = 'broken';
+            statusEl.appendChild(brokenOpt);
+        }
+        brokenOpt.textContent = `Trasig länk (${brokenCount})`;
+    } else if (brokenOpt) {
+        brokenOpt.remove();
+    }
 }
 
 function renderProducts() {
@@ -2610,8 +2633,21 @@ function buildLinksTable(rows, unit) {
                 ? `<span class="unit-price">${escapeHtml(r.unit_price_sek.toFixed(2))} kr</span>`
                 : '&#8212;');
 
+        // Repeated non-blocked failures on this URL (is_broken, domain/link_health.py).
+        // Derived and self-clearing: one successful check removes it, so there is nothing
+        // to dismiss. The actions are the two buttons already on the row — Kontrollera nu
+        // to retest, and Ta bort länk inside Redigera if the page is truly gone. A wall
+        // never shows here (blocked attempts are invisible to the judgement), so this
+        // must never be read as "ICA blockerar oss" — that state lives in the status box.
+        const brokenBadge = r.is_broken === true
+            ? ` <span class="badge badge-error" title="${escapeHtml(
+                  'Upprepade misslyckade kontroller'
+                  + (r.broken_detail ? ' — senaste svar: ' + r.broken_detail : '')
+              )}">trasig länk</span>`
+            : '';
+
         html += `<tr>
-            <td>${storeLinkHtml(r.store_name, r.store_url)}</td>
+            <td>${storeLinkHtml(r.store_name, r.store_url)}${brokenBadge}</td>
             <td>${pkg}</td>
             <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
             <td>${unitCell}</td>

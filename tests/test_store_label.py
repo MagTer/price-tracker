@@ -84,13 +84,13 @@ class TestLinkPayloadCarriesBothNames:
     def test_display_name_is_the_label_and_raw_label_rides_along(self):
         store = _store()
         link = _link(store, label="ICA Supermarket Björksätra")
-        payload = _link_payload(link, store, None)
+        payload = _link_payload(link, store, None, None)
         assert payload["store_name"] == "ICA Supermarket Björksätra"
         assert payload["store_label"] == "ICA Supermarket Björksätra"
 
     def test_unlabeled_link_displays_chain_and_null_label(self):
         store = _store()
-        payload = _link_payload(_link(store), store, None)
+        payload = _link_payload(_link(store), store, None, None)
         assert payload["store_name"] == "ICA"
         assert payload["store_label"] is None
 

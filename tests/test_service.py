@@ -641,6 +641,40 @@ class TestPriceTrackerService:
         # The operator's intent is untouched — evidence never rewrites it (D-07).
         assert links[0]["package_quantity"] == 24.0
 
+    @pytest.mark.asyncio
+    async def test_get_links_for_product_carries_the_broken_flag(
+        self, mock_session_factory: Mock
+    ) -> None:
+        """The links panel's badge and the /products facet must agree, so the service rows
+        carry the SAME judgement (domain/link_health.py) the admin routes emit."""
+        mock_session = AsyncMock()
+        mock_session_factory.return_value.__aenter__.return_value = mock_session
+
+        store = MagicMock()
+        store.name = "ICA"
+        store.slug = "ica"
+
+        dead = _make_link(package_size="3-pack", package_quantity=Decimal("3"))
+        healthy = _make_link(package_size="24-pack", package_quantity=Decimal("24"))
+
+        links_result = MagicMock()
+        links_result.all.return_value = [
+            (dead, store, _make_price_point()),
+            (healthy, store, _make_price_point()),
+        ]
+        attempts_result = MagicMock()
+        attempts_result.all.return_value = [(dead.id, "fetch_failed", "HTTP 404")] * 3
+        mock_session.execute = AsyncMock(side_effect=[links_result, attempts_result])
+
+        service = PriceTrackerService(mock_session_factory)
+        links = await service.get_links_for_product(str(uuid.uuid4()))
+
+        by_id = {link["product_store_id"]: link for link in links}
+        assert by_id[str(dead.id)]["is_broken"] is True
+        assert by_id[str(dead.id)]["broken_detail"] == "HTTP 404"
+        assert by_id[str(healthy.id)]["is_broken"] is False
+        assert by_id[str(healthy.id)]["broken_detail"] is None
+
 
 # ---------------------------------------------------------------------------
 # perform_price_check — THE single fetch→extract→enrich→apply_scrape→record flow

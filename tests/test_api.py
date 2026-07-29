@@ -902,6 +902,7 @@ class TestComputedUnitPriceOnRead:
             _scalars([product]),
             _rows([(ps, store)]),
             _scalars([pp]),
+            _rows([]),  # broken-links query (domain/link_health.py): no attempts recorded
         ]
 
         r = client.get("/products")
@@ -928,6 +929,7 @@ class TestComputedUnitPriceOnRead:
             _scalars([product]),
             _rows([(ps, store)]),
             _scalars([pp]),
+            _rows([]),  # broken-links query (domain/link_health.py): no attempts recorded
         ]
 
         r = client.get("/products")
@@ -954,6 +956,7 @@ class TestComputedUnitPriceOnRead:
             _scalars([product]),
             _rows([(ps, store)]),
             _scalars([pp]),
+            _rows([]),  # broken-links query (domain/link_health.py): no attempts recorded
         ]
 
         r = client.get("/products")
@@ -974,6 +977,7 @@ class TestComputedUnitPriceOnRead:
             _scalars([product]),
             _rows([(ps, store)]),
             _scalars([pp]),
+            _rows([]),  # broken-links query (domain/link_health.py): no attempts recorded
         ]
 
         r = client.get("/products")
@@ -982,11 +986,58 @@ class TestComputedUnitPriceOnRead:
         assert link["unit_price_sek"] == pytest.approx(119.90 / 24, rel=1e-3)  # ~5.00
         assert link["unit_price_sek"] != pytest.approx(139.90 / 24, rel=1e-3)  # not the regular
 
+
+class TestBrokenLinkFlag:
+    """v0.40.0: is_broken/broken_detail on every link row — the 'Trasig länk' facet's and
+    the links-panel badge's shared source. THE judgement is domain/link_health.py; these
+    tests pin that it reaches the wire."""
+
+    def test_list_products_flags_a_link_with_a_failure_streak(self, client, mock_session):
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90")
+        mock_session.execute.side_effect = [
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
+            # The broken-links query: the link's three most recent non-blocked attempts.
+            _rows([(ps.id, "fetch_failed", "HTTP 404")] * 3),
+        ]
+
+        r = client.get("/products")
+        assert r.status_code == 200
+        link = r.json()[0]["stores"][0]
+
+        assert link["is_broken"] is True
+        assert link["broken_detail"] == "HTTP 404"
+
+    def test_a_healthy_link_carries_the_flag_as_false(self, client, mock_session):
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90")
+        mock_session.execute.side_effect = [
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
+            _rows([(ps.id, "ok", None), (ps.id, "fetch_failed", "HTTP 404")]),
+        ]
+
+        r = client.get("/products")
+        link = r.json()[0]["stores"][0]
+
+        assert link["is_broken"] is False
+        assert link["broken_detail"] is None
+
     def test_get_product_carries_the_computed_price_and_both_flags(self, client, mock_session):
         product, store = _product(), _store()
         ps = _ps(product, store, package_quantity="8", scraped_package_quantity="8")
         pp = _pp(ps, price="59.90", store_unit="8.10")
-        mock_session.execute.side_effect = [_scalar(product), _rows([(ps, store)]), _scalar(pp)]
+        mock_session.execute.side_effect = [
+            _scalar(product),
+            _rows([(ps, store)]),
+            _scalar(pp),
+            _rows([]),  # broken-links query: no attempts recorded
+        ]
 
         r = client.get(f"/products/{product.id}")
         assert r.status_code == 200
@@ -1102,6 +1153,7 @@ class TestStoresArrayIsRanked:
             _scalars([product]),
             _rows([(ps, store) for ps, store, _ in rows]),
             _scalars([pp for _, _, pp in rows]),
+            _rows([]),  # broken-links query: no attempts recorded
         ]
 
         r = client.get("/products")
@@ -1122,6 +1174,7 @@ class TestStoresArrayIsRanked:
             _scalar(product),
             _rows([(ps, store) for ps, store, _ in rows]),
             *[_scalar(pp) for _, _, pp in rows],
+            _rows([]),  # broken-links query: no attempts recorded
         ]
 
         r = client.get(f"/products/{product.id}")
@@ -1149,6 +1202,7 @@ class TestStoresArrayIsRanked:
             _scalars([product]),
             _rows([(ps, store) for ps, store, _ in rows]),
             _scalars([pp for _, _, pp in rows]),
+            _rows([]),  # broken-links query: no attempts recorded
         ]
 
         r = client.get("/products")

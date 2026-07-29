@@ -36,6 +36,7 @@ from api.schemas import (
 )
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.extractors.jsonld import JsonLdExtractor
+from domain.link_health import LinkHealth, broken_links
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser, get_api_extractor, get_html_extractor
 from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
@@ -217,7 +218,10 @@ def _as_float(value: Decimal | None) -> float | None:
 
 
 def _link_payload(
-    ps: ProductStore, store: Store, latest_price: PricePoint | None
+    ps: ProductStore,
+    store: Store,
+    latest_price: PricePoint | None,
+    health: LinkHealth | None,
 ) -> dict[str, str | int | None | float | bool]:
     """One link's wire shape — the ONE builder behind every `stores` array we emit.
 
@@ -266,11 +270,16 @@ def _link_payload(
         "needs_amount": ps.package_quantity is None,
         # D-09's derived, self-clearing flag — never persisted as a boolean.
         "quantity_mismatch": quantity_mismatch(ps),
+        # v0.40.0: the last N non-blocked attempts all failed (domain/link_health.py is
+        # THE judgement). Derived and self-clearing like quantity_mismatch.
+        "is_broken": health is not None,
+        "broken_detail": health.last_detail if health is not None else None,
     }
 
 
 def _sorted_links(
     rows: list[tuple[ProductStore, Store, PricePoint | None]],
+    broken: dict[uuid.UUID, LinkHealth],
 ) -> list[dict[str, str | int | None | float | bool]]:
     """Links, cheapest kr/unit first, links with no amount last — the same order the domain
     service already emits (`unit_price_expr(...).asc().nulls_last()`).
@@ -285,7 +294,7 @@ def _sorted_links(
     prices hold still between renders.
     """
     return [
-        _link_payload(ps, store, pp)
+        _link_payload(ps, store, pp, broken.get(ps.id))
         for ps, store, pp in sorted(
             rows,
             key=lambda row: (
@@ -452,10 +461,11 @@ async def list_products(
         result = await session.execute(stmt)
         products = result.scalars().all()
 
-        # Batch-fetch store links and latest prices (avoids N+1 per product)
+        # Batch-fetch store links, latest prices and link health (avoids N+1 per product)
         product_ids = [product.id for product in products]
         ps_by_product: dict[uuid.UUID, list[tuple[ProductStore, Store]]] = {}
         latest_by_ps: dict[uuid.UUID, PricePoint] = {}
+        broken: dict[uuid.UUID, LinkHealth] = {}
         if product_ids:
             ps_stmt = (
                 select(ProductStore, Store)
@@ -489,13 +499,16 @@ async def list_products(
                 for pp in latest_result.scalars().all():
                     latest_by_ps[pp.product_store_id] = pp
 
+                broken = await broken_links(session, ps_ids)
+
         product_responses: list[ProductResponse] = []
         for product in products:
             stores_data = _sorted_links(
                 [
                     (ps, store, latest_by_ps.get(ps.id))
                     for ps, store in ps_by_product.get(product.id, [])
-                ]
+                ],
+                broken,
             )
 
             product_responses.append(
@@ -1165,7 +1178,7 @@ async def get_product(
             price_result = await session.execute(price_stmt)
             rows.append((ps, store, price_result.scalar_one_or_none()))
 
-        stores_data = _sorted_links(rows)
+        stores_data = _sorted_links(rows, await broken_links(session, [ps.id for ps, _ in ps_rows]))
 
         return ProductResponse(
             id=str(product.id),
