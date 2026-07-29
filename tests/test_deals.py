@@ -79,9 +79,7 @@ class TestInactiveLinksAreNoAlternative:
 
     @pytest.mark.asyncio
     async def test_an_inactive_cheaper_link_does_not_flip_the_verdict(self, db_session) -> None:
-        store = (
-            await db_session.execute(select(Store).where(Store.slug == "apotea"))
-        ).scalar_one()
+        store = (await db_session.execute(select(Store).where(Store.slug == "apotea"))).scalar_one()
         product = Product(
             tenant_id=DEFAULT_TENANT_ID, name="Lambi", brand="Lambi", category=None, unit="st"
         )

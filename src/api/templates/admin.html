@@ -1599,13 +1599,20 @@ function buildDealRow(d) {
     const ord = d.price_sek != null
         ? '<div class="best-link">ord. ' + escapeHtml(formatSek(d.price_sek)) + ' kr</div>'
         : '';
+    // The store's own framing ("Välj & blanda! 2 för 99,00") carries the multi-buy
+    // CONDITION — a per-unit price without it claims the discount applies to a single
+    // unit, and a shopper buys one and pays ordinarie. It rides in the price cell, not
+    // a col-secondary one, because the condition must survive the phone in the aisle.
+    const villkor = d.offer_details
+        ? '<div class="best-link">' + escapeHtml(d.offer_details) + '</div>'
+        : '';
     // The verdict is rendered twice: as its own column, and duplicated under the product
     // name in a phone-only block. Four content-heavy columns honestly do not fit 390px, and
     // the verdict is the one thing that must not be the column that gets clipped.
     return `<tr>
         <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div></td>
         <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
-        <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${jfr}${ord}</td>
+        <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${villkor}${jfr}${ord}</td>
         <td class="col-secondary">${dealComparisonCell(d)}</td>
         <td class="col-secondary"><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
         <td class="col-secondary">${dealSeenCell(d)}</td>
