@@ -248,6 +248,18 @@ class TestStockStatus:
         assert result is not None
         assert result.in_stock is False
 
+    def test_all_schema_org_unbuyable_markers_are_respected(self) -> None:
+        """The full JsonLdExtractor marker set, not just OutOfStock: schema.org spells
+        "not buyable" as SoldOut and Discontinued too, and this tier outranks JSON-LD,
+        so a miss here means the stricter judgement never runs."""
+        for marker in ("https://schema.org/SoldOut", "http://schema.org/Discontinued"):
+            page = _page()
+            page["linkingData"]["offers"]["availability"] = marker
+            result = LykoExtractor().extract_from_html(_html(page), URL)
+
+            assert result is not None
+            assert result.in_stock is False, marker
+
     def test_physical_store_availability_never_decides(self) -> None:
         """variantStoreAvailabilityStatus says "outOfStockInAllStores" on products that
         are in stock and on sale online — it describes shops we never buy from."""

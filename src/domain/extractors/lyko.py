@@ -268,7 +268,14 @@ class LykoExtractor:
         if isinstance(offers, dict):
             availability = offers.get("availability")
             if isinstance(availability, str) and availability.strip():
-                return "outofstock" not in availability.lower().replace("_", "")
+                # The same marker set as JsonLdExtractor — schema.org spells "not
+                # buyable" as OutOfStock, SoldOut OR Discontinued, and recognizing
+                # only the first kept a sold-out product rendering as i lager
+                # (this tier outranks JSON-LD, so the stricter check never ran).
+                normalized = availability.lower().replace("_", "")
+                return not any(
+                    marker in normalized for marker in ("outofstock", "soldout", "discontinued")
+                )
 
         online_status = page.get("onlineStatus")
         if isinstance(online_status, dict):
