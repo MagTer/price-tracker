@@ -5,7 +5,16 @@
 
 **Status (2026-07-28): the extraction is done and this is a live product.** It is deployed in prod. Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **648 passing** (that total includes 33 Postgres integration tests; with no DB reachable they skip cleanly and you get `615 passed, 33 skipped`). No local Postgres is needed to run the integration tier — `docker run --rm -e POSTGRES_USER=price_tracker -e POSTGRES_PASSWORD=price_tracker -e POSTGRES_DB=price_tracker -p 55432:5432 postgres:16` plus `TEST_DATABASE_URL` pointed at it runs all of it, and that is how a schema change should be verified before it is tagged.
 
-**Deploy state (2026-07-29): prod runs `v0.32.1`; everything from `v0.33.0` (Swedish förmiddag window) through `v0.37.0` (Lyko) is tagged and built, waiting on ONE deploy bump — which now also applies TWO alembic revisions (`0009_check_attempts`, `0010_seed_lyko`).** Backup export checked against the live instance (on v0.26.0): 15 products / 38 links / 41 history rows, 38 KB, format 1.1. **This line goes stale the moment a tag is cut, so never trust it on its own** — `git tag | tail -1` is the newest tag and `ssh magnus@192.168.10.223 "sudo docker inspect price-tracker --format '{{.Config.Image}}'"` is what prod actually runs. Deploying is a one-line bump of the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml` — that repo is not this repo, and the release is not live until that bump lands.
+**Deploy state: DO NOT state it from this file — read it, every time, with the one command below.** No pinned version is recorded here on purpose. A written-down version is wrong the moment Magnus bumps, and a stale one has already been repeated back to him as fact ("prod runs v0.32.1" when prod was four releases further on, at v0.36.0) — an assertion about someone else's system that costs them trust in every other claim in the same message. **Magnus bumps the pin himself, directly in the GitHub web UI** (commits read "Update price-tracker image to version X"), so the deployment truth is the home-server repo's file, not this machine and not a memory of it:
+
+```bash
+# WHAT PROD IS PINNED TO — the authority. No SSH, no clone, works from anywhere.
+gh api repos/MagTer/home-server/contents/compose/dokploy-apps/price-tracker/docker-compose.yml \
+  --jq '.content' | tr -d '\n' | base64 -d | grep 'image: ghcr.io'
+git tag | tail -1   # the newest tag HERE — the gap between the two is what is undeployed
+```
+
+`ssh magnus@192.168.10.223 "sudo docker inspect price-tracker --format '{{.Config.Image}}'"` answers what the container is actually RUNNING, which is the check worth making when a deploy is suspected to have not landed. Backup export checked against the live instance (on v0.26.0): 15 products / 38 links / 41 history rows, 38 KB, format 1.1. Deploying is that one-line bump in `compose/dokploy-apps/price-tracker/docker-compose.yml` — that repo is not this repo, do not edit it from here, and the release is not live until the bump lands.
 
 **Since 04.1 — what changed, and where the rule now lives.** This is an index, not the documentation: every durable rule sits in **Architecture** or **Gotchas** below, next to the code it governs. Do not grow this list into a changelog — `git log` is the changelog.
 
@@ -222,7 +231,7 @@ gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -
 - **minor** (`v0.3.x` → `v0.4.0`) — a new capability, a schema change, or anything that alters how the app is operated or deployed.
 - A schema change means **a new alembic revision** (additive, on top of the chain — see Gotcha 3 for why a shipped revision is never rewritten in place). The deploy applies it via `alembic upgrade head`; verify with `alembic check`, not `alembic current`.
 
-**Then tell Magnus the tag is built and needs the deploy bump.** Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml` (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
+**Then tell Magnus the tag is built and needs the deploy bump** — and say which version is pending against what is pinned *right now*, read with the command in the Deploy state paragraph, never recalled. Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml`, which **Magnus makes himself in the GitHub web UI** (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
 
 Docs-only, planning-only, or test-only commits do **not** earn a tag; they ride along with the next real one.
 
