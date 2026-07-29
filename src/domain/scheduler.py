@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import random
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -29,7 +31,7 @@ from domain.protocols import (
     IRateLimiter,
 )
 from domain.result import extraction_source
-from domain.schedule import effective_schedule, next_check_time
+from domain.schedule import effective_schedule, next_check_time_for_link, next_morning_retry
 from domain.service import PriceCheckOutcome, perform_price_check
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,11 @@ class PriceCheckScheduler:
 
         logger.info(f"Checking {len(due_items)} products")
 
+        # Per-cycle stagger for breaker deferrals, keyed by store. Recreated every cycle,
+        # so repeated cycles against a still-cooled store re-spread from zero instead of
+        # marching the offsets outward — see _next_deferral_offset.
+        deferral_offsets: dict[uuid.UUID, float] = {}
+
         for product_store in due_items:
             # Per-store circuit breaker: if this store block-throttled us recently, skip its
             # links WITHOUT fetching — poking a WAF that's challenging us only reinforces the
@@ -213,7 +220,10 @@ class PriceCheckScheduler:
                         await skip_session.execute(
                             update(ProductStore)
                             .where(ProductStore.id == product_store.id)
-                            .values(next_check_at=cooled_until)
+                            .values(
+                                next_check_at=cooled_until
+                                + self._next_deferral_offset(deferral_offsets, product_store)
+                            )
                         )
                         await skip_session.commit()
                 except Exception as skip_error:
@@ -261,9 +271,9 @@ class PriceCheckScheduler:
 
                     # Update timestamps with the next check time via an explicit
                     # UPDATE — product_store is detached here. A FAILED check on a
-                    # weekday-scheduled link retries in 24h instead of waiting a
-                    # full week; frequency-based links keep their jittered
-                    # schedule, and success keeps current behavior exactly.
+                    # weekday-scheduled link retries the next morning instead of waiting a
+                    # full week; frequency-based links keep their jittered schedule, and
+                    # success reschedules through the shared slot-stratified definition.
                     #
                     # A BLOCK is not a failure of this link — it is the store walling
                     # everyone, and the breaker already owns that case with a measured,
@@ -271,17 +281,27 @@ class PriceCheckScheduler:
                     # skip branch above gives every OTHER due link of that store; without
                     # this branch the one link that happened to sit first in the ASC due
                     # queue took a 24h penalty for discovering the wall while its siblings
-                    # resumed in minutes. That asymmetry was also the only thing walking
-                    # links out of the förmiddag window: +24h keeps the clock time the wall
-                    # happened at, so a link blocked at 23:16 retried at 23:16 the next
-                    # night, and again the night after, until one attempt finally landed.
-                    weekdays, frequency = effective_schedule(product_store, product_store.store)
+                    # resumed in minutes. The discovering link takes the FIRST stagger slot
+                    # (offset zero — it is the natural probe when the cooldown lapses); the
+                    # skip branch spaces its siblings behind it, because identical deferral
+                    # timestamps drain through the ledger as the back-to-back one-per-minute
+                    # burst that walled ICA twice on 2026-07-29.
+                    weekdays, _ = effective_schedule(product_store, product_store.store)
                     if blocked_until is not None:
-                        next_check = blocked_until
+                        next_check = blocked_until + self._next_deferral_offset(
+                            deferral_offsets, product_store
+                        )
                     elif outcome is not None and not outcome.success and weekdays:
-                        next_check = now_utc + timedelta(hours=24)
+                        # Tomorrow's förmiddag, not now+24h: the bare +24h kept the clock
+                        # time the failure happened at, so a link that failed at 12:01
+                        # local retried at 12:01 — outside the window the schedule exists
+                        # to hold it in — every day until an attempt landed (the same walk
+                        # v0.29.2 stopped for blocked checks).
+                        next_check = next_morning_retry(now_utc)
                     else:
-                        next_check = next_check_time(weekdays, frequency, now_utc)
+                        next_check = await next_check_time_for_link(
+                            session, product_store, product_store.store, now_utc
+                        )
 
                     # A wall is not a check: we never saw the page. Leaving last_checked_at
                     # alone keeps "Senast kollad" and the portal's freshness line honest
@@ -322,6 +342,26 @@ class PriceCheckScheduler:
                     logger.error(
                         f"Failed to back off schedule for {product_store.id}: {backoff_error}"
                     )
+
+    def _next_deferral_offset(
+        self, offsets: dict[uuid.UUID, float], product_store: ProductStore
+    ) -> timedelta:
+        """The next stagger offset for a link deferred to a store's cooldown expiry.
+
+        Every deferred link used to get the SAME timestamp (the cooldown expiry), so when
+        the cooldown lapsed they all came due at once and drained on the ledger's 60 s
+        floor — back to back, which is exactly the burst pattern that provoked the wall in
+        the first place. Each deferral in a cycle now lands at least RATE_LIMIT_DELAY
+        after the previous one, plus jitter, so the queue is already spread when the
+        cooldown expires. The dict is per-cycle (created in _check_due_products), which
+        bounds the spread at BATCH_SIZE slots and means a store still cooled next cycle
+        gets re-spread from zero instead of pushed further and further out.
+        """
+        current = offsets.get(product_store.store_id, 0.0)
+        offsets[product_store.store_id] = (
+            current + self.RATE_LIMIT_DELAY + random.uniform(0, self.RATE_LIMIT_JITTER)  # noqa: S311
+        )
+        return timedelta(seconds=current)
 
     async def _check_single_product(
         self,

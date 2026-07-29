@@ -6,8 +6,13 @@ and since v0.33.0, that förmiddag and those weekdays are Europe/Stockholm wall-
 concepts computed from (and returned as) naive-UTC instants.
 """
 
+import random
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from domain.schedule import (
     MORNING_END_HOUR,
@@ -16,6 +21,8 @@ from domain.schedule import (
     effective_schedule,
     is_inherited,
     next_check_time,
+    next_morning_retry,
+    weekday_slot,
 )
 
 
@@ -123,6 +130,154 @@ class TestNextCheckTime:
             # Morning snap can move the moment within the target day, so allow the
             # window that jitter plus a same-day snap can produce.
             assert 96 - 9.6 - 12 <= delta_hours <= 96 + 9.6 + 12
+
+
+class TestStratifiedSlots:
+    """Slot-stratified förmiddag placement (v0.39.0).
+
+    A free random draw per link is uniform in expectation but lumpy in practice —
+    measured in prod, 56 ICA links put 4 pairs on the same minute and left 28-minute
+    holes, and same-minute due times drain through the rate limiter back to back, the
+    burst pattern that trips a WAF. These tests pin the SPREAD as a property (minimum
+    gap, no duplicates, window containment), never exact timestamps.
+    """
+
+    def test_full_store_of_slots_spreads_with_a_minimum_gap(self):
+        random.seed(20260729)
+        n = 56  # prod's ICA link count
+        times = [next_check_time([0], 72, TUESDAY, slot=(i, n)) for i in range(n)]
+
+        assert all(in_morning_window(t) for t in times)
+        assert len(set(times)) == n  # no two links on the same second
+        assert times == sorted(times)  # slot order is time order — jitter cannot reorder
+        gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:], strict=False)]
+        # Strata are window/n ≈ 386 s apart with jitter ±25 % of a stratum, so adjacent
+        # links are guaranteed at least half a stratum apart — well clear of the 90 s
+        # collision band the Monte Carlo counted.
+        assert min(gaps) >= 0.5 * (6 * 3600 / n)
+
+    def test_edge_slots_never_leave_the_window(self):
+        """The first and last stratum, jitter included, stay inside 06–12 local."""
+        random.seed(20260729)
+        for n in (1, 2, 7, 56):
+            for _ in range(50):
+                first = next_check_time([0], 72, TUESDAY, slot=(0, n))
+                last = next_check_time([0], 72, TUESDAY, slot=(n - 1, n))
+                assert in_morning_window(first)
+                assert in_morning_window(last)
+
+    def test_same_slot_is_jittered_between_draws(self):
+        """The stratum centre is jittered — a machine-exact grid is itself a bot tell."""
+        random.seed(20260729)
+        draws = {next_check_time([0], 72, TUESDAY, slot=(3, 56)) for _ in range(20)}
+        assert len(draws) > 1
+
+    def test_malformed_slot_falls_back_to_the_free_draw(self):
+        """(index, count) outside the valid range must not crash or escape the window."""
+        random.seed(20260729)
+        for slot in ((5, 3), (-1, 3), (0, 0)):
+            nxt = next_check_time([0], 72, TUESDAY, slot=slot)
+            assert in_morning_window(nxt)
+
+    def test_unslotted_draw_uses_second_resolution(self):
+        """The old whole-minute grid (second=0) was 360 slots for 56 links — a collision
+        source in itself. The free draw now lands on any second."""
+        random.seed(20260729)
+        draws = [next_check_time([0], 72, TUESDAY) for _ in range(50)]
+        assert any(t.second != 0 for t in draws)
+        assert all(in_morning_window(t) for t in draws)
+
+
+def _slot_session(rows: list[tuple]) -> AsyncMock:
+    """A mocked AsyncSession whose single execute returns (id, weekdays, freq) rows."""
+    result = MagicMock()
+    result.all.return_value = rows
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+class TestWeekdaySlot:
+    """THE sibling lookup — which links share the target weekday, and in what order."""
+
+    STORE = _Carrier(check_weekdays=[0], check_frequency_hours=None)
+
+    @pytest.mark.asyncio
+    async def test_counts_and_orders_inheriting_siblings(self):
+        ids = sorted([uuid.uuid4() for _ in range(3)], key=str)
+        session = _slot_session([(i, None, None) for i in ids])
+
+        for expected_index, link_id in enumerate(ids):
+            slot = await weekday_slot(session, link_id, uuid.uuid4(), self.STORE, [0], TUESDAY)
+            assert slot == (expected_index, 3)
+
+    @pytest.mark.asyncio
+    async def test_excludes_siblings_on_another_schedule(self):
+        """An interval-mode override and a different-weekday override are not siblings on
+        Monday — counting them would leave permanent holes in the Monday grid."""
+        mine = uuid.uuid4()
+        session = _slot_session(
+            [
+                (mine, None, None),  # inherits the store's Mondays
+                (uuid.uuid4(), None, 96),  # interval override — never on the weekday grid
+                (uuid.uuid4(), [2], None),  # Wednesday override — a different grid
+            ]
+        )
+
+        slot = await weekday_slot(session, mine, uuid.uuid4(), self.STORE, [0], TUESDAY)
+        assert slot == (0, 1)
+
+    @pytest.mark.asyncio
+    async def test_slot_keys_on_the_weekday_the_check_lands_on(self):
+        """Mon+Fri from a Tuesday lands on Friday: a Friday-only sibling counts, a
+        Monday-only sibling does not."""
+        mine = uuid.uuid4()
+        friday_sibling = uuid.uuid4()
+        session = _slot_session(
+            [
+                (mine, [0, 4], None),
+                (friday_sibling, [4], None),
+                (uuid.uuid4(), [0], None),  # Monday-only — not on Friday's grid
+            ]
+        )
+
+        slot = await weekday_slot(session, mine, uuid.uuid4(), self.STORE, [0, 4], TUESDAY)
+        assert slot is not None
+        assert slot[1] == 2  # mine + the Friday sibling
+
+    @pytest.mark.asyncio
+    async def test_link_missing_from_its_own_siblings_yields_none(self):
+        """Not-yet-flushed or just-deactivated: fall back to the free draw, don't guess."""
+        session = _slot_session([(uuid.uuid4(), None, None)])
+        slot = await weekday_slot(session, uuid.uuid4(), uuid.uuid4(), self.STORE, [0], TUESDAY)
+        assert slot is None
+
+
+class TestNextMorningRetry:
+    """A failed weekday check retries tomorrow FÖRMIDDAG — never bare +24h, which keeps
+    the clock time the failure happened at and walks the link out of the window."""
+
+    def test_failure_after_the_window_lands_in_next_days_window(self):
+        # The prod case: a 404 at 12:01 local (10:01 UTC in July) stood at 12:01 forever.
+        failed_at = datetime(2026, 7, 29, 10, 1, 0)
+        nxt = next_morning_retry(failed_at)
+        assert in_morning_window(nxt)
+        assert stockholm(nxt).date() == stockholm(failed_at).date() + timedelta(days=1)
+
+    def test_late_night_failure_respects_the_swedish_date_line(self):
+        """23:16 UTC in July is 01:16 SWEDISH the next day — "tomorrow" is judged by the
+        Swedish clock, so the retry lands the day after the Swedish date."""
+        failed_at = datetime(2026, 7, 28, 23, 16, 0)
+        nxt = next_morning_retry(failed_at)
+        assert in_morning_window(nxt)
+        assert stockholm(nxt).date() == stockholm(failed_at).date() + timedelta(days=1)
+
+    def test_winter_retry_stays_in_the_swedish_window(self):
+        failed_at = datetime(2026, 1, 20, 13, 1, 0)
+        for _ in range(10):
+            nxt = next_morning_retry(failed_at)
+            assert in_morning_window(nxt)
+            assert 5 <= nxt.hour < 11  # CET: Swedish 06–12 is 05–11 UTC
 
 
 class TestSwedishWallClock:

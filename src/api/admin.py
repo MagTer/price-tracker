@@ -50,7 +50,7 @@ from domain.quickadd import (
     suggest_store_label,
 )
 from domain.result import StoreBlockedError
-from domain.schedule import effective_schedule, is_inherited, next_check_time
+from domain.schedule import effective_schedule, is_inherited, next_check_time_for_link
 from domain.service import PriceTrackerService, perform_price_check
 from domain.stats import build_statistics
 from domain.tenant import DEFAULT_TENANT_ID
@@ -1432,8 +1432,11 @@ async def update_check_frequency(
         product_store.check_weekdays = check_weekdays
 
         now_utc = datetime.now(UTC).replace(tzinfo=None)
-        weekdays, frequency = effective_schedule(product_store, product_store.store)
-        product_store.next_check_at = next_check_time(weekdays, frequency, now_utc)
+        # THE shared resolution — schedule, sibling slot, next-check time — the same call
+        # the scheduler makes, so the stratified spread cannot drift between the two.
+        product_store.next_check_at = await next_check_time_for_link(
+            session, product_store, product_store.store, now_utc
+        )
 
         await session.commit()
         await session.refresh(product_store)

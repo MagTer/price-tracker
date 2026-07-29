@@ -73,6 +73,10 @@ def _link_row(mock_session, product_store):
     """Point the mocked session's next `select(ProductStore)` at `product_store` (or None)."""
     result = MagicMock()
     result.scalar_one_or_none.return_value = product_store
+    # The /frequency reschedule also runs the sibling-slot query (domain.schedule.
+    # weekday_slot) on this same session; an empty row set makes it fall back to the
+    # unstratified draw, which is all these endpoint tests need.
+    result.all.return_value = []
     mock_session.execute.return_value = result
 
 

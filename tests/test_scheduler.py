@@ -8,8 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from domain.result import PriceExtractionResult
+from domain.schedule import MORNING_END_HOUR, MORNING_START_HOUR, STORE_TIMEZONE
 from domain.scheduler import PriceCheckScheduler
 from domain.service import PriceCheckOutcome
+
+
+def _stockholm(naive_utc: datetime) -> datetime:
+    """A naive-UTC result as Swedish wall-clock, for asserting on the förmiddag window."""
+    return naive_utc.replace(tzinfo=UTC).astimezone(STORE_TIMEZONE)
 
 
 def _make_extraction(
@@ -956,8 +962,12 @@ class TestCheckDueProducts:
         sessions[1].commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_failed_weekday_check_retries_in_24h(self) -> None:
-        """fetch_failed/no_price on a weekday link -> +24h, not next week."""
+    async def test_failed_weekday_check_retries_next_morning(self) -> None:
+        """fetch_failed/no_price on a weekday link -> tomorrow's förmiddag, not next week.
+
+        And not bare +24h: that kept the clock time the failure happened at, so a link
+        that failed at 12:01 local retried at 12:01 forever — outside the 06–12 window
+        the schedule exists to hold it in (prod: Hushållspapper, 404 at 12:01)."""
         scheduler, session_factory, _ = _make_scheduler()
 
         ps = _make_product_store(check_weekdays=[0])
@@ -988,11 +998,11 @@ class TestCheckDueProducts:
         with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = failed_outcome
             await scheduler._check_due_products()
-        after = datetime.now(UTC).replace(tzinfo=None)
 
         params = self._update_params(sessions[1].execute.call_args)
-        next_check = params["next_check_at"]
-        assert before + timedelta(hours=24) <= next_check <= after + timedelta(hours=24)
+        retry_local = _stockholm(params["next_check_at"])
+        assert retry_local.date() == (_stockholm(before) + timedelta(days=1)).date()
+        assert MORNING_START_HOUR <= retry_local.hour < MORNING_END_HOUR
         sessions[1].commit.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -1027,7 +1037,11 @@ class TestCheckDueProducts:
         sentinel = datetime(2026, 3, 2, 8, 0, 0)
         with (
             patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
-            patch("domain.scheduler.next_check_time", return_value=sentinel) as mock_compute,
+            patch(
+                "domain.scheduler.next_check_time_for_link",
+                new_callable=AsyncMock,
+                return_value=sentinel,
+            ) as mock_compute,
         ):
             mock_check.return_value = failed_outcome
             await scheduler._check_due_products()
@@ -1065,7 +1079,11 @@ class TestCheckDueProducts:
         sentinel = datetime(2026, 3, 9, 7, 30, 0)
         with (
             patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check,
-            patch("domain.scheduler.next_check_time", return_value=sentinel) as mock_compute,
+            patch(
+                "domain.scheduler.next_check_time_for_link",
+                new_callable=AsyncMock,
+                return_value=sentinel,
+            ) as mock_compute,
         ):
             mock_check.return_value = ok_outcome
             await scheduler._check_due_products()
@@ -1189,13 +1207,12 @@ class TestCheckDueProducts:
         with patch.object(scheduler, "_check_single_product", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = no_price
             await scheduler._check_due_products()
-        after = datetime.now(UTC).replace(tzinfo=None)
 
         params = self._update_params(sessions[1].execute.call_args)
         assert "last_checked_at" in params
-        assert (
-            before + timedelta(hours=24) <= params["next_check_at"] <= after + timedelta(hours=24)
-        )
+        retry_local = _stockholm(params["next_check_at"])
+        assert retry_local.date() == (_stockholm(before) + timedelta(days=1)).date()
+        assert MORNING_START_HOUR <= retry_local.hour < MORNING_END_HOUR
 
 
 class TestStoreCircuitBreaker:
@@ -1328,3 +1345,112 @@ class TestStoreCircuitBreaker:
 
         assert scheduler.block_registry._strikes.get(store_id, 0) == 3
         assert scheduler.block_registry.blocked_until(store_id) is None
+
+
+class TestDeferralSpread:
+    """Breaker deferrals must not stamp every link with the SAME timestamp.
+
+    Identical deferrals meant the whole store came due at the instant the cooldown lapsed
+    and drained on the ledger's 60 s floor, back to back — the burst pattern that walled
+    ICA twice on 2026-07-29, and it left 3 links on the exact same microsecond in prod.
+    """
+
+    def _due_session(self, session_factory, due_items) -> AsyncMock:
+        result = MagicMock()
+        result.unique.return_value.scalars.return_value.all.return_value = due_items
+        mock_session = session_factory.return_value.__aenter__.return_value
+        mock_session.execute = AsyncMock(return_value=result)
+        return mock_session
+
+    @staticmethod
+    def _deferral_times(mock_session) -> list[datetime]:
+        """next_check_at from every UPDATE the session received (the first call is the
+        due-items SELECT, which compiles without a next_check_at param)."""
+        times = []
+        for call in mock_session.execute.call_args_list:
+            params = call.args[0].compile().params
+            if "next_check_at" in params:
+                times.append(params["next_check_at"])
+        return times
+
+    @pytest.mark.asyncio
+    async def test_deferred_links_of_a_cooled_store_are_spread_apart(self) -> None:
+        """Property, not exact timestamps: distinct, ordered, at least RATE_LIMIT_DELAY
+        apart, and never more than delay+jitter apart — so the queue is already spaced
+        when the cooldown expires."""
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        cooled_until = scheduler.block_registry.record_block(
+            store_id, store_name="ICA", source="test"
+        )
+        due = [_make_product_store(store_id=store_id) for _ in range(3)]
+        mock_session = self._due_session(session_factory, due)
+        scheduler._check_single_product = AsyncMock()
+
+        await scheduler._check_due_products()
+
+        scheduler._check_single_product.assert_not_awaited()
+        times = self._deferral_times(mock_session)
+        assert len(times) == 3
+        assert times[0] == cooled_until  # the first deferral IS the probe at expiry
+        assert len(set(times)) == 3
+        delay = PriceCheckScheduler.RATE_LIMIT_DELAY
+        jitter = PriceCheckScheduler.RATE_LIMIT_JITTER
+        for earlier, later in zip(times, times[1:], strict=False):
+            gap = (later - earlier).total_seconds()
+            assert delay <= gap <= delay + jitter
+
+    @pytest.mark.asyncio
+    async def test_two_cooled_stores_stagger_independently(self) -> None:
+        """The stagger counter is per store — store B's first deferral starts at ITS
+        cooldown expiry, not offset by store A's queue."""
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_a, store_b = uuid.uuid4(), uuid.uuid4()
+        until_a = scheduler.block_registry.record_block(store_a, store_name="A", source="test")
+        until_b = scheduler.block_registry.record_block(store_b, store_name="B", source="test")
+        due = [
+            _make_product_store(store_id=store_a),
+            _make_product_store(store_id=store_b),
+        ]
+        mock_session = self._due_session(session_factory, due)
+        scheduler._check_single_product = AsyncMock()
+
+        await scheduler._check_due_products()
+
+        times = self._deferral_times(mock_session)
+        assert times == [until_a, until_b]
+
+    @pytest.mark.asyncio
+    async def test_discovering_link_and_skipped_siblings_share_the_stagger(self) -> None:
+        """The link that discovers the wall takes the first slot (the probe at expiry);
+        the skip branch spaces the store's other due links behind it — one shared
+        counter, so they cannot collide with each other or with the prober."""
+        scheduler, session_factory, _ = _make_scheduler()
+        scheduler.rate_limiter = AsyncMock()
+        store_id = uuid.uuid4()
+        due = [_make_product_store(store_id=store_id) for _ in range(2)]
+        mock_session = self._due_session(session_factory, due)
+
+        blocked = PriceCheckOutcome(
+            success=False,
+            failure_reason="fetch_failed",
+            fetch_error="blocked (HTTP 202)",
+            extraction=None,
+            price_point=None,
+            mismatch=None,
+            blocked=True,
+        )
+        scheduler._check_single_product = AsyncMock(return_value=blocked)
+
+        await scheduler._check_due_products()
+
+        blocked_until = scheduler.block_registry.blocked_until(store_id)
+        assert blocked_until is not None
+        times = self._deferral_times(mock_session)
+        assert len(times) == 2
+        assert times[0] == blocked_until  # the discoverer probes when the cooldown lapses
+        gap = (times[1] - times[0]).total_seconds()
+        delay = PriceCheckScheduler.RATE_LIMIT_DELAY
+        assert delay <= gap <= delay + PriceCheckScheduler.RATE_LIMIT_JITTER
