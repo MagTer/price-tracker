@@ -18,6 +18,7 @@ def _valid_api_response(
     compare_price: str = "33,29 kr",
     savings_amount: float = 0,
     out_of_stock: bool = False,
+    promotions: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "priceValue": price_value,
@@ -26,7 +27,26 @@ def _valid_api_response(
     }
     if savings_amount:
         data["savingsAmount"] = savings_amount
+    if promotions is not None:
+        data["potentialPromotions"] = promotions
     return data
+
+
+def _promotion(
+    price_value: float | None = 49.5,
+    cart_label: str | None = "Välj & blanda! 2 för 99,00",
+    qualifying_count: int = 2,
+) -> dict[str, object]:
+    """One potentialPromotions entry, in the live API's shape."""
+    promo: dict[str, object] = {
+        "qualifyingCount": qualifying_count,
+        "cartLabel": cart_label,
+        "conditionLabel": "Välj & blanda! 2 för",
+        "rewardLabel": "99,00",
+    }
+    if price_value is not None:
+        promo["price"] = {"currencyIso": "SEK", "value": price_value, "priceType": "BUY"}
+    return promo
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +138,12 @@ class TestExtract:
         assert fetcher.fetch_json.await_args.kwargs["referer"] == url
 
     @pytest.mark.asyncio
-    async def test_extract_with_savings(self) -> None:
-        """savingsAmount: priceValue is ordinarie, offer = priceValue - savings.
+    async def test_extract_with_savings_and_no_promotion_price(self) -> None:
+        """The FALLBACK: a saving but no potentialPromotions price -> priceValue - savings.
 
-        Live shape (Bearnaise 101283524_ST, 2026-07-25): priceValue 21.29 is the ordinarie
-        price, savingsAmount 3.39 is the per-unit discount, so the campaign price you pay is
-        21.29 - 3.39 = 17.90 (which equals potentialPromotions[].price on the live page).
+        That arithmetic holds only for single-unit campaigns (Bearnaise 101283524_ST,
+        2026-07-25: 21.29 - 3.39 = 17.90 = potentialPromotions[].price). On a multi-buy
+        the promotion price is authoritative — see TestParseResponse below.
         """
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Bearnaise-Original-101283524_ST"
@@ -264,6 +284,103 @@ class TestParseResponse:
         assert result.offer_price_sek is None
         assert result.offer_type is None
         assert result.offer_details is None
+
+    def test_multibuy_promotion_price_beats_the_savings_arithmetic(self) -> None:
+        """On a multi-buy, savingsAmount is the TOTAL saving over qualifyingCount, and
+        subtracting it invents a price that exists nowhere.
+
+        Live shape (Bryggkaffe 101261204_ST, 2026-07-29): ordinarie 67.90, "Välj &
+        blanda! 2 för 99,00", savingsAmount 36.8 (= 2×67.90 − 99). The subtraction said
+        31.10; the shelf charges 49.50/st — potentialPromotions[].price.value.
+        """
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=67.90,
+            savings_amount=36.8,
+            promotions=[_promotion(price_value=49.5)],
+        )
+        result = extractor._parse_response(data)
+        assert result.price_sek == Decimal("67.90")  # ordinarie, unchanged
+        assert result.offer_price_sek == Decimal("49.5")  # per-unit campaign price
+        assert result.offer_type == "kampanj"
+        # The store's own framing carries the multi-buy CONDITION — "Spara 36.8 kr"
+        # would claim a per-unit discount that is not on the shelf.
+        assert result.offer_details == "Välj & blanda! 2 för 99,00"
+
+    def test_single_unit_promotion_agrees_with_the_fallback(self) -> None:
+        """qualifyingCount 1: promotion price == priceValue − savings (Oxpytt
+        101197149_ST, 2026-07-29: 79.90 − 10.00 = 69.90). The label is stripped —
+        the live cartLabel carries a trailing space."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=79.90,
+            savings_amount=10.0,
+            promotions=[_promotion(price_value=69.9, cart_label="69,90/st ", qualifying_count=1)],
+        )
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek == Decimal("69.9")
+        assert result.offer_details == "69,90/st"
+
+    def test_promotion_price_is_quantized_to_ore(self) -> None:
+        """A "3 för 95" promotion arrives as 31.666666666666668 — money is öre in this
+        app (Holy Pepperoni 101336084_ST, 2026-07-29), so the boundary rounds half-up."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=37.76,
+            promotions=[
+                _promotion(price_value=31.666666666666668, cart_label="Välj & blanda! 3 för 95,00")
+            ],
+        )
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek == Decimal("31.67")
+
+    def test_promotion_at_or_above_ordinarie_is_refused_wholesale(self) -> None:
+        """The v0.32.1 invariant: an offer is what you PAY, lower than ordinarie by
+        definition — price + type + details all go."""
+        extractor = _make_extractor()
+        data = _valid_api_response(price_value=67.90, promotions=[_promotion(price_value=67.90)])
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+        assert result.offer_details is None
+        assert result.price_sek == Decimal("67.9")  # ordinarie survives the refusal
+
+    def test_promotion_without_price_falls_back_to_savings(self) -> None:
+        """A promotion entry with no parseable price is skipped — the savings
+        arithmetic remains for exactly this shape."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=21.29,
+            savings_amount=3.39,
+            promotions=[_promotion(price_value=None)],
+        )
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek == Decimal("17.90")
+        assert result.offer_details == "Spara 3.39 kr"
+
+    def test_malformed_promotions_never_raise(self) -> None:
+        """potentialPromotions in an unexpected shape degrades, never crashes a check."""
+        extractor = _make_extractor()
+        for junk in ("kampanj", {"price": 49.5}, [None, "x", {"price": "49,50"}], 42):
+            data = _valid_api_response(price_value=67.90, savings_amount=5.0)
+            data["potentialPromotions"] = junk
+            result = extractor._parse_response(data)
+            assert result.offer_price_sek == Decimal("62.90")  # savings fallback
+
+    def test_highest_promotion_price_wins_when_several_qualify(self) -> None:
+        """Several priced promotions: the smaller claimed saving is the safer error —
+        same rule as Lyko's ordinarie pick."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=67.90,
+            promotions=[
+                _promotion(price_value=49.5),
+                _promotion(price_value=59.9, cart_label="Willys Plus-pris"),
+            ],
+        )
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek == Decimal("59.9")
+        assert result.offer_details == "Willys Plus-pris"
 
 
 # ---------------------------------------------------------------------------

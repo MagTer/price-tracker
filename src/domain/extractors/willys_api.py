@@ -2,7 +2,7 @@
 
 import logging
 import re
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from domain.quickadd import parse_package_from_name
 from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
@@ -122,6 +122,37 @@ class WillysApiExtractor:
         match = _PRODUCT_CODE_RE.search(url)
         return match.group(1) if match else None
 
+    @staticmethod
+    def _promotion_offer(data: dict[str, object]) -> tuple[Decimal | None, str | None]:
+        """The per-unit campaign price + the store's own label, from potentialPromotions.
+
+        Should several promotions carry a price, the HIGHEST wins — the smaller claimed
+        saving is the safer error (the same rule as Lyko's ordinarie pick). Malformed
+        entries are skipped, never guessed at: no parseable price means "no promotion
+        price" and the caller falls back to the savings arithmetic.
+        """
+        promotions = data.get("potentialPromotions")
+        if not isinstance(promotions, list):
+            return None, None
+        best: tuple[Decimal, str | None] | None = None
+        for promo in promotions:
+            if not isinstance(promo, dict):
+                continue
+            price = promo.get("price")
+            value = price.get("value") if isinstance(price, dict) else None
+            if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
+                continue
+            label = str(promo.get("cartLabel") or "").strip()
+            # Money is öre in this app, and a "3 för 95" promotion arrives as
+            # 31.666666666666668 — quantize at the boundary, half-up like everywhere else.
+            candidate = (
+                Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                label or None,
+            )
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        return best if best is not None else (None, None)
+
     def _parse_response(self, data: dict[str, object]) -> PriceExtractionResult:
         """Parse Willys API response into PriceExtractionResult."""
         price_value = data.get("priceValue")
@@ -143,26 +174,52 @@ class WillysApiExtractor:
             else:
                 logger.debug("Could not parse compare price: %s", compare_price_str)
 
-        # Check for offers. `priceValue` is the ORDINARIE (pre-campaign) price and
-        # `savingsAmount` is the per-unit discount, so the price you actually pay during the
-        # campaign is priceValue - savingsAmount. Verified live (Bearnaise 101283524_ST,
-        # 2026-07-25): priceValue 21.29, savingsAmount 3.39, and 21.29 - 3.39 = 17.90 matches
-        # the campaign price in potentialPromotions[].price exactly.
+        # Check for offers. `priceValue` is the ORDINARIE (pre-campaign) price, and THE
+        # per-unit campaign price lives in potentialPromotions[].price.value. It is NOT
+        # priceValue - savingsAmount: on a multi-buy, `savingsAmount` is the TOTAL saving
+        # over the promotion's qualifying quantity, not a per-unit discount. Measured live
+        # (Bryggkaffe 101261204_ST, 2026-07-29): ordinarie 67.90 with "Välj & blanda!
+        # 2 för 99,00" carried savingsAmount 36.8 = 2×67.90 − 99, while price.value said
+        # 49.50 — what the shelf actually charges per unit. The subtraction recorded 31.10,
+        # a price that exists nowhere, and it ranked as an absurd bargain downstream.
         #
-        # The earlier code did the reverse — treated priceValue as the offer and ADDED the
-        # saving to invent a "regular" price (24.68) that appears nowhere in the API — which
-        # is how a campaign product recorded two wrong numbers and hid the real 17.90.
+        # v0.25.2's priceValue - savingsAmount rule was verified on a SINGLE-unit campaign
+        # (Bearnaise 101283524_ST: 21.29 − 3.39 = 17.90 = price.value), where total and
+        # per-unit saving coincide — so it looked proven while holding only for
+        # qualifyingCount = 1. It survives below solely as the fallback for a response
+        # that carries a saving but no promotion price.
         offer_price_sek: Decimal | None = None
         offer_type: str | None = None
         offer_details: str | None = None
 
         savings = data.get("savingsAmount")
-        if savings and price_sek:
+        promo_price, promo_label = self._promotion_offer(data)
+        if promo_price is not None:
+            offer_price_sek = promo_price
+            offer_type = "kampanj"
+            # The store's own framing ("Välj & blanda! 2 för 99,00") carries the multi-buy
+            # CONDITION — a bare price would claim the discount applies to a single unit.
+            offer_details = promo_label or (f"Spara {savings} kr" if savings else None)
+        elif savings and price_sek:
             savings_dec = Decimal(str(savings))
             if savings_dec > 0:
-                offer_price_sek = price_sek - savings_dec  # what you pay during the campaign
+                offer_price_sek = price_sek - savings_dec  # single-unit campaign fallback
                 offer_type = "kampanj"
                 offer_details = f"Spara {savings} kr"
+
+        # An offer is what you PAY — lower than ordinarie by definition (the v0.32.1
+        # invariant). A campaign price at or above ordinarie is refused wholesale.
+        if offer_price_sek is not None and (
+            price_sek is None or offer_price_sek <= 0 or offer_price_sek >= price_sek
+        ):
+            logger.warning(
+                "Willys API offer %s not below ordinarie %s - refusing the offer wholesale",
+                offer_price_sek,
+                price_sek,
+            )
+            offer_price_sek = None
+            offer_type = None
+            offer_details = None
 
         # Stock status
         in_stock = not data.get("outOfStock", False)
