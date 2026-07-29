@@ -9,7 +9,7 @@ concepts computed from (and returned as) naive-UTC instants.
 import random
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -319,6 +319,23 @@ class TestSwedishWallClock:
 
         assert stockholm(nxt).weekday() == 0
         assert (stockholm(nxt).date() - stockholm(sunday_2230_utc).date()).days == 7
+
+    def test_next_monday_computed_across_the_dst_transition_uses_the_target_days_offset(self):
+        """From the Friday BEFORE the last October Sunday, next Monday is on the other
+        side of the CEST→CET switch: the Swedish 06–12 window must come back as 05–11
+        UTC (winter), not the 04–10 of the summer clock the computation started in.
+        Aware-datetime + timedelta is wall-clock arithmetic, so this holds — but nothing
+        pinned it, and a 'fix' to instant arithmetic (a UTC add) would drift silently."""
+        friday_before_switch = datetime(2026, 10, 23, 8, 0, 0)  # CEST; DST ends Oct 25
+        assert friday_before_switch.weekday() == 4
+
+        for _ in range(10):
+            nxt = next_check_time([0], 72, friday_before_switch)
+            local = stockholm(nxt)
+            assert local.weekday() == 0
+            assert local.date() == date(2026, 10, 26)  # the Monday after the switch
+            assert 6 <= local.hour < 12  # Swedish förmiddag, judged on the winter clock
+            assert 5 <= nxt.hour < 11  # = 05–11 stored UTC, not summer's 04–10
 
     def test_interval_snap_lands_in_the_swedish_window_in_winter(self):
         winter_tuesday = datetime(2026, 1, 20, 15, 30, 0)
