@@ -629,7 +629,8 @@
 #products-table-container,
 #deals-table-container,
 #watches-table-container,
-#product-links-table {
+#product-links-table,
+#stats-container {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
@@ -1546,9 +1547,11 @@ function dealComparisonCell(d) {
     const kind = classifyDeal(d);
     const unitLabel = unitPriceHeading(d.unit);
     if (kind === DEAL_UNKNOWN) {
+        // NOT "enda länken": best_alt is also null when sibling links exist but none
+        // is comparable (no mängd on them) — that wording hid the actual fix.
         const why = d.unit_price_sek == null
             ? 'jfr-pris saknas — länken har ingen mängd'
-            : 'enda länken för produkten';
+            : 'ingen annan jämförbar länk';
         return '<span class="badge badge-muted">Kan inte jämföras</span>'
             + '<div class="best-link">' + escapeHtml(why) + '</div>';
     }
@@ -1579,14 +1582,27 @@ function storeLinkHtml(name, url) {
 // ISO slice this replaced was the only date in the app that wasn't), and mute the old ones.
 const DEAL_STALE_HOURS = 48;
 
+function isDealStale(d) {
+    if (!d.checked_at) return false;
+    const seen = parseUtc(d.checked_at);
+    return !!(seen && !isNaN(seen) && (Date.now() - seen.getTime()) > DEAL_STALE_HOURS * 3600000);
+}
+
 function dealSeenCell(d) {
     if (!d.checked_at) return '&#8212;';
-    const seen = parseUtc(d.checked_at);
-    const stale = seen && !isNaN(seen) && (Date.now() - seen.getTime()) > DEAL_STALE_HOURS * 3600000;
     const text = escapeHtml(formatWhen(d.checked_at) || String(d.checked_at).slice(0, 10));
-    return stale
+    return isDealStale(d)
         ? '<span class="deal-stale" title="Äldre än två dygn — kampanjen kan ha hunnit ta slut">' + text + '</span>'
         : text;
+}
+
+// The Sett column hides on the phone, but an expired campaign costs a wasted trip
+// exactly there — the staleness caveat re-enters inline, like the verdict does.
+function dealStaleInline(d) {
+    if (!isDealStale(d)) return '';
+    const when = formatWhen(d.checked_at) || String(d.checked_at).slice(0, 10);
+    return '<div class="deal-verdict-inline deal-stale">'
+        + escapeHtml('sett ' + when + ' — kan ha hunnit ta slut') + '</div>';
 }
 
 function buildDealRow(d) {
@@ -1610,7 +1626,7 @@ function buildDealRow(d) {
     // name in a phone-only block. Four content-heavy columns honestly do not fit 390px, and
     // the verdict is the one thing that must not be the column that gets clipped.
     return `<tr>
-        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div></td>
+        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div>${dealStaleInline(d)}</td>
         <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
         <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${villkor}${jfr}${ord}</td>
         <td class="col-secondary">${dealComparisonCell(d)}</td>
