@@ -346,6 +346,42 @@ class TestCheckAttemptsSurviveTheCallersTransaction:
         assert rows[0].checked_at is not None
 
     @pytest.mark.asyncio
+    async def test_an_oversized_extraction_source_is_clamped_not_lost(
+        self, db_session, session_factory
+    ) -> None:
+        """The tier stamp is "llm:<model>" with the model id straight from the
+        env-configurable cascade. Unclamped, a long id fails the INSERT, the blanket
+        except swallows it, and precisely the LLM-answered rows — the spend anyone
+        wants to measure — never land."""
+        store = await self._store(db_session)
+        link = await self._link(db_session, store)
+        store_id, link_id = store.id, link.id
+
+        long_source = "llm:mistralai/mistral-small-3.1-24b-instruct"
+        assert len(long_source) > 40
+
+        log = CheckAttemptLog(session_factory)
+        await log.record(
+            store_id=store_id,
+            product_store_id=link_id,
+            outcome="ok",
+            source="scheduler",
+            extraction_source=long_source,
+        )
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(CheckAttempt).where(CheckAttempt.product_store_id == link_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1  # the row landed — the clamp, not the except, handled it
+        assert rows[0].extraction_source == long_source[:40]
+
+    @pytest.mark.asyncio
     async def test_deleting_a_link_keeps_the_store_level_history(
         self, db_session, session_factory
     ) -> None:

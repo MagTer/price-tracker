@@ -276,8 +276,12 @@ async def _run_price_check(
         price_sek=extraction.price_sek,
         store_unit_price_sek=extraction.store_unit_price_sek,
         offer_price_sek=extraction.offer_price_sek,
-        offer_type=extraction.offer_type,
-        offer_details=extraction.offer_details,
+        # Clamped to the column lengths at THE write path: offer_details is
+        # store-controlled text (Willys' cartLabel verbatim), and an oversized value
+        # here would fail the flush — in the scheduler that becomes a swallowed
+        # exception counted as a failed check.
+        offer_type=extraction.offer_type[:50] if extraction.offer_type else None,
+        offer_details=extraction.offer_details[:255] if extraction.offer_details else None,
         in_stock=extraction.in_stock,
         raw_data=extraction.raw_response,
         checked_at=_utc_now(),
