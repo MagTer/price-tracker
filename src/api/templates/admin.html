@@ -51,6 +51,7 @@
         <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
         <select id="filter-category" class="search-input"></select>
         <select id="filter-store" class="search-input"></select>
+        <select id="filter-missing" class="search-input"></select>
         <select id="filter-status" class="search-input">
             <option value="">Alla produkter</option>
             <option value="offer">Har erbjudande</option>
@@ -1195,11 +1196,28 @@ const PRODUCT_FILTER_CONTROLS = [
     ['product-search', 'search'],
     ['filter-category', 'category'],
     ['filter-store', 'store'],
+    ['filter-missing', 'missing'],
     ['filter-status', 'status'],
     ['product-sort', 'sort']
 ];
 const PRODUCT_FILTER_KEYS = PRODUCT_FILTER_CONTROLS.map(c => c[1]);
-const EMPTY_PRODUCT_FILTERS = { search: '', category: '', store: '', status: '', sort: 'name' };
+const EMPTY_PRODUCT_FILTERS = {
+    search: '', category: '', store: '', missing: '', status: '', sort: 'name'
+};
+
+// Kedjornas EGNA märken, per butiks-slug. LISTAN ÄR MENAD ATT FYLLAS PÅ — lägg till ett
+// märke i rätt kedja och släpp en ny version; matchningen är exakt och skiftlägesokänslig
+// (så "ICA Basic" måste stå som egen rad, den ärver inget från "ICA").
+//
+// Varför den behövs: hela poängen med "Saknar Willys" är att hitta luckor man kan täppa
+// till. En ICA-märkt produkt kommer aldrig att finnas hos Willys, så den vore en lucka som
+// aldrig går att stänga — den skulle ligga överst i listan för alltid och göra filtret
+// oanvändbart. Egna märken räknas därför bort från de kedjor som ändå inte kan sälja dem,
+// men INTE från sin egen: en ICA-märkt produkt utan ICA-länk är en verklig lucka.
+const STORE_OWN_BRANDS = {
+    ica: ['ICA', 'ICA Basic', 'ICA Selection', 'ICA Gott liv', 'ICA I Love Eco'],
+    willys: ['Garant', 'Eldorado', 'Såklart', 'Fixa']
+};
 let productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS);
 
 // The canonical category order — the walk order through the shop — read back off a <select>
@@ -1209,6 +1227,30 @@ function categoryOrder() {
     return Array.from(document.querySelectorAll('#edit-product-category option'))
         .map(o => o.value)
         .filter(Boolean);
+}
+
+// Vilken kedja äger det här varumärket, om någon? Slug eller null.
+function ownBrandStore(brand) {
+    const needle = String(brand || '').trim().toLowerCase();
+    if (!needle) return null;
+    for (const slug of Object.keys(STORE_OWN_BRANDS)) {
+        if (STORE_OWN_BRANDS[slug].some(b => b.toLowerCase() === needle)) return slug;
+    }
+    return null;
+}
+
+// "Saknar <kedja>" — produkten jämförs redan någonstans, men inte här.
+//
+// Kedjenivå via store_slug, INTE via store_name: två ICA-butiker är två länkar under EN
+// kedja (store_name bär butiksetiketten "ICA Maxi Sandviken"), och frågan är om ICA finns
+// alls, inte vilken butik. Kräver minst en länk: en produkt helt utan länkar är ingen
+// jämförelselucka utan en halvfärdig produkt, och det är vad "Saknar pris" är till för.
+function missingFromStore(p, slug) {
+    const links = p.stores || [];
+    if (!links.length) return false;
+    if (links.some(s => s.store_slug === slug)) return false;
+    const owner = ownBrandStore(p.brand);
+    return owner === null || owner === slug;
 }
 
 function productFiltersActive() {
@@ -1227,6 +1269,10 @@ function productMatchesFilters(p) {
     if (f.category && (p.category || '') !== f.category) return false;
     const links = p.stores || [];
     if (f.store && !links.some(s => s.store_name === f.store)) return false;
+    // Kombinerbart med butiksfiltret: "Butik: Willys" + "Saknar ICA" är precis frågan
+    // "vad jämför jag inte?" — men var för sig duger de oftast, eftersom nästan allt
+    // ligger i båda kedjorna.
+    if (f.missing && !missingFromStore(p, f.missing)) return false;
     // The three status filters are the three ways a product needs attention — the "saknar
     // mängd" badge already counts one of them; this is how you work through them in a batch.
     if (f.status === 'offer' && !links.some(s => s.offer_price_sek != null)) return false;
@@ -1251,11 +1297,15 @@ function sortProducts(rows) {
 
 // Facet options come from the DATA, so a category nobody uses is never offered — and picking
 // one can never produce an empty table by itself.
+// `values` är antingen strängar (värdet ÄR etiketten) eller {value, label} när de skiljer
+// sig — täckningsfiltret lagrar en slug men visar "Saknar ICA (5)".
 function fillFacet(id, key, allLabel, values) {
     const el = document.getElementById(id);
     const wanted = productFilters[key];
+    const options = values.map(v => (typeof v === 'string' ? { value: v, label: v } : v));
     el.innerHTML = `<option value="">${escapeHtml(allLabel)}</option>`
-        + values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        + options.map(o =>
+            `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
     el.value = wanted;
     // The stored value no longer exists (product deleted, link removed): drop the filter
     // rather than leaving a <select> showing "Alla" while still filtering on it.
@@ -1271,6 +1321,27 @@ function buildFacetOptions() {
     )).sort((a, b) => String(a).localeCompare(String(b), 'sv'));
     fillFacet('filter-category', 'category', 'Alla kategorier', categories);
     fillFacet('filter-store', 'store', 'Alla butiker', stores);
+
+    // Täckningsluckor. Varje alternativ bär ANTALET produkter det skulle visa, vilket gör
+    // tröskelvärden onödiga: "Saknar ICA (5)" är en åtgärdslista, "Saknar Lyko (19)" ser
+    // man direkt att det inte är en jämförelselucka utan bara en butik du knappt använder.
+    // Minsta lucka först — det är den som är närmast att stänga. Kedjor utan lucka bjuds
+    // inte alls, samma regel som för de andra facetterna: ett filter som ger noll rader
+    // ska aldrig gå att välja.
+    const linked = new Set(
+        allProducts.flatMap(p => (p.stores || []).map(s => s.store_slug)).filter(Boolean)
+    );
+    const gaps = (allStores || [])
+        .filter(s => linked.has(s.slug))
+        .map(s => ({
+            value: s.slug,
+            name: s.name,
+            count: allProducts.filter(p => missingFromStore(p, s.slug)).length
+        }))
+        .filter(g => g.count > 0)
+        .sort((a, b) => a.count - b.count || String(a.name).localeCompare(String(b.name), 'sv'))
+        .map(g => ({ value: g.value, label: `Saknar ${g.name} (${g.count})` }));
+    fillFacet('filter-missing', 'missing', 'Täckning: alla', gaps);
 }
 
 function renderProducts() {
