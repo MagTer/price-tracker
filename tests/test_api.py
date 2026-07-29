@@ -412,9 +412,12 @@ class TestAdminDashboard:
 
     def test_deals_table_is_a_decision_not_a_listing(self, client):
         """The deals view must carry the platform's OWN comparison (jfr-pris + cheapest
-        alternative), not just the store's discount framing."""
+        alternative), not just the store's discount framing. The column folds away on the
+        phone (col-secondary) but the verdict re-enters inline under the product name —
+        deal-verdict-inline is that guarantee."""
         r = client.get("/")
-        assert "<th>Jämförelse</th>" in r.text
+        assert '<th class="col-secondary">Jämförelse</th>' in r.text
+        assert "deal-verdict-inline" in r.text
         assert "dealComparisonCell" in r.text
         assert "Billigast" in r.text
         assert "Ej billigast" in r.text

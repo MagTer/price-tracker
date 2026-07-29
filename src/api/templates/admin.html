@@ -49,20 +49,29 @@
          taxonomy here; the canonical order is read back off the injected category <select>. -->
     <div class="filter-bar">
         <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
-        <select id="filter-category" class="search-input"></select>
-        <select id="filter-store" class="search-input"></select>
-        <select id="filter-missing" class="search-input"></select>
-        <select id="filter-status" class="search-input">
-            <option value="">Alla produkter</option>
-            <option value="offer">Har erbjudande</option>
-            <option value="needs_amount">Saknar mängd</option>
-            <option value="no_price">Saknar pris</option>
-        </select>
-        <select id="product-sort" class="search-input">
-            <option value="name">Sortera: namn</option>
-            <option value="aisle">Sortera: butiksordning</option>
-        </select>
-        <button type="button" class="btn btn-sm" id="filter-clear" onclick="clearProductFilters()">Rensa</button>
+        <!-- On the phone the facet selects fold behind this summary — search stays out, it is
+             the control used standing in the store. On desktop the summary is hidden and
+             display:contents melts the <details> into the flex row, so nothing changes there.
+             The count in the summary is what keeps a folded-away active filter from silently
+             narrowing the list. Closed-<details> content is unrendered regardless of CSS, so
+             the script reopens it whenever the viewport goes wide (see the wiring). -->
+        <details class="filter-more" id="filter-more" open>
+            <summary class="btn btn-sm">Filter<span id="filter-more-count"></span></summary>
+            <select id="filter-category" class="search-input"></select>
+            <select id="filter-store" class="search-input"></select>
+            <select id="filter-missing" class="search-input"></select>
+            <select id="filter-status" class="search-input">
+                <option value="">Alla produkter</option>
+                <option value="offer">Har erbjudande</option>
+                <option value="needs_amount">Saknar mängd</option>
+                <option value="no_price">Saknar pris</option>
+            </select>
+            <select id="product-sort" class="search-input">
+                <option value="name">Sortera: namn</option>
+                <option value="aisle">Sortera: butiksordning</option>
+            </select>
+            <button type="button" class="btn btn-sm" id="filter-clear" onclick="clearProductFilters()">Rensa</button>
+        </details>
         <!-- A filter that hides rows must say how many, always. -->
         <span class="result-count" id="product-count"></span>
     </div>
@@ -818,8 +827,43 @@ th.sortable-col:hover {
     color: var(--text-muted);
     white-space: nowrap;
 }
+/* display:contents dissolves the <details> so its children are flex items of .filter-bar —
+   the desktop row looks exactly as it did before the fold existed. The summary is hidden on
+   desktop, which also makes the details unclosable there. */
+.filter-more { display: contents; }
+.filter-more > summary {
+    display: none;
+    list-style: none;
+    user-select: none;
+}
+.filter-more > summary::-webkit-details-marker { display: none; }
 @media (max-width: 768px) {
     .filter-bar .search-input { flex: 1 1 140px; min-width: 0; }
+    #product-search { flex: 1 1 160px; }
+    .filter-more > summary { display: inline-flex; flex: 0 0 auto; }
+}
+/* --- Phone. The app doubles as the shopping list IN the store, so these are not
+   nice-to-haves: name and price must share the screen without sideways scrolling, and a
+   fingertip must be enough. --- */
+/* Desktop has the verdict as its own column; the inline copy exists for the phone only.
+   (Base rule BEFORE the media block — same specificity, so source order decides.) */
+.deal-verdict-inline { display: none; }
+@media (max-width: 768px) {
+    /* iOS Safari auto-zooms any focused field under 16px — the page jumps on every search. */
+    .search-input, .form-input { font-size: 16px; }
+    /* Finger-sized targets (the row buttons were 12px text with 4px padding). */
+    .action-btn { padding: 9px 12px; }
+    .btn-sm { padding: 8px 12px; }
+    /* Secondary columns hide instead of forcing the table into sideways scroll — what they
+       carry is reachable elsewhere (search matches brand/category; recency and alert flags
+       live in the dialogs). The overflow-x container stays as the fallback for what is
+       still too wide. */
+    .col-secondary { display: none; }
+    /* Squeeze the chrome, not the content: tighter cell padding and plain headers buy the
+       last column its place on a 390px screen. */
+    th, td { padding: 8px 6px; }
+    th { letter-spacing: 0; font-size: 11px; }
+    .deal-verdict-inline { display: block; margin-top: 4px; }
 }
 
 /* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers the
@@ -1159,7 +1203,9 @@ function buildProductsTable(products, filtered) {
     // completely different things. What is left is the pair you press weekly; the rest moved
     // to where its context already is — Länka into the Länkar panel, Ta bort into the edit
     // dialog next to the fields it destroys.
-    let html = '<table><thead><tr><th>Namn</th><th>Varumärke</th><th>Kategori</th><th>Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
+    // col-secondary hides on the phone: search already matches brand and category, so the
+    // columns that must share a phone screen are name, count, price and the two buttons.
+    let html = '<table><thead><tr><th>Namn</th><th class="col-secondary">Varumärke</th><th class="col-secondary">Kategori</th><th class="col-secondary">Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
     for (const p of products) {
         const links = p.stores || [];
         // COUNT, not names: linked store names made this column swallow the table, and
@@ -1169,9 +1215,9 @@ function buildProductsTable(products, filtered) {
         const storeCell = storeCount ? String(storeCount) : '&#8212;';
         html += `<tr class="product-row" data-action="links" data-id="${escapeHtml(p.id)}">
             <td><button type="button" class="product-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></td>
-            <td>${escapeHtml(p.brand || '-')}</td>
-            <td>${escapeHtml(p.category || '-')}</td>
-            <td>${storeCell}</td>
+            <td class="col-secondary">${escapeHtml(p.brand || '-')}</td>
+            <td class="col-secondary">${escapeHtml(p.category || '-')}</td>
+            <td class="col-secondary">${storeCell}</td>
             <td>${buildBestPriceCell(p, links)}</td>
             <td class="row-actions">
                 <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
@@ -1376,6 +1422,12 @@ function renderProducts() {
         ? allProducts.length + ' produkter'
         : rows.length + ' av ' + allProducts.length + ' produkter';
     document.getElementById('filter-clear').style.display = active ? '' : 'none';
+    // The phone folds the facet selects away (see #filter-more) — an active one must still
+    // announce itself, or a forgotten filter reads as a shrunken product list.
+    const folded = PRODUCT_FILTER_KEYS.filter(
+        k => k !== 'search' && productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]
+    ).length;
+    document.getElementById('filter-more-count').textContent = folded ? ` (${folded})` : '';
 }
 
 function setProductFilter(key, value) {
@@ -1545,19 +1597,25 @@ function buildDealRow(d) {
     const ord = d.price_sek != null
         ? '<div class="best-link">ord. ' + escapeHtml(formatSek(d.price_sek)) + ' kr</div>'
         : '';
+    // The verdict is rendered twice: as its own column, and duplicated under the product
+    // name in a phone-only block. Four content-heavy columns honestly do not fit 390px, and
+    // the verdict is the one thing that must not be the column that gets clipped.
     return `<tr>
-        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}</td>
+        <td>${escapeHtml(d.product_name)}${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div></td>
         <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
         <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${jfr}${ord}</td>
-        <td>${dealComparisonCell(d)}</td>
-        <td><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
-        <td>${dealSeenCell(d)}</td>
+        <td class="col-secondary">${dealComparisonCell(d)}</td>
+        <td class="col-secondary"><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
+        <td class="col-secondary">${dealSeenCell(d)}</td>
     </tr>`;
 }
 
+// Rabatt and Sett hide on the phone (col-secondary): the store's own framing and our check
+// schedule are not what you act on in the aisle — product, butik, price and the verdict are.
+// The verdict column hides too, but re-enters inline under the product name (see buildDealRow).
 function buildDealTable(rows) {
     return '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Erbjudande</th>'
-        + '<th>Jämförelse</th><th>Rabatt</th><th>Sett</th></tr></thead><tbody>'
+        + '<th class="col-secondary">Jämförelse</th><th class="col-secondary">Rabatt</th><th class="col-secondary">Sett</th></tr></thead><tbody>'
         + rows.map(buildDealRow).join('')
         + '</tbody></table>';
 }
@@ -1871,7 +1929,9 @@ async function loadWatches() {
         }
         // Both actions here are writes, so a reader gets no Åtgärder column at all rather
         // than an empty one.
-        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th>Larma vid erbjudande</th>'
+        // The offer-alert flag hides on the phone (col-secondary) — it lives in the edit
+        // dialog; target vs current price is what the list is for.
+        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th class="col-secondary">Larma vid erbjudande</th>'
             + (IS_ADMIN ? '<th>Åtgärder</th>' : '') + '</tr></thead><tbody>';
         for (const w of watches) {
             // Show the target in whichever currency the watch actually uses —
@@ -1896,7 +1956,7 @@ async function loadWatches() {
                 <td>${escapeHtml(w.product_name || w.product_id)}</td>
                 <td>${escapeHtml(target)}</td>
                 <td>${now}</td>
-                <td>${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
+                <td class="col-secondary">${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
                 ${IS_ADMIN ? `<td>
                     <button class="action-btn" onclick="openEditWatch('${w.watch_id}')">Redigera</button>
                     <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
@@ -2989,6 +3049,16 @@ for (const [id, key] of PRODUCT_FILTER_CONTROLS) {
     el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', (e) => {
         setProductFilter(key, e.target.value);
     });
+}
+
+// The facet fold starts closed on a phone and MUST reopen when the viewport goes wide:
+// desktop CSS hides the summary (nothing left to click), and a closed <details>' content
+// is unrendered no matter what display: rule applies to it.
+{
+    const filterMore = document.getElementById('filter-more');
+    const phoneViewport = window.matchMedia('(max-width: 768px)');
+    if (phoneViewport.matches) filterMore.open = false;
+    phoneViewport.addEventListener('change', (e) => { if (!e.matches) filterMore.open = true; });
 }
 
 // <details> menus open themselves; nothing closes them. Two lines here do both cases a user
