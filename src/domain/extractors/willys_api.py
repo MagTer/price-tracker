@@ -2,7 +2,7 @@
 
 import logging
 import re
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from domain.quickadd import parse_package_from_name
 from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
@@ -12,6 +12,14 @@ logger = logging.getLogger(__name__)
 # Regex to extract product code from Willys URL
 # Matches patterns like: /produkt/Some-Name-100014716_ST or /produkt/name-12345_ST
 _PRODUCT_CODE_RE = re.compile(r"-(\d+_ST)(?:\?|$|#)")
+
+
+def _format_sek(amount: Decimal) -> str:
+    """An öre-quantized amount for a user-facing string — Swedish comma decimal,
+    no trailing zeros ("3,39", "5")."""
+    quantized = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    text = format(quantized, "f").rstrip("0").rstrip(".")
+    return text.replace(".", ",")
 
 
 # The politeness key for this endpoint. The ledger is keyed by store id everywhere else, but
@@ -140,18 +148,53 @@ class WillysApiExtractor:
                 continue
             price = promo.get("price")
             value = price.get("value") if isinstance(price, dict) else None
-            if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
+            # A number today, but parse a numeric string too: silently skipping "49.50"
+            # would demote the offer to the savings arithmetic — which on a multi-buy is
+            # the exact invented-price bug this promotion price exists to prevent.
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                value_dec = Decimal(str(value).replace(",", "."))
+            except InvalidOperation:
+                continue
+            if value_dec <= 0:
                 continue
             label = str(promo.get("cartLabel") or "").strip()
             # Money is öre in this app, and a "3 för 95" promotion arrives as
             # 31.666666666666668 — quantize at the boundary, half-up like everywhere else.
             candidate = (
-                Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                value_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                 label or None,
             )
             if best is None or candidate[0] > best[0]:
                 best = candidate
         return best if best is not None else (None, None)
+
+    @staticmethod
+    def _has_multibuy_promotion(data: dict[str, object]) -> bool:
+        """Whether any promotion requires more than one unit to qualify.
+
+        On a multi-buy, `savingsAmount` is the TOTAL saving over `qualifyingCount`
+        units, so the priceValue − savingsAmount fallback is known-wrong there —
+        it invents a per-unit price that exists nowhere (the v0.41.1 bug). When the
+        multi-buy carries no usable promotion price, refusing the offer is the only
+        honest answer.
+        """
+        promotions = data.get("potentialPromotions")
+        if not isinstance(promotions, list):
+            return False
+        for promo in promotions:
+            if not isinstance(promo, dict):
+                continue
+            count = promo.get("qualifyingCount")
+            if isinstance(count, bool):
+                continue
+            try:
+                if count is not None and float(count) > 1:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
 
     def _parse_response(self, data: dict[str, object]) -> PriceExtractionResult:
         """Parse Willys API response into PriceExtractionResult."""
@@ -198,14 +241,17 @@ class WillysApiExtractor:
             offer_price_sek = promo_price
             offer_type = "kampanj"
             # The store's own framing ("Välj & blanda! 2 för 99,00") carries the multi-buy
-            # CONDITION — a bare price would claim the discount applies to a single unit.
-            offer_details = promo_label or (f"Spara {savings} kr" if savings else None)
-        elif savings and price_sek:
+            # CONDITION. No label → no details: `savingsAmount` is a TOTAL, and printing
+            # "Spara 36,80 kr" beside a per-unit price claims it applies to a single unit.
+            offer_details = promo_label
+        elif savings and price_sek and not self._has_multibuy_promotion(data):
+            # The subtraction is only sound when total and per-unit saving coincide —
+            # a multi-buy without a usable promotion price gets NO offer, not a guess.
             savings_dec = Decimal(str(savings))
             if savings_dec > 0:
                 offer_price_sek = price_sek - savings_dec  # single-unit campaign fallback
                 offer_type = "kampanj"
-                offer_details = f"Spara {savings} kr"
+                offer_details = f"Spara {_format_sek(savings_dec)} kr"
 
         # An offer is what you PAY — lower than ordinarie by definition (the v0.32.1
         # invariant). A campaign price at or above ordinarie is refused wholesale.

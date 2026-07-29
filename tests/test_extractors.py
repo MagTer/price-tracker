@@ -160,8 +160,7 @@ class TestExtract:
         assert result.price_sek == Decimal("21.29")  # ordinarie, unchanged
         assert result.offer_price_sek == Decimal("17.90")  # campaign price you pay now
         assert result.offer_type == "kampanj"
-        assert result.offer_details is not None
-        assert "3.39" in result.offer_details
+        assert result.offer_details == "Spara 3,39 kr"
 
     @pytest.mark.asyncio
     async def test_extract_out_of_stock(self) -> None:
@@ -345,18 +344,64 @@ class TestParseResponse:
         assert result.offer_details is None
         assert result.price_sek == Decimal("67.9")  # ordinarie survives the refusal
 
-    def test_promotion_without_price_falls_back_to_savings(self) -> None:
-        """A promotion entry with no parseable price is skipped — the savings
-        arithmetic remains for exactly this shape."""
+    def test_multibuy_without_promotion_price_gets_no_offer(self) -> None:
+        """A MULTI-BUY whose promotion carries no usable price must NOT fall back to
+        priceValue − savingsAmount: the saving is a TOTAL over qualifyingCount units,
+        and the subtraction invents a per-unit price that exists nowhere (the exact
+        v0.41.1 bug — 67.90 − 36.8 = 31.10 for a "2 för 99" at 49.50/st)."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=67.90,
+            savings_amount=36.8,
+            promotions=[_promotion(price_value=None)],  # qualifyingCount defaults to 2
+        )
+        result = extractor._parse_response(data)
+        assert result.price_sek == Decimal("67.90")  # ordinarie survives
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+        assert result.offer_details is None
+
+    def test_single_unit_promotion_without_price_falls_back_to_savings(self) -> None:
+        """The savings arithmetic remains for a SINGLE-unit promotion with no parseable
+        price — total and per-unit saving coincide only at qualifyingCount 1."""
         extractor = _make_extractor()
         data = _valid_api_response(
             price_value=21.29,
             savings_amount=3.39,
-            promotions=[_promotion(price_value=None)],
+            promotions=[_promotion(price_value=None, qualifying_count=1)],
         )
         result = extractor._parse_response(data)
         assert result.offer_price_sek == Decimal("17.90")
-        assert result.offer_details == "Spara 3.39 kr"
+        assert result.offer_details == "Spara 3,39 kr"
+
+    def test_string_promotion_price_is_parsed_not_demoted(self) -> None:
+        """A price.value that arrives as a string must parse, not silently fall through
+        to the multi-buy-wrong savings arithmetic."""
+        extractor = _make_extractor()
+        for raw in ("49.50", "49,50"):
+            data = _valid_api_response(
+                price_value=67.90,
+                savings_amount=36.8,
+                promotions=[_promotion()],
+            )
+            promo = data["potentialPromotions"][0]  # type: ignore[index]
+            promo["price"]["value"] = raw  # type: ignore[index]
+            result = extractor._parse_response(data)
+            assert result.offer_price_sek == Decimal("49.50")
+
+    def test_promotion_price_without_label_gets_no_details(self) -> None:
+        """When the promotion price is used but the store sent no cartLabel, the details
+        stay empty — "Spara 36,80 kr" beside a per-unit price would claim the TOTAL
+        saving applies to a single unit."""
+        extractor = _make_extractor()
+        data = _valid_api_response(
+            price_value=67.90,
+            savings_amount=36.8,
+            promotions=[_promotion(price_value=49.5, cart_label=None)],
+        )
+        result = extractor._parse_response(data)
+        assert result.offer_price_sek == Decimal("49.5")
+        assert result.offer_details is None
 
     def test_malformed_promotions_never_raise(self) -> None:
         """potentialPromotions in an unexpected shape degrades, never crashes a check."""
