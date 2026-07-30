@@ -406,7 +406,7 @@
 <div class="modal" id="modal-price-history" style="display:none;">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3>Prishistorik</h3>
+            <h3 id="price-history-title">Prishistorik</h3>
             <button class="btn btn-sm" onclick="closeModal('modal-price-history')">&times;</button>
         </div>
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
@@ -660,11 +660,14 @@
     width: 90%;
     max-width: 520px;
     max-height: 90vh;
+    /* Defensive: as a flex item this box has min-width:auto, which would let one wide child
+       (a table, a canvas) push the dialog past the viewport instead of scrolling inside it. */
+    min-width: 0;
     overflow-y: auto;
     box-shadow: 0 10px 40px rgba(0,0,0,0.2);
 }
 .modal-large {
-    max-width: 800px;
+    max-width: 960px;
 }
 /* Phone: dialogs become bottom sheets — full width, thumb-reachable, scrollable. */
 @media (max-width: 768px) {
@@ -762,12 +765,30 @@ form {
 .history-modes {
     display: flex;
     gap: 6px;
-    padding: 4px 0 12px;
+    padding: 12px 20px 4px;
 }
 .history-modes .btn.active {
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
+}
+/* The chart gets a real height of its own: without one, Chart.js's responsive canvas
+   collapses toward its default aspect and the graph reads as a cramped strip. */
+#price-history-chart-container {
+    height: 420px;
+    padding: 4px 20px 8px;
+}
+#price-history-table {
+    padding: 0 20px 20px;
+    overflow-x: auto;   /* wide history tables scroll HERE, never the page (v0.41.3 rule) */
+}
+@media (max-width: 768px) {
+    #price-history-chart-container {
+        height: 300px;
+        padding: 4px 8px 8px;
+    }
+    .history-modes { padding: 12px 8px 4px; }
+    #price-history-table { padding: 0 8px 16px; }
 }
 .links-table {
     padding: 4px 0 16px;
@@ -2471,37 +2492,64 @@ function buildBestAvailableSeries(rows, dates) {
     return series;
 }
 
-// Composes the two above into { labels, datasets } for Chart.js. `role` is an extra property
-// Chart.js ignores; it exists so the harness can assert on dataset identity instead of on brittle
-// label strings.
+// Composes the two above into { datasets } of {x, y} points on a time-valued LINEAR axis.
+// `role` is an extra property Chart.js ignores; it exists so a harness can assert on dataset
+// identity instead of on brittle label strings.
+//
+// Two rendering decisions carry meaning, both mirroring the stats doctrine ("carry forward,
+// never interpolate"):
+//  - stepped 'after': a price observed on a date HOLDS until the next observation changes it —
+//    that is what the shelf says. The old curved interpolation (tension) drew a gradual drift
+//    between observations that never happened.
+//  - x is a real timestamp, not a category slot: category labels gave one slot per OBSERVED
+//    date, so one day apart and three weeks apart rendered the same width, distorting every
+//    slope. Day keys are UTC midnights, matching the app's naive-UTC storage convention.
+// A missing VALUE is still a gap (QD-4): a null field becomes {x, y: null} and spanGaps stays
+// false, so a NULL-quantity link renders as no line — never as zero. But a date where THIS link
+// simply was not checked no longer breaks its line: the step carries the last observed price
+// forward, which is the domain's own claim about what the price was.
 function buildChartData(rows, mode) {
-    const palette = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2'];
+    // The dataviz reference categorical palette (light mode), FIXED order — CVD-validated for
+    // adjacency on the white card surface. The sub-3:1-contrast slots (aqua/yellow/magenta) are
+    // acceptable because the table under the chart is the relief channel.
+    const palette = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                     '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+    const toTs = (date) => Date.parse(date + 'T00:00:00Z');
     const links = groupHistoryByLink(rows);
     const dateSet = {};
     for (const link of links) {
         for (const date of Object.keys(link.byDate)) dateSet[date] = true;
     }
-    const labels = Object.keys(dateSet).sort();
+    const dates = Object.keys(dateSet).sort();
     const field = mode === 'absolute' ? 'price_sek' : 'unit_price_sek';
 
     const datasets = links.map((link, index) => ({
         role: 'link',
         product_store_id: link.product_store_id,
         label: link.label,
-        // null on a date this link was not checked, AND null wherever the value itself is
-        // missing — so a NULL-quantity link is a GAP in kr/unit mode (QD-4), never a zero.
-        data: labels.map((date) => {
-            const obs = link.byDate[date];
-            if (!obs) return null;
-            const value = obs[field];
-            return (typeof value === 'number' && isFinite(value)) ? value : null;
+        data: Object.keys(link.byDate).sort().map((date) => {
+            const value = link.byDate[date][field];
+            return {
+                x: toTs(date),
+                y: (typeof value === 'number' && isFinite(value)) ? value : null
+            };
         }),
         borderColor: palette[index % palette.length],
-        borderWidth: 1.5,
+        borderWidth: 2,
+        borderJoinStyle: 'round',
+        borderCapStyle: 'round',
+        stepped: 'after',
         spanGaps: false,
         fill: false,
-        tension: 0.2,
-        pointRadius: 3
+        // The markers stay visible on purpose: a dot is MEASURED, the horizontal run after it
+        // is CARRIED, and hiding the dots would erase that distinction. The surface-colored
+        // ring keeps them legible where lines cross.
+        pointRadius: 3,
+        pointBackgroundColor: palette[index % palette.length],
+        pointBorderColor: '#fff',
+        pointBorderWidth: 2,
+        pointHoverRadius: 5,
+        pointHitRadius: 12
     }));
 
     // kr/unit mode ONLY (QD-3). The cheapest ABSOLUTE price across pack sizes is meaningless —
@@ -2509,20 +2557,25 @@ function buildChartData(rows, mode) {
     // bug as a recommendation. The suppression lives here, where the harness can see it, rather
     // than in the render path where it could not.
     if (mode === 'unit') {
+        const best = buildBestAvailableSeries(rows, dates);
         datasets.push({
             role: 'best',
             label: 'Billigast tillgänglig',
-            data: buildBestAvailableSeries(rows, labels),
-            borderColor: '#111827',
-            borderWidth: 4,
+            data: dates.map((date, i) => ({ x: toTs(date), y: best[i] })),
+            borderColor: '#1e293b',
+            borderWidth: 3,
+            borderJoinStyle: 'round',
+            borderCapStyle: 'round',
+            stepped: 'after',
             spanGaps: false,
             fill: false,
-            tension: 0.2,
-            pointRadius: 0
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 0
         });
     }
 
-    return { labels: labels, datasets: datasets };
+    return { datasets: datasets };
 }
 
 let priceChart = null;
@@ -2532,6 +2585,10 @@ let historyMode = 'unit';                // kr/unit is the default (QD-3)
 
 async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('modal-price-history').style.display = 'flex';
+    // The product name lives in the modal HEADER, not in a chart-internal title: it must be
+    // there even when the chart has no data to draw.
+    document.getElementById('price-history-title').textContent =
+        productName ? 'Prishistorik – ' + productName : 'Prishistorik';
     historyFor = { id: productId, name: productName, unit: productUnit };
     historyMode = 'unit';
     setHistoryModeButtons();
@@ -2572,33 +2629,99 @@ function renderPriceHistory() {
     tableDiv.innerHTML = buildHistoryTable(historyRows, unit);
 
     if (window.Chart) {
+        Chart.defaults.font.family = "'Inter', system-ui, -apple-system, sans-serif";
         const chart = buildChartData(historyRows, historyMode);
         const ctx = document.getElementById('price-history-chart').getContext('2d');
         if (priceChart) priceChart.destroy();
+
+        // Day-aligned x ticks: the x values are UTC midnights, so a stepSize in whole days
+        // keeps every tick a real date instead of an arbitrary epoch offset.
+        const DAY_MS = 86400000;
+        let minX = Infinity, maxX = -Infinity;
+        for (const ds of chart.datasets) {
+            for (const p of ds.data) {
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+            }
+        }
+        const spanDays = Math.max(1, Math.round((maxX - minX) / DAY_MS));
+        const stepDays = Math.max(1, Math.ceil(spanDays / 7));
+        const fmtDay = (ts) => {
+            const d = new Date(ts);
+            return d.getUTCDate() + '/' + (d.getUTCMonth() + 1);
+        };
+
         priceChart = new Chart(ctx, {
             type: 'line',
             data: chart,
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: { mode: 'nearest', intersect: false },
                 plugins: {
-                    title: {
-                        display: true,
-                        text: (historyFor ? historyFor.name : '')
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: false,
-                        title: {
-                            display: true,
-                            text: historyMode === 'unit' ? unitPriceHeading(unit) : 'Pris (kr)'
+                    legend: {
+                        // One series needs no legend box — the modal header already names it.
+                        display: chart.datasets.length > 1,
+                        position: 'bottom',
+                        labels: {
+                            usePointStyle: true,
+                            pointStyle: 'circle',
+                            boxWidth: 8,
+                            boxHeight: 8,
+                            padding: 16,
+                            color: '#1e293b',
+                            font: { size: 12 }
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        padding: 10,
+                        cornerRadius: 6,
+                        callbacks: {
+                            title: (items) => items.length
+                                ? new Date(items[0].parsed.x).toISOString().slice(0, 10)
+                                : '',
+                            label: (item) => item.dataset.label + ': '
+                                + item.parsed.y.toFixed(2) + ' '
+                                + (historyMode === 'unit' ? unitPriceHeading(unit) : 'kr')
                         }
                     }
                 },
-                // A missing observation is a GAP, not a line drawn straight through it: a link
-                // that was not checked has no value, and connecting across it would invent one.
-                spanGaps: false
+                scales: {
+                    x: {
+                        type: 'linear',
+                        // A single-day span would otherwise render one point on a degenerate
+                        // axis; a day of air on each side keeps it readable.
+                        suggestedMin: minX === maxX ? minX - DAY_MS : undefined,
+                        suggestedMax: minX === maxX ? maxX + DAY_MS : undefined,
+                        grid: { display: false },
+                        border: { color: '#e2e8f0' },
+                        ticks: {
+                            stepSize: stepDays * DAY_MS,
+                            maxRotation: 0,
+                            color: '#64748b',
+                            font: { size: 11 },
+                            callback: fmtDay
+                        }
+                    },
+                    y: {
+                        beginAtZero: false,
+                        grace: '10%',
+                        title: {
+                            display: true,
+                            text: historyMode === 'unit' ? unitPriceHeading(unit) : 'Pris (kr)',
+                            color: '#64748b',
+                            font: { size: 12 }
+                        },
+                        grid: { color: '#eef2f7' },
+                        border: { display: false },
+                        ticks: {
+                            maxTicksLimit: 7,
+                            color: '#64748b',
+                            font: { size: 11 }
+                        }
+                    }
+                }
             }
         });
     }
