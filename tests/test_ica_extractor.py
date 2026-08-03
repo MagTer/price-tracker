@@ -136,6 +136,81 @@ class TestCampaignExtraction:
         assert result.offer_type is None
         assert result.offer_details is None
 
+    def test_per_measure_label_converts_through_the_jamforpris(self):
+        # Live catchweight shape 2026-08-03: chicken ca 925 g, ordinarie 150.91,
+        # jämförpris 163.15 kr/kg, campaign "109 kr/kg". The package offer is
+        # 109 × 150.91 / 163.15 = 100.82 — the store's own arithmetic; recording the
+        # bare 109.00 would understate nothing and pass the inversion guard while
+        # being wrong by the package weight.
+        product = _product(
+            price={"amount": "150.91", "currency": "SEK"},
+            unitPrice={
+                "price": {"amount": "163.15", "currency": "SEK"},
+                "unit": "fop.price.per.kg",
+            },
+            promotions=[_promotion("109 kr/kg")],
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.price_sek == Decimal("150.91")
+        assert result.offer_price_sek == Decimal("100.82")
+        assert result.offer_details == "109 kr/kg"
+
+    def test_per_litre_label_converts_including_deposit_suffix(self):
+        product = _product(
+            price={"amount": "137.45", "currency": "SEK"},
+            unitPrice={
+                "price": {"amount": "20.83", "currency": "SEK"},
+                "unit": "fop.price.per.litre.without.deposit",
+            },
+            promotions=[_promotion("15 kr/l")],
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek == Decimal("98.98")
+
+    def test_per_measure_label_against_wrong_jamforpris_unit_is_refused(self):
+        product = _product(
+            unitPrice={
+                "price": {"amount": "24.82", "currency": "SEK"},
+                "unit": "fop.price.per.kg",
+            },
+            promotions=[_promotion("5 kr/l")],
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+
+    def test_per_measure_label_without_jamforpris_is_refused(self):
+        product = _product(unitPrice=None, promotions=[_promotion("10 kr/kg")])
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+
+    def test_per_measure_label_with_multi_buy_condition_is_refused(self):
+        # "2 för 109 kr/kg" mixes bases, and a min-quantity condition on a per-measure
+        # price cannot ride along visibly.
+        product = _product(
+            promotions=[
+                _promotion("2 för 20 kr/kg"),
+                _promotion("15 kr/kg", required_quantity=2),
+            ]
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+
+    def test_trailing_slash_with_no_measure_is_a_package_price(self):
+        # Live 2026-08-03: a 20-pack cola with the truncated label "90 kr/" —
+        # ordinarie 137.45, campaign 90 kr for the package.
+        product = _product(
+            price={"amount": "137.45", "currency": "SEK"},
+            promotions=[_promotion("90 kr/")],
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek == Decimal("90.00")
+
     def test_several_promotions_pick_the_highest_per_unit(self):
         # The smaller claimed saving is the safer error (Lyko's rule).
         product = _product(
@@ -157,6 +232,15 @@ class TestPageFacts:
         assert result.store_unit_price_sek == Decimal("24.82")
         assert result.package_amount == Decimal("1.1")
         assert result.package_unit == "kg"
+
+    def test_range_pack_size_yields_no_package_evidence(self):
+        # Catchweight ranges name no single amount; the parser would read the lower
+        # bound ("766.4g") as the package.
+        product = _product(packSizeDescription="766.4g - 1000000g")
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.package_amount is None
+        assert result.package_unit is None
 
     def test_unavailable_product_is_out_of_stock(self):
         product = _product(available=False)
