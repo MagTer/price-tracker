@@ -6,6 +6,7 @@ import html
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from domain.deals import DEAL_BEST, DEAL_STALE_HOURS, DEAL_UNKNOWN, DEAL_WORSE, DealRow
 from domain.protocols.email import EmailMessage, IEmailService
@@ -115,18 +116,20 @@ class PriceNotifier:
         to_email: str,
         deals: list[DealRow],
         watched_products: list[dict[str, str | Decimal | None]],
+        data_quality: dict[str, Any] | None = None,
     ) -> bool:
         """Send the weekly buy-list email.
 
         `deals` is the pre-filtered buy list (BEST + UNKNOWN from domain/deals.py) —
         grouping per butik and the in-butik ranking happen here, because they are
-        presentation, not judgement.
+        presentation, not judgement. `data_quality` is domain/validation.py's judgement,
+        rendered only when something is wrong — a green validator earns no inbox space.
 
         Returns:
             True if email was sent successfully.
         """
         subject = "Veckans inköpslista – Prisspaning"
-        html_body = self._build_summary_html(deals, watched_products)
+        html_body = self._build_summary_html(deals, watched_products, data_quality=data_quality)
 
         message = EmailMessage(
             to=[to_email],
@@ -356,6 +359,7 @@ class PriceNotifier:
         deals: list[DealRow],
         watched_products: list[dict[str, str | Decimal | None]],
         now: datetime | None = None,
+        data_quality: dict[str, Any] | None = None,
     ) -> str:
         """Build HTML for the weekly buy-list email — one section per butik."""
         if now is None:
@@ -427,6 +431,37 @@ class PriceNotifier:
                 <tbody>{watched_rows}</tbody>
             </table>"""
 
+        # Data quality rides along ONLY when something is wrong: a tier regression means
+        # a store's campaigns went dark while every check still reads "ok", and a
+        # jämförpris mismatch means a recorded price or amount contradicts the store's
+        # own printed figure — both are exactly the silent failures a Monday reader can
+        # act on, and neither is visible anywhere else outside the Statistik page.
+        quality_html = ""
+        if data_quality:
+            quality_lines = []
+            for row in data_quality.get("tier_regressions", []):
+                quality_lines.append(
+                    f"{html.escape(str(row.get('product_name', '')))} hos "
+                    f"{html.escape(str(row.get('store_name', '')))} läses inte längre via "
+                    f"{html.escape(str(row.get('expected_source', '')))} — kampanjer kan "
+                    f"vara osynliga"
+                )
+            for row in data_quality.get("unit_price_mismatches", []):
+                unit = str(row.get("unit") or "")
+                unit_label = f" kr/{html.escape(unit)}" if unit else " kr"
+                quality_lines.append(
+                    f"{html.escape(str(row.get('product_name', '')))} hos "
+                    f"{html.escape(str(row.get('store_name', '')))}: butiken trycker "
+                    f"{row.get('printed_unit_price_sek')}{unit_label} men vi räknar fram "
+                    f"{row.get('computed_unit_price_sek')}{unit_label} — pris eller mängd "
+                    f"är fel"
+                )
+            if quality_lines:
+                items = "".join(f"<li>{line}</li>" for line in quality_lines)
+                quality_html = f"""
+            <h3 style="color: #b45309; margin-top: 30px;">Datakvalitet — behöver en titt</h3>
+            <ul style="color: #444;">{items}</ul>"""
+
         return f"""
         <!DOCTYPE html>
         <html lang="sv">
@@ -438,6 +473,7 @@ class PriceNotifier:
                Jämförelsen är mot produktens billigaste andra länk, per enhet.</p>
             {deals_html}
             {watched_html}
+            {quality_html}
 
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;">
             <p style="color: #666; font-size: 0.9em;">

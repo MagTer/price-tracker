@@ -1883,12 +1883,65 @@ function buildStatsHealth(data) {
         + '</div></div>';
 }
 
+// Datakvalitet: does the tracker still SEE what the stores publish? Two validator layers
+// from domain/validation.py — tier regressions (a store-extractor silently degraded to
+// JSON-LD: checks pass, campaigns go dark) and jämförpris mismatches (printed vs computed
+// kr/enhet disagree: the price or the amount is wrong). Green is a single quiet line —
+// the section earns space only when something needs a human.
+function buildStatsQuality(data) {
+    const q = data.data_quality;
+    if (!q) return '';
+    const regressions = q.tier_regressions || [];
+    const mismatches = q.unit_price_mismatches || [];
+    let html = '<div class="stats-section"><div class="stats-title">Datakvalitet</div>'
+        + statsBasis('larmar när en butiks strukturerade källa slutat svara (kampanjer blir '
+            + 'osynliga fast checkarna ser gröna ut) eller när butikens tryckta jfr-pris '
+            + 'motsäger vårt beräknade (priset eller mängden är fel) · observation, aldrig '
+            + 'automatisk åtgärd');
+    if (!regressions.length && !mismatches.length) {
+        return html + '<p class="best-link">Inga avvikelser — alla länkar läses via sin bästa '
+            + 'källa och tryckta jfr-priser stämmer med de beräknade.</p></div>';
+    }
+    if (regressions.length) {
+        html += `<table><thead><tr>
+            <th>Produkt</th><th>Butik</th><th>Väntad källa</th><th>Faktisk källa</th><th>Senast kollad</th>
+        </tr></thead><tbody>`;
+        for (const r of regressions) {
+            html += `<tr>
+                <td>${escapeHtml(r.product_name)}</td>
+                <td>${escapeHtml(r.store_name)}</td>
+                <td>${escapeHtml(r.expected_source)}</td>
+                <td><span class="badge badge-warning">${escapeHtml(r.actual_source)}</span></td>
+                <td>${escapeHtml(formatWhen(r.checked_at))}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+    }
+    if (mismatches.length) {
+        html += `<table><thead><tr>
+            <th>Produkt</th><th>Butik</th><th>Tryckt jfr-pris</th><th>Beräknat</th><th>Avvikelse</th>
+        </tr></thead><tbody>`;
+        for (const r of mismatches) {
+            const unit = r.unit ? 'kr/' + escapeHtml(r.unit) : 'kr';
+            html += `<tr>
+                <td>${escapeHtml(r.product_name)}</td>
+                <td>${escapeHtml(r.store_name)}</td>
+                <td>${escapeHtml(r.printed_unit_price_sek.toFixed(2))} ${unit}</td>
+                <td>${escapeHtml(r.computed_unit_price_sek.toFixed(2))} ${unit}</td>
+                <td><span class="badge badge-warning">${escapeHtml(r.deviation_pct.toFixed(1))} %</span></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+    }
+    return html + '</div>';
+}
+
 function renderStatistics() {
     if (!statsData) return;
     const data = statsData;
     const container = document.getElementById('stats-container');
     container.innerHTML = buildStatsProducts(data) + buildStatsStores(data)
-        + buildStatsOffers(data) + buildStatsHealth(data);
+        + buildStatsOffers(data) + buildStatsHealth(data) + buildStatsQuality(data);
 
     // The honest header: how much history there actually is. Trends over a few days are
     // noise, and the page says so rather than letting a table imply otherwise.

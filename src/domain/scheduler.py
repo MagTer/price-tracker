@@ -39,6 +39,7 @@ from domain.schedule import (
     weekly_summary_slot,
 )
 from domain.service import PriceCheckOutcome, perform_price_check
+from domain.validation import data_quality
 
 logger = logging.getLogger(__name__)
 
@@ -629,8 +630,23 @@ class PriceCheckScheduler:
             deals = [d for d in await current_deals(session) if d.verdict != DEAL_WORSE]
             watched_products = await self._watched_products_summary(session)
 
-            if not deals and not watched_products:
-                logger.debug("No deals or watched products - skipping weekly summary")
+            # THE validator (domain/validation.py) rides along when it found something:
+            # a tier regression or a jämförpris contradiction is Monday news exactly like
+            # a deal is — and unlike a deal it means the deals themselves may be wrong.
+            # Telemetry must not kill the email it rides in, so a validator crash mails
+            # the buy list without the quality section rather than nothing at all.
+            quality: dict[str, Any] | None = None
+            try:
+                quality = await data_quality(session)
+                if not quality["tier_regressions"] and not quality["unit_price_mismatches"]:
+                    quality = None
+            except Exception:
+                logger.exception("Data-quality validation failed - sending summary without it")
+
+            if not deals and not watched_products and quality is None:
+                logger.debug(
+                    "No deals, watched products or quality issues - skipping weekly summary"
+                )
                 self._last_summary_date = slot
                 return
 
@@ -645,6 +661,7 @@ class PriceCheckScheduler:
                     to_email=SUMMARY_EMAIL,
                     deals=deals,
                     watched_products=watched_products,
+                    data_quality=quality,
                 )
             except Exception as e:
                 logger.error(f"Failed to send weekly summary to {SUMMARY_EMAIL}: {e}")

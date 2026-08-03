@@ -56,6 +56,7 @@ from domain.schedule import effective_schedule, is_inherited, next_check_time_fo
 from domain.service import PriceTrackerService, perform_price_check
 from domain.stats import build_statistics
 from domain.tenant import DEFAULT_TENANT_ID
+from domain.validation import data_quality
 from infra.db import async_session_factory
 from infra.logbuffer import get_log_buffer
 from infra.providers import (
@@ -2731,7 +2732,13 @@ async def get_statistics(
         reader, like /export and /logs.
     """
     try:
-        return await build_statistics(session, weeks=weeks if weeks > 0 else None)
+        payload = await build_statistics(session, weeks=weeks if weeks > 0 else None)
+        # Composed here rather than inside build_statistics: the validator is its own
+        # domain judgement (domain/validation.py — THE definition, weekly email reads
+        # the same one), and it ignores the period filter on purpose — data quality is
+        # about NOW, not about a window.
+        payload["data_quality"] = await data_quality(session)
+        return payload
     except Exception as e:
         LOGGER.exception("Failed to build statistics")
         raise HTTPException(status_code=500, detail="Failed to build statistics") from e
