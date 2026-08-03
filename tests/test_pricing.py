@@ -102,6 +102,19 @@ def test_normalize_amount_zero_and_negative_return_none() -> None:
     assert normalize_amount(Decimal("-24"), "st", "st") is None
 
 
+def test_normalize_amount_holds_gram_scale_sachets() -> None:
+    """24 g in kg is 0.024 — under the pre-v0.45.0 Numeric(10, 2) it silently became
+    0.02 (a 20 % kr/kg error the validator caught in prod). Saffron's 0.5 g is the
+    smallest real package the storage precision must hold."""
+    assert normalize_amount(Decimal("24"), "g", "kg") == Decimal("0.024")
+    assert normalize_amount(Decimal("0.5"), "g", "kg") == Decimal("0.0005")
+
+
+def test_normalize_amount_below_storage_precision_returns_none() -> None:
+    """0.04 g rounds to zero at the 0.0001 quantum — no evidence beats bad evidence."""
+    assert normalize_amount(Decimal("0.04"), "g", "kg") is None
+
+
 # --- scraped_quantity_from ---------------------------------------------------------
 
 

@@ -34,13 +34,15 @@ PKG_UNITS: dict[str, tuple[str, Decimal]] = {
 # listings comparable.
 CANONICAL_UNITS: tuple[str, ...] = ("st", "liter", "kg")
 
-# Upper bound of a Numeric(10, 2) column. A hallucinated 1e30 from the LLM must be rejected
+# Upper bound of a Numeric(12, 4) column. A hallucinated 1e30 from the LLM must be rejected
 # here and yield None — not surface as a DataError at flush inside the scheduler tick, where
 # the per-product `except Exception` would swallow it and count it as a failed check.
-MAX_PACKAGE_QUANTITY: Decimal = Decimal("99999999.99")
+MAX_PACKAGE_QUANTITY: Decimal = Decimal("99999999.9999")
 
-# Storage precision of package_quantity / scraped_package_quantity.
-_QUANTUM = Decimal("0.01")
+# Storage precision of package_quantity / scraped_package_quantity: 0.1 g / 0.1 ml in the
+# kg/liter scales. It was 0.01 until v0.45.0, which silently turned a 24 g sachet's
+# evidence into 0.02 kg — the validator's jämförpris cross-check is what exposed it.
+_QUANTUM = Decimal("0.0001")
 
 
 class ScrapedPackage(Protocol):
@@ -93,7 +95,7 @@ def normalize_amount(
     Returns None — never a garbage number — when the unit is unknown, when the entry unit's
     canonical form conflicts with the product's unit (a page reporting grams for a product
     whose unit is `st` is a CONFLICT, not evidence), or when the value falls outside what a
-    Numeric(10, 2) column can faithfully hold.
+    Numeric(12, 4) column can faithfully hold.
     """
     if amount is None or entry_unit is None:
         return None
@@ -131,7 +133,7 @@ def normalize_amount(
 
     quantized = quantity.quantize(_QUANTUM, rounding=ROUND_HALF_UP)
     if quantized <= 0:
-        # e.g. 1 g against a kg product: 0.001, which Numeric(10, 2) cannot hold.
+        # e.g. 0.04 g against a kg product: 0.00004, which Numeric(12, 4) cannot hold.
         LOGGER.info("Package quantity %s rounds to zero at storage precision — ignoring", quantity)
         return None
     return quantized

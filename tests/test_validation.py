@@ -219,6 +219,28 @@ class TestUnitPriceMismatches:
         assert await unit_price_mismatches(db_session) == []
 
     @pytest.mark.asyncio
+    async def test_gram_scale_amount_survives_storage_and_clears_the_mismatch(
+        self, db_session
+    ) -> None:
+        """The Dippmix fix end-to-end: 24 g stored as 0.024 (Numeric(12, 4) since
+        v0.45.0 — the old (10, 2) column rounded it back to 0.02 on write, so the
+        mismatch could not be corrected at all) makes printed and computed agree."""
+        store = await _store(db_session, "willys")
+        link = await _link(db_session, await _product(db_session, "Dippmix"), store, "0.024")
+        db_session.add(_point(link, "8.90", "370.83"))
+        await db_session.flush()
+
+        link_id = link.id
+        db_session.expire(link)
+        stored = (
+            await db_session.execute(
+                select(ProductStore.package_quantity).where(ProductStore.id == link_id)
+            )
+        ).scalar_one()
+        assert stored == Decimal("0.024")
+        assert await unit_price_mismatches(db_session) == []
+
+    @pytest.mark.asyncio
     async def test_links_without_printed_figure_or_amount_are_not_judged(self, db_session) -> None:
         store = await _store(db_session, "willys")
         no_printed = await _link(db_session, await _product(db_session), store, "1")

@@ -113,12 +113,16 @@ class ProductStore(Base):
     # The amount in the package, in the product's canonical unit. Every kr/unit in the app is
     # computed from this number. Nullable is deliberate (D-02): a link is saveable before its
     # pack size is known, and the first successful scrape autofills it.
-    package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Numeric(12, 4), not (10, 2): amounts live in the product's canonical unit, and two
+    # decimals in kg is 10-gram resolution — a 24 g sachet silently stored as 0.02 (20 g)
+    # until v0.45.0, which is a 20 % kr/kg error that no later check can correct. Four
+    # decimals holds 0.1 g / 0.1 ml, small enough for saffron (0.5 g = 0.0005).
+    package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     # The page's OWN reading of that amount (D-09), rewritten on every check. The operator's
     # typed package_quantity is intent; this is evidence, and it never overwrites intent. The
     # mismatch flag is DERIVED from the two (domain.pricing.quantity_mismatch), never stored,
     # so it self-clears the moment either number is corrected.
-    scraped_package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    scraped_package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Per-link schedule OVERRIDE. Both NULL (the normal state — quick-add creates links
