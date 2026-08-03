@@ -352,6 +352,14 @@ class TestAdminDashboard:
         assert "text/html" in r.headers["content-type"]
         assert "Price Tracker" in r.text
 
+    def test_dashboard_is_never_served_from_a_stale_cache(self, client):
+        """Without Cache-Control the browser may keep a heuristically-cached page across
+        deploys — after v0.45.0 a cached copy silently enforced the OLD input validation
+        and read as 'the fix didn't work'. no-cache forces revalidation, and with no
+        validator on the response, revalidation always fetches the current page."""
+        r = client.get("/")
+        assert r.headers.get("cache-control") == "no-cache"
+
     def test_no_admin_wording_reaches_the_user(self, client):
         """The 'Admin' naming was a holdover from the source platform — the app is just
         'Price Tracker' now. CSS comments may say what they like; visible text may not."""

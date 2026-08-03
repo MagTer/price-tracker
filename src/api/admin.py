@@ -2770,9 +2770,16 @@ async def get_logs(
 
 
 @router.get("/", response_class=HTMLResponse)
-async def price_tracker_dashboard(principal: Principal = Depends(get_principal)) -> str:
+async def price_tracker_dashboard(principal: Principal = Depends(get_principal)) -> HTMLResponse:
     """Server-rendered dashboard for price tracking.
         HTML dashboard for managing products, deals, and price watches.
+
+    Served with Cache-Control: no-cache — the page is the whole UI, and without the
+    header a browser may keep a heuristically-cached copy across deploys: after
+    v0.45.0 a cached page silently enforced the OLD input validation (step="0.01"
+    refusing the 0.024 the fresh page accepts), which reads as "the fix didn't work".
+    no-cache (revalidate, not no-store) is enough: there is no validator on the
+    response, so revalidation always fetches the current page.
 
     Security:
         Requires IAP header auth (X-Auth-Request-Email). A reader gets the same page
@@ -2804,7 +2811,7 @@ async def price_tracker_dashboard(principal: Principal = Depends(get_principal))
     # static write controls off it, and the JS reads it back (IS_ADMIN) to decide which
     # row actions to build. One source, and nothing to escape.
     body_class = "role-admin" if principal.is_admin else "role-reader"
-    return f"""<!DOCTYPE html>
+    page = f"""<!DOCTYPE html>
 <html lang="sv">
 <head>
     <meta charset="UTF-8">
@@ -2831,6 +2838,7 @@ async def price_tracker_dashboard(principal: Principal = Depends(get_principal))
     </script>
 </body>
 </html>"""
+    return HTMLResponse(content=page, headers={"Cache-Control": "no-cache"})
 
 
 def _get_admin_nav_css() -> str:
