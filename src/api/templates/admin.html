@@ -7,17 +7,21 @@
 
 <!-- ATT KÖPA — "vad ska jag köpa den här veckan?" Ranked on how much cheaper per unit an
      offer is than the product's next-best link, NOT on the store's own discount figure
-     (30 % off a bad price is still a bad price). The whole list is built by the JS from
-     /deals joined with /stats on product_id — the span bar needs history, which the deals
-     payload does not carry. -->
+     (30 % off a bad price is still a bad price). TWO filters decide membership, both
+     judged in domain/deals.py: the verdict (cheapest link right now) and the timing
+     (against the product's own observed floor) — a campaign can pass the first and fail
+     the second, and then it is demoted to its own section rather than hidden. The whole
+     list is built by the JS from /deals joined with /stats on product_id — the span bar
+     needs history, which the deals payload does not carry. -->
 <section class="app-page" data-page="kopa">
     <div class="page-head">
         <div>
             <div class="page-title" id="kopa-heading">Att köpa</div>
             <div class="page-sub">Rangordnat efter hur mycket billigare de är än näst bästa
-                alternativ just nu. Stapeln säger något annat: var priset ligger mellan
-                produktens lägsta och högsta noterade — alltså om det också är rätt
-                <em>tillfälle</em>.</div>
+                alternativ just nu. Erbjudanden som produkten nyligen varit tydligt billigare
+                än flyttas ner — billigast idag är inte samma sak som rätt
+                <em>tillfälle</em>. Stapeln visar var priset ligger mellan produktens lägsta
+                och högsta noterade.</div>
         </div>
     </div>
     <!-- Korgremsan. Every figure in it is derived from the rows the list below actually
@@ -793,6 +797,10 @@
 .deal-pct { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
 .deal-verdict.no-compare { color: var(--text-faint); }
 .deal-fix { font-weight: 600; color: var(--warning-link); background: none; border: 0; padding: 0; cursor: pointer; font-size: 13.5px; }
+/* The demotion reason, in amber: not an error (the price is real and it IS the cheapest
+   link) — a caveat, the same weight the staleness note carries. */
+.deal-moment { font-size: 13px; color: var(--warning); margin-top: 4px; }
+.deal-pct.is-bad { color: var(--warning); }
 .deal-meta { font-size: 12px; color: var(--text-faint); margin-top: 5px; }
 .deal-terms {
     display: inline-block;
@@ -1196,6 +1204,7 @@ form { padding: 20px; }
         column-gap: 10px;
         grid-template-areas:
             "name  price"
+            "moment moment"
             "meta  meta"
             "terms terms"
             "span  span"
@@ -1213,6 +1222,9 @@ form { padding: 20px; }
     .deal-name, .deal-pkg { font-size: 15.5px; }
     .deal-price-main { grid-area: price; align-self: baseline; text-align: right; font-size: 17px; }
     .deal-meta { grid-area: meta; }
+    /* Named, not auto-placed: an unplaced item in a grid with explicit areas lands in an
+       implicit row of its own and shoves the whole card about. */
+    .deal-moment { grid-area: moment; }
     .deal-terms { grid-area: terms; justify-self: start; }
     .deal-span { grid-area: span; min-width: 0; margin-top: 9px; }
     .deal-unit {
@@ -2056,11 +2068,18 @@ async function loadProducts() {
 const DEAL_BEST = 'best';
 const DEAL_WORSE = 'worse';
 const DEAL_UNKNOWN = 'unknown';
+const TIMING_POOR = 'poor';
 const DEAL_STALE_HOURS = 48;
 let storeFilter = null;
 
 function classifyDeal(d) { return d.verdict; }
 function dealSavings(d) { return d.savings_per_unit_sek; }
+// The MOMENT, beside the verdict — also THE domain's answer (domain/deals.py), never
+// re-derived here. The verdict compares links to each other RIGHT NOW; this compares the
+// price to the product's own history, and the two can point opposite ways: prod's
+// Bryggkaffe "2 för 130 kr" was the cheapest of three links AND 31 % above what the same
+// coffee had cost nine days earlier. It led the buy list until this existed.
+function isPoorMoment(d) { return d.timing === TIMING_POOR; }
 
 // The margin as a PERCENTAGE of the next-best link's kr/unit — not in kronor, because
 // kronor per unit cannot be compared between rows (0,62 kr/st against 8,20 kr/kg says
@@ -2165,6 +2184,21 @@ function dealSpanHtml(d, stat) {
         + `<div class="${noteClass}">${escapeHtml(note)}</div>`;
 }
 
+// Why a row was demoted, in the row itself — a section heading saying "du har sett dem
+// billigare" without a number per row would be a claim the reader cannot check. The floor,
+// where it was seen and when: everything needed to decide "I'll wait for that again".
+function dealMomentHtml(d) {
+    if (!isPoorMoment(d) || d.seen_cheaper_pct == null) return '';
+    const parts = [];
+    if (d.lowest_unit_price_sek != null) parts.push(unitKr(d.lowest_unit_price_sek, d.unit));
+    if (d.lowest_store) parts.push('hos ' + d.lowest_store);
+    if (d.lowest_seen_at) parts.push(formatDay(d.lowest_seen_at));
+    const where = parts.length ? ' — ' + parts.join(' ') : '';
+    return '<div class="deal-moment">Du har sett den '
+        + `<span class="deal-pct is-bad">${formatMargin(d.seen_cheaper_pct, 0)}</span> billigare`
+        + `${escapeHtml(where)}.</div>`;
+}
+
 function dealMetaHtml(d) {
     const parts = [];
     if (d.checked_at) parts.push('sett ' + (formatShortWhen(d.checked_at) || ''));
@@ -2190,6 +2224,7 @@ function dealRowHtml(d, spans) {
         <div class="deal-main">
             <div class="deal-head"><button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}</div>
             ${dealVerdictHtml(d)}
+            ${dealMomentHtml(d)}
             ${dealMetaHtml(d)}
             ${terms}
         </div>
@@ -2212,11 +2247,22 @@ function rankDeals(deals) {
         || String(b.checked_at).localeCompare(String(a.checked_at));
     const byDiscount = (a, b) => (b.discount_percent - a.discount_percent)
         || String(b.checked_at).localeCompare(String(a.checked_at));
+    // Two independent filters, and the moment is the one applied first among the rows that
+    // survive the verdict: a campaign we have seen meaningfully cheaper does not belong in a
+    // list headed "värt att köpa", however cheapest-today it is. It is DEMOTED, not hidden —
+    // it is still the cheapest shelf we know of, and someone out of coffee buys it anyway.
+    const worse = deals.filter(d => classifyDeal(d) === DEAL_WORSE);
+    const rest = deals.filter(d => classifyDeal(d) !== DEAL_WORSE);
+    const now = rest.filter(d => !isPoorMoment(d));
     return {
-        best: deals.filter(d => classifyDeal(d) === DEAL_BEST).sort(byMargin),
+        best: now.filter(d => classifyDeal(d) === DEAL_BEST).sort(byMargin),
+        unknown: now.filter(d => classifyDeal(d) === DEAL_UNKNOWN).sort(byDiscount),
+        // Closest to its own floor first — those are the ones a small further drop makes
+        // worth buying, the same "least bad first" rule the WORSE group follows.
+        poor: rest.filter(isPoorMoment)
+            .sort((a, b) => (a.seen_cheaper_pct || 0) - (b.seen_cheaper_pct || 0)),
         // Least-bad first: those are the ones a small further drop would make worth buying.
-        worse: deals.filter(d => classifyDeal(d) === DEAL_WORSE).sort(byMargin),
-        unknown: deals.filter(d => classifyDeal(d) === DEAL_UNKNOWN).sort(byDiscount)
+        worse: worse.sort(byMargin)
     };
 }
 
@@ -2313,18 +2359,22 @@ function renderDeals() {
     const spans = spansByProduct();
     const groups = rankDeals(allDeals);
     const top = dealsInStore(groups.best.concat(groups.unknown));
+    const poor = dealsInStore(groups.poor);
     const worse = dealsInStore(groups.worse);
 
-    // The heading counts what the list shows, and says where when a butik is picked.
+    // The heading counts what the list shows, and says where when a butik is picked. It says
+    // "värt att köpa", not "billigast just nu": the rows below are filtered on the moment as
+    // well as on the verdict, so the old wording would undercount things that ARE billigast
+    // just nu — and it claimed nothing about whether buying them was a good idea.
     const heading = document.getElementById('kopa-heading');
     if (storeFilter) {
-        heading.textContent = 'Billigast just nu hos ' + storeFilter;
+        heading.textContent = 'Värt att köpa hos ' + storeFilter;
     } else if (!top.length) {
-        heading.textContent = 'Inget är billigast just nu';
+        heading.textContent = 'Inget är värt att köpa just nu';
     } else if (top.length === 1) {
-        heading.textContent = 'En sak är billigast just nu';
+        heading.textContent = 'En sak är värd att köpa nu';
     } else {
-        heading.textContent = numberWord(top.length, true) + ' saker är billigast just nu';
+        heading.textContent = numberWord(top.length, true) + ' saker är värda att köpa nu';
     }
 
     let html = '';
@@ -2335,9 +2385,19 @@ function renderDeals() {
         // empty table and letting the reader wonder whether it loaded.
         html += '<div class="card"><div class="empty-state">'
             + (allDeals.length
-                ? '<p>Inget av veckans erbjudanden är billigast per enhet — de ligger i listan nedan.</p>'
+                ? '<p>Inget av veckans erbjudanden håller måttet — de ligger i listorna nedan.</p>'
                 : '<p>Inga aktiva erbjudanden just nu.</p>')
             + '</div></div>';
+    }
+    if (poor.length) {
+        // "Ett", not numberWord(1): erbjudande is an ett-word, and numberWord speaks the
+        // en-form the WORSE summary below happens to need ("En kampanj till").
+        const label = poor.length === 1
+            ? 'Ett erbjudande till, men du har sett det billigare'
+            : `${numberWord(poor.length, true)} erbjudanden till, men du har sett dem billigare`;
+        html += `<details class="deal-extra"><summary>&#9656; ${escapeHtml(label)}</summary>`
+            + '<div class="card list-flat">' + poor.map(d => dealRowHtml(d, spans)).join('') + '</div>'
+            + '</details>';
     }
     if (worse.length) {
         const word = numberWord(worse.length, true);

@@ -247,6 +247,15 @@ class DealResponse(BaseModel):
     # kr/unit margin behind it. The portal groups on these; it no longer re-derives them.
     verdict: str
     savings_per_unit_sek: float | None
+    # THE second judgement, in TIME rather than in space ("good" / "poor" / "unknown"):
+    # how this price stands against the product's own cheapest OBSERVED kr/unit. A campaign
+    # can be the cheapest shelf today and still a poor moment — the portal and the weekly
+    # email demote "poor" out of the buy list, and say by how much and where it was seen.
+    timing: str
+    seen_cheaper_pct: float | None
+    lowest_unit_price_sek: float | None
+    lowest_seen_at: str | None
+    lowest_store: str | None
 
 
 __all__ = [

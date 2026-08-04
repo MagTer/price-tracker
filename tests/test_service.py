@@ -217,7 +217,10 @@ class TestPriceTrackerService:
         mock_result.all.return_value = [(mock_price, mock_link, mock_product, mock_store)]
         alt_result = MagicMock()
         alt_result.all.return_value = []
-        mock_session.execute.side_effect = [mock_result, alt_result]
+        # The floor query — no history in this fixture, so the moment stays unknown.
+        floor_result = MagicMock()
+        floor_result.all.return_value = []
+        mock_session.execute.side_effect = [mock_result, alt_result, floor_result]
 
         service = PriceTrackerService(mock_session_factory)
         deals = await service.get_current_deals(store_type="grocery")
@@ -290,7 +293,12 @@ class TestPriceTrackerService:
             (link_24, mock_store, price_24),
             (link_8, mock_store, price_8),
         ]
-        mock_session.execute.side_effect = [mock_result, alt_result]
+        floor_result = MagicMock()
+        floor_result.all.return_value = [
+            (price_24, link_24, mock_store),
+            (price_8, link_8, mock_store),
+        ]
+        mock_session.execute.side_effect = [mock_result, alt_result, floor_result]
 
         service = PriceTrackerService(mock_session_factory)
         deals = await service.get_current_deals()

@@ -1341,6 +1341,10 @@ class TestDealsEndpoints:
                     (ps8, store, pp8),
                 ]
             ),
+            # The floor query (every point in the window). Coherent with the rows above:
+            # the 24-pack's 5,00 kr/st IS the product's floor, so it buys at a good moment
+            # while the 8-pack sits 24 % above it.
+            _rows([(pp24, ps24, store), (pp8, ps8, store)]),
         ]
 
         r = client.get("/deals")
@@ -1390,6 +1394,7 @@ class TestDealsEndpoints:
                 ]
             ),
             _rows([]),  # no alternatives resolved — best_alt stays None
+            _rows([]),  # no floor either — timing stays unknown, like the verdict
         ]
 
         deals = client.get("/deals").json()
@@ -1414,6 +1419,7 @@ class TestDealsEndpoints:
         mock_session.execute.side_effect = [
             _rows([(pp_offer, ps_offer, product, willys)]),
             _rows([(ps_offer, willys, pp_offer), (ps_cheap, ica, pp_cheap)]),
+            _rows([(pp_offer, ps_offer, willys), (pp_cheap, ps_cheap, ica)]),
         ]
 
         deals = client.get("/deals").json()
@@ -1444,6 +1450,7 @@ class TestDealsEndpoints:
         pp.offer_type = None
         mock_session.execute.side_effect = [
             _rows([(pp, ps, product, store)]),
+            _rows([]),
             _rows([]),
         ]
         deals = client.get("/deals").json()

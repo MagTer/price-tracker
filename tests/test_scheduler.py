@@ -609,6 +609,8 @@ class TestWeeklySummary:
         product_name: str = "Lambi Toalettpapper",
         store_name: str = "Willys",
         savings: float | None = 1.24,
+        timing: str = "good",
+        seen_cheaper: float | None = 0.0,
     ) -> DealRow:
         return DealRow(
             product_id=uuid.uuid4(),
@@ -631,6 +633,11 @@ class TestWeeklySummary:
             best_alt_package_size="8-pack",
             verdict=verdict,
             savings_per_unit_sek=savings,
+            timing=timing,
+            seen_cheaper_pct=seen_cheaper,
+            lowest_unit_price_sek=5.83,
+            lowest_seen_at=datetime(2026, 2, 9, 8, 0, 0),
+            lowest_store="Willys",
         )
 
     @pytest.mark.asyncio
@@ -819,6 +826,36 @@ class TestWeeklySummary:
 
         sent = mock_send.call_args.kwargs["deals"]
         assert [d.product_name for d in sent] == ["Vinnare", "Ojämförbar"]
+
+    @pytest.mark.asyncio
+    async def test_weekly_summary_excludes_a_poor_moment(self) -> None:
+        """Cheapest link today is not enough. The prod case: a "2 för 130 kr" coffee that
+        was BEST among its links while the same coffee had been 31 % cheaper nine days
+        earlier. The email IS the buy list, so it must drop it exactly as the portal
+        demotes it — otherwise Monday recommends what the page refuses to."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        good = self._buy_row(verdict="best", product_name="Vinnare")
+        poor = self._buy_row(
+            verdict="best", product_name="Bryggkaffe", timing="poor", seen_cheaper=31.3
+        )
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", AsyncMock(return_value=[good, poor])),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()
+
+        sent = mock_send.call_args.kwargs["deals"]
+        assert [d.product_name for d in sent] == ["Vinnare"]
 
     @pytest.mark.asyncio
     async def test_weekly_summary_skips_without_recipient(self) -> None:

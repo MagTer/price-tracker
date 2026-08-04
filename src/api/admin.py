@@ -1848,6 +1848,11 @@ async def get_current_deals(
                 best_alt_package_size=row.best_alt_package_size,
                 verdict=row.verdict,
                 savings_per_unit_sek=row.savings_per_unit_sek,
+                timing=row.timing,
+                seen_cheaper_pct=row.seen_cheaper_pct,
+                lowest_unit_price_sek=row.lowest_unit_price_sek,
+                lowest_seen_at=row.lowest_seen_at.isoformat() if row.lowest_seen_at else None,
+                lowest_store=row.lowest_store,
             )
             for row in rows
         ]

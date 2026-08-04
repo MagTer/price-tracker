@@ -613,6 +613,12 @@ class PriceTrackerService:
                         "offer_type": row.offer_type,
                         "verdict": row.verdict,
                         "savings_per_unit_sek": row.savings_per_unit_sek,
+                        # The moment, beside the verdict: cheapest today can still be dear
+                        # by the product's own history, and an agent asking "what should I
+                        # buy" needs to see that as plainly as the portal does.
+                        "timing": row.timing,
+                        "seen_cheaper_pct": row.seen_cheaper_pct,
+                        "lowest_unit_price_sek": row.lowest_unit_price_sek,
                     }
                     for row in rows
                 ]

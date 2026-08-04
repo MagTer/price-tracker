@@ -11,6 +11,23 @@ alternative among the product's OTHER links (any store, any pack size):
 - ``unknown`` — no honest comparison exists (no amount on this link, or no other link).
   Rides with ``best`` in every consumer, deliberately: it is not KNOWN to be bad.
 
+The verdict answers that question in SPACE — cheapest across the links right now. It says
+nothing about TIME, and a campaign can win it while being a poor moment to buy: prod, 2026-08-04,
+Bryggkaffe Mellanrost 450 g at ICA Björksätra, "2 för 130 kr" = 144,44 kr/kg, cheapest of the
+product's three links and therefore ``best`` — while the SAME coffee had been 110,00 kr/kg at
+Willys nine days earlier. It led the buy list as one of "sex saker är billigast just nu".
+
+So a second, independent judgement rides beside the verdict: ``timing``, against the lowest
+kr/unit this product has been OBSERVED at (any link, within :data:`PRICE_LOW_WINDOW_DAYS`).
+
+- ``good``    — at or near its own floor. What a genuine campaign looks like: five of the six
+  deals in that same prod snapshot sat at 0,0 % above their own low, because a real offer sets
+  a new one.
+- ``poor``    — the product has been at least :data:`SEEN_CHEAPER_MIN_PCT` cheaper inside the
+  window. Consumers demote it out of the buy list; none of them HIDE it — "cheapest available
+  today" is still true, and a household that is out of coffee buys it anyway.
+- ``unknown`` — no comparable history (no amount on the link).
+
 The store's discount percentage ranks nothing here — 30 % off a bad price is still a
 bad price; it is carried as data because the UI shows it.
 
@@ -49,6 +66,22 @@ DEAL_BEST = "best"
 DEAL_WORSE = "worse"
 DEAL_UNKNOWN = "unknown"
 
+TIMING_GOOD = "good"
+TIMING_POOR = "poor"
+TIMING_UNKNOWN = "unknown"
+
+# How far above its own observed floor an offer may sit and still count as a good moment.
+# Ten percent, not two: package amounts are quantized (0,0001) and a jämförpris carries
+# rounding noise of a few tenths of a percent, so a tighter line would demote genuine
+# campaigns on arithmetic alone. It is deliberately NOT judged on the bar's position in the
+# span — that position moves with an outlier HIGH, which is not evidence about this price.
+SEEN_CHEAPER_MIN_PCT = 10.0
+
+# The floor is only news while it is still plausible. Without a window, one exceptional
+# price from a year ago would damn every campaign on that product forever — the shelf has
+# moved on and the tracker would be arguing with a price no store still offers.
+PRICE_LOW_WINDOW_DAYS = 84  # 12 weeks — the longest statistics period short of a year
+
 # Most links are checked WEEKLY (Monday offer-day schedule) — a 24h window showed an
 # empty deals page from Tuesday on, twice (Gotcha 4: the duplicated query drifted).
 DEALS_WINDOW_DAYS = 7
@@ -80,6 +113,42 @@ def deal_savings(
     return best_alt_unit_price_sek - unit_price_sek
 
 
+def seen_cheaper_pct(
+    unit_price_sek: float | None, lowest_unit_price_sek: float | None
+) -> float | None:
+    """How much cheaper this product has been, in percent of its own observed floor.
+
+    None when there is no floor to compare against — never 0.0, which would claim we have
+    watched this product and seen it go no lower. 0.0 means exactly that: this offer IS the
+    floor, which is what a genuine campaign looks like.
+    """
+    if unit_price_sek is None or not lowest_unit_price_sek:
+        return None
+    return (unit_price_sek - lowest_unit_price_sek) / lowest_unit_price_sek * 100
+
+
+def classify_timing(unit_price_sek: float | None, lowest_unit_price_sek: float | None) -> str:
+    """Is this a good MOMENT to buy — judged against the product's own observed floor.
+
+    Independent of the verdict on purpose: the two answer different questions and may point
+    opposite ways. A ``poor`` row is still the cheapest shelf we know of today; it is demoted
+    from the buy list, never hidden.
+    """
+    pct = seen_cheaper_pct(unit_price_sek, lowest_unit_price_sek)
+    if pct is None:
+        return TIMING_UNKNOWN
+    return TIMING_POOR if pct >= SEEN_CHEAPER_MIN_PCT else TIMING_GOOD
+
+
+@dataclass(frozen=True)
+class _Floor:
+    """The lowest kr/unit observed for one product, and where it was seen."""
+
+    unit_price_sek: float
+    seen_at: datetime
+    store_name: str
+
+
 @dataclass(frozen=True)
 class DealRow:
     """One deal — a link whose latest price point is an offer — with its verdict."""
@@ -104,6 +173,13 @@ class DealRow:
     best_alt_package_size: str | None
     verdict: str
     savings_per_unit_sek: float | None
+    # The TIME judgement — defaulted so a caller building a row by hand (the notifier's and
+    # scheduler's test fixtures) gets the honest "no history" answer rather than a claim.
+    timing: str = TIMING_UNKNOWN
+    seen_cheaper_pct: float | None = None
+    lowest_unit_price_sek: float | None = None
+    lowest_seen_at: datetime | None = None
+    lowest_store: str | None = None
 
 
 def _rounded_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
@@ -121,6 +197,43 @@ def _effective(price_point: PricePoint) -> Decimal | None:
     return price_point.price_sek
 
 
+async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uuid.UUID, _Floor]:
+    """The lowest kr/unit observed per product inside the window — the buy list's floor.
+
+    This is the same number the portal's span bar draws as its low end, and it is computed
+    the same way: the minimum over every observation of every link, effective price over the
+    link's amount. (The bar's low comes from ``stats.py``'s min-across-links step series;
+    the minimum of that series IS the single lowest observation, because nothing can be
+    below the global minimum at the moment it is recorded. The HIGH end does not reduce that
+    way — which is one more reason the judgement never uses it.)
+
+    INACTIVE links count. The question is "have I seen this cheaper", which is about a price
+    that was really charged, not about a shelf we can still reach today — that is the
+    verdict's job, and the verdict already filters on ``is_active``.
+    """
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=PRICE_LOW_WINDOW_DAYS)
+    stmt = (
+        select(PricePoint, ProductStore, Store)
+        .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
+        .join(Store, ProductStore.store_id == Store.id)
+        .where(ProductStore.product_id.in_(product_ids))
+        .where(PricePoint.checked_at >= cutoff)
+    )
+    floors: dict[uuid.UUID, _Floor] = {}
+    for point, link, store in (await session.execute(stmt)).all():
+        value = _rounded_unit_price(_effective(point), link.package_quantity)
+        if value is None:
+            continue
+        current = floors.get(link.product_id)
+        if current is None or value < current.unit_price_sek:
+            floors[link.product_id] = _Floor(
+                unit_price_sek=value,
+                seen_at=point.checked_at,
+                store_name=link_store_name(link, store),
+            )
+    return floors
+
+
 async def current_deals(session: AsyncSession, store_type: str | None = None) -> list[DealRow]:
     """Every link whose LATEST price point is an offer at most 7 days old, with verdicts.
 
@@ -131,6 +244,9 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     The best alternative is the cheapest CURRENT kr/unit among the product's OTHER links
     — latest point per link, no staleness cutoff, because it is the platform's best
     knowledge of what the shelf says elsewhere.
+
+    The floor (:func:`_floors`) is the same product's own cheapest OBSERVED kr/unit inside
+    the window — the second axis, in time rather than in space, that decides ``timing``.
     """
     cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEALS_WINDOW_DAYS)
 
@@ -167,6 +283,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     # "20 % rabatt" into a decision: the discount is the STORE's framing, the
     # cross-link unit price is ours.
     alternatives: dict[uuid.UUID, list[tuple[uuid.UUID, float, str, str | None]]] = {}
+    floors: dict[uuid.UUID, _Floor] = {}
     if rows:
         product_ids = {product.id for _, _, product, _ in rows}
         alt_latest = (
@@ -205,6 +322,8 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 )
             )
 
+        floors = await _floors(session, product_ids)
+
     deals: list[DealRow] = []
     for price_point, product_store, product, store in rows:
         discount_percent = 0.0
@@ -219,6 +338,8 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
         best_alt = min(alts, key=lambda a: a[1]) if alts else None
         best_alt_unit = best_alt[1] if best_alt else None
         unit_price = _rounded_unit_price(_effective(price_point), product_store.package_quantity)
+        floor = floors.get(product.id)
+        floor_price = floor.unit_price_sek if floor else None
 
         deals.append(
             DealRow(
@@ -243,6 +364,11 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 best_alt_package_size=best_alt[3] if best_alt else None,
                 verdict=classify_deal(unit_price, best_alt_unit),
                 savings_per_unit_sek=deal_savings(unit_price, best_alt_unit),
+                timing=classify_timing(unit_price, floor_price),
+                seen_cheaper_pct=seen_cheaper_pct(unit_price, floor_price),
+                lowest_unit_price_sek=floor_price,
+                lowest_seen_at=floor.seen_at if floor else None,
+                lowest_store=floor.store_name if floor else None,
             )
         )
 

@@ -27,6 +27,10 @@ def _deal(
     checked_at: datetime | None = None,
     discount_percent: float = 10.0,
     offer_type: str = "kampanj",
+    timing: str = "good",
+    seen_cheaper: float | None = 0.0,
+    lowest_unit_price: float | None = None,
+    lowest_store: str | None = None,
 ) -> DealRow:
     """A DealRow as the scheduler hands them to the notifier (naive-UTC checked_at)."""
     return DealRow(
@@ -50,6 +54,11 @@ def _deal(
         best_alt_package_size=best_alt_package_size,
         verdict=verdict,
         savings_per_unit_sek=savings,
+        timing=timing,
+        seen_cheaper_pct=seen_cheaper,
+        lowest_unit_price_sek=lowest_unit_price,
+        lowest_seen_at=datetime(2026, 7, 18, 8, 0, 0),
+        lowest_store=lowest_store,
     )
 
 
@@ -292,6 +301,32 @@ class TestPriceNotifier:
 
         assert "1,24 kr/kg dyrare än Willys 450 g" in html
         assert "kan inte jämföras" not in html
+
+    def test_a_poor_moment_fed_defensively_says_how_much_cheaper_it_has_been(self) -> None:
+        """Same defensive honesty as WORSE: the scheduler drops a poor-moment row, but a
+        caller that does not must not have it read as an unqualified recommendation. The
+        row is still the cheapest link — what is wrong with it is the moment."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            _deal(
+                product_name="Bryggkaffe",
+                verdict="best",
+                unit="kg",
+                unit_price=144.44,
+                savings=6.45,
+                best_alt_store="Willys",
+                timing="poor",
+                seen_cheaper=31.3,
+                lowest_unit_price=110.00,
+                lowest_store="Willys",
+            )
+        ]
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "har varit 31 % billigare" in html
+        assert "110,00 kr/kg" in html
+        assert "hos Willys" in html
 
     def test_build_summary_html_dates_stale_deals_in_swedish(self) -> None:
         """A deal seen more than 48h ago is dated ('sett fredag 24/7'), never hidden —

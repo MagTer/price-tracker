@@ -8,7 +8,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from domain.deals import DEAL_BEST, DEAL_STALE_HOURS, DEAL_UNKNOWN, DEAL_WORSE, DealRow
+from domain.deals import (
+    DEAL_BEST,
+    DEAL_STALE_HOURS,
+    DEAL_UNKNOWN,
+    DEAL_WORSE,
+    TIMING_POOR,
+    DealRow,
+)
 from domain.protocols.email import EmailMessage, IEmailService
 from domain.schedule import STORE_TIMEZONE
 
@@ -120,7 +127,8 @@ class PriceNotifier:
     ) -> bool:
         """Send the weekly buy-list email.
 
-        `deals` is the pre-filtered buy list (BEST + UNKNOWN from domain/deals.py) —
+        `deals` is the pre-filtered buy list (BEST + UNKNOWN, and not a POOR moment, both
+        from domain/deals.py) —
         grouping per butik and the in-butik ranking happen here, because they are
         presentation, not judgement. `data_quality` is domain/validation.py's judgement,
         rendered only when something is wrong — a green validator earns no inbox space.
@@ -304,6 +312,19 @@ class PriceNotifier:
             )
 
         verdict_cell = self._verdict_html(deal, unit_label)
+        # The MOMENT, when it is a poor one. The scheduler filters these out of the weekly
+        # buy list, so this is the same defensive honesty the WORSE wording gets: a caller
+        # that does not filter must not have the row read as an unqualified recommendation.
+        if deal.timing == TIMING_POOR and deal.seen_cheaper_pct is not None:
+            seen_text = f"har varit {round(deal.seen_cheaper_pct)} % billigare"
+            if deal.lowest_unit_price_sek is not None:
+                seen_text += f" — {_sek(deal.lowest_unit_price_sek)} {unit_label}"
+            if deal.lowest_store:
+                seen_text += f" hos {deal.lowest_store}"
+            verdict_cell += (
+                f'<br><span style="color: #b45309; font-size: 0.85em;">'
+                f"{html.escape(seen_text)}</span>"
+            )
         if now - deal.checked_at > timedelta(hours=DEAL_STALE_HOURS):
             seen_local = deal.checked_at.replace(tzinfo=UTC).astimezone(STORE_TIMEZONE)
             seen_text = (

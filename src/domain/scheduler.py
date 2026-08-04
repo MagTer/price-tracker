@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
-from domain.deals import DEAL_WORSE, current_deals
+from domain.deals import DEAL_WORSE, TIMING_POOR, current_deals
 from domain.models import (
     PricePoint,
     PriceWatch,
@@ -623,11 +623,16 @@ class PriceCheckScheduler:
         logger.info("Sending weekly summary email")
 
         async with self.session_factory() as session:
-            # The buy list: BEST + UNKNOWN, the same split as the portal's "Värt att
-            # köpa" — an offer another link beats per unit is information, not news,
-            # and has no place in an email that IS the shopping decision. THE verdict
-            # comes from domain/deals.py; grouping per butik is the notifier's job.
-            deals = [d for d in await current_deals(session) if d.verdict != DEAL_WORSE]
+            # The buy list: BEST + UNKNOWN and a decent MOMENT — the same two filters as
+            # the portal's "Värt att köpa". An offer another link beats per unit is
+            # information, not news; and neither is one the same product has been 10 %+
+            # cheaper at inside the window, however cheapest-today it is. Both judgements
+            # come from domain/deals.py; grouping per butik is the notifier's job.
+            deals = [
+                d
+                for d in await current_deals(session)
+                if d.verdict != DEAL_WORSE and d.timing != TIMING_POOR
+            ]
             watched_products = await self._watched_products_summary(session)
 
             # THE validator (domain/validation.py) rides along when it found something:
