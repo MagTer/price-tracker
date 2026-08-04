@@ -53,6 +53,42 @@ EXPECTED_SOURCE: dict[str, str] = {
 RELATIVE_TOLERANCE = Decimal("0.015")
 ABSOLUTE_TOLERANCE_SEK = Decimal("0.10")
 
+# The printed jämförpris and the computed kr/unit are only comparable when they are in the
+# SAME measure — the exact trap models.py documents on store_unit_price_sek ("kr/rulle vs
+# kr/pack vs kr/100g"). ICA prints toalettpapper in kr/KG while the product's unit is st
+# (rulle): printed 63.20 vs computed 6.81, both correct, ~89 % "deviation" — the false
+# alarm the first Fel & luckor survey was full of. The measure code rides raw_data when an
+# extractor captured one (ICA `unit_price_unit`, Rusta `comparison_unit`); each marker maps
+# to the Product.unit value it denotes. Substring match on purpose: ICA's codes vary in
+# suffix ("fop.price.per.litre.without.deposit").
+_PRINTED_MEASURE_MARKERS: list[tuple[str, str]] = [
+    ("per.kg", "kg"),
+    ("/kg", "kg"),
+    ("per.litre", "liter"),
+    ("/liter", "liter"),
+    ("per.st", "st"),
+    ("/st", "st"),
+]
+
+
+def _printed_measure(raw_data: Any) -> str | None:
+    """The measure the store's printed jämförpris is in, as a Product.unit value.
+
+    None means UNKNOWN, not "same": only a positively recognised, different measure may
+    veto the comparison — an unknown code must keep judging, or the check goes blind for
+    every store whose extractor records no measure (Willys, the JSON-LD pharmacies).
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    code = raw_data.get("unit_price_unit") or raw_data.get("comparison_unit")
+    if not isinstance(code, str):
+        return None
+    lowered = code.lower()
+    for marker, unit in _PRINTED_MEASURE_MARKERS:
+        if marker in lowered:
+            return unit
+    return None
+
 
 async def data_quality(session: AsyncSession) -> dict[str, Any]:
     """Both validator layers in one read — the shape the /stats payload carries."""
@@ -103,8 +139,13 @@ async def tier_regressions(session: AsyncSession) -> list[dict[str, Any]]:
             continue
         regressions.append(
             {
+                # The id and the package are what make a row ACTIONABLE: one product can
+                # have several links at the same butik (different pack sizes), so the
+                # name pair alone cannot address the link a fix should land on.
+                "product_store_id": str(link.id),
                 "product_name": product_name,
                 "store_name": link_store_name(link, store),
+                "package_size": link.package_size,
                 "expected_source": expected,
                 "actual_source": source or "unknown",
                 "checked_at": checked_at.isoformat(),
@@ -118,10 +159,12 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
     """Active links whose printed jämförpris contradicts price / package_quantity.
 
     Only links where the comparison is possible are judged (a printed figure AND an
-    amount on the link); a link passes when the printed value matches EITHER the
-    ordinarie basis or the effective (campaign) basis within tolerance — which store
-    prints which basis is a store fact we deliberately do not model (see module
-    docstring). ``checked`` rides along so the UI can say what the count is out of.
+    amount on the link, and — when the extractor recorded which measure the store
+    prints in — the SAME measure as the product's unit); a link passes when the
+    printed value matches EITHER the ordinarie basis or the effective (campaign)
+    basis within tolerance — which store prints which basis is a store fact we
+    deliberately do not model (see module docstring). ``checked`` rides along so the
+    UI can say what the count is out of.
     """
     latest = (
         select(
@@ -129,6 +172,7 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
             PricePoint.price_sek,
             PricePoint.offer_price_sek,
             PricePoint.store_unit_price_sek,
+            PricePoint.raw_data,
         )
         .distinct(PricePoint.product_store_id)
         .order_by(PricePoint.product_store_id, PricePoint.checked_at.desc())
@@ -144,6 +188,7 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
                 latest.c.price_sek,
                 latest.c.offer_price_sek,
                 latest.c.store_unit_price_sek,
+                latest.c.raw_data,
             )
             .join(ProductStore, ProductStore.id == latest.c.product_store_id)
             .join(Store, Store.id == ProductStore.store_id)
@@ -157,9 +202,14 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
     ).all()
 
     mismatches = []
-    for link, store, product_name, unit, price, offer, printed in rows:
+    for link, store, product_name, unit, price, offer, printed, raw_data in rows:
         quantity = link.package_quantity
         if not quantity or quantity <= 0 or not printed or printed <= 0:
+            continue
+        # A printed figure in a DIFFERENT measure than the product's unit contradicts
+        # nothing — kr/kg against kr/rulle is two true statements about one shelf.
+        measure = _printed_measure(raw_data)
+        if measure is not None and measure != unit:
             continue
         candidates = [price / quantity]
         if offer is not None:
@@ -170,8 +220,12 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
             continue
         mismatches.append(
             {
+                # Same rule as the regression rows: names alone cannot address one of
+                # several same-butik links, so the id and package ride along.
+                "product_store_id": str(link.id),
                 "product_name": product_name,
                 "store_name": link_store_name(link, store),
+                "package_size": link.package_size,
                 "unit": unit,
                 "printed_unit_price_sek": float(printed.quantize(Decimal("0.01"))),
                 "computed_unit_price_sek": float(best.quantize(Decimal("0.01"))),

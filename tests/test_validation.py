@@ -35,13 +35,19 @@ async def _product(session, name: str = "Testvara", unit: str = "kg") -> Product
 
 
 async def _link(
-    session, product: Product, store: Store, quantity: str | None = "1", active: bool = True
+    session,
+    product: Product,
+    store: Store,
+    quantity: str | None = "1",
+    active: bool = True,
+    package_size: str | None = None,
 ) -> ProductStore:
     link = ProductStore(
         product_id=product.id,
         store_id=store.id,
         store_url=f"https://example.se/{uuid.uuid4()}",
         package_quantity=Decimal(quantity) if quantity else None,
+        package_size=package_size,
         is_active=active,
     )
     session.add(link)
@@ -71,12 +77,14 @@ def _point(
     printed: str | None,
     offer: str | None = None,
     age_minutes: int = 0,
+    raw_data: dict | None = None,
 ) -> PricePoint:
     return PricePoint(
         product_store_id=link.id,
         price_sek=Decimal(price),
         offer_price_sek=Decimal(offer) if offer else None,
         store_unit_price_sek=Decimal(printed) if printed else None,
+        raw_data=raw_data,
         checked_at=_now() - timedelta(minutes=age_minutes),
     )
 
@@ -86,7 +94,9 @@ class TestTierRegressions:
     @pytest.mark.asyncio
     async def test_latest_ok_from_a_lower_tier_is_a_regression(self, db_session) -> None:
         ica = await _store(db_session, "ica")
-        link = await _link(db_session, await _product(db_session, "Jättefranska"), ica)
+        link = await _link(
+            db_session, await _product(db_session, "Jättefranska"), ica, package_size="500 g"
+        )
         db_session.add_all(
             [
                 _attempt(link, "ok", "ica_page", age_minutes=60),
@@ -101,6 +111,8 @@ class TestTierRegressions:
         assert rows[0]["product_name"] == "Jättefranska"
         assert rows[0]["expected_source"] == "ica_page"
         assert rows[0]["actual_source"] == "jsonld"
+        assert rows[0]["product_store_id"] == str(link.id)
+        assert rows[0]["package_size"] == "500 g"
 
     @pytest.mark.asyncio
     async def test_healthy_latest_check_clears_older_regressions(self, db_session) -> None:
@@ -193,6 +205,76 @@ class TestUnitPriceMismatches:
         assert rows[0]["printed_unit_price_sek"] == pytest.approx(370.83)
         assert rows[0]["computed_unit_price_sek"] == pytest.approx(445.00)
         assert rows[0]["deviation_pct"] == pytest.approx(20.0, abs=0.1)
+        # The id + package are what let the UI address THE link — the name pair is
+        # ambiguous when one product has several links at the same butik.
+        assert rows[0]["product_store_id"] == str(link.id)
+        assert rows[0]["package_size"] is None
+
+    @pytest.mark.asyncio
+    async def test_printed_in_a_different_measure_is_not_judged(self, db_session) -> None:
+        """The toalettpapper false alarm (prod, 2026-08-04): ICA prints the jämförpris
+        in kr/KG while the product's unit is st (rulle) — printed 63.20, computed
+        108.95 / 16 = 6.81, both CORRECT, ~89 % apart. A recognised measure that is not
+        the product's unit means the comparison does not exist, not that it fails."""
+        ica = await _store(db_session, "ica")
+        product = await _product(db_session, "Toalettpapper", unit="st")
+        link = await _link(db_session, product, ica, "16", package_size="16-p")
+        db_session.add(
+            _point(
+                link,
+                "108.95",
+                "63.20",
+                raw_data={"source": "ica_page", "unit_price_unit": "fop.price.per.kg"},
+            )
+        )
+        await db_session.flush()
+
+        assert await unit_price_mismatches(db_session) == []
+
+    @pytest.mark.asyncio
+    async def test_printed_in_the_same_measure_still_judges(self, db_session) -> None:
+        """The measure gate must not blind the check where it CAN see: a kg-printed
+        figure on a kg product that still contradicts the computed value is the real
+        error class the validator exists for."""
+        ica = await _store(db_session, "ica")
+        product = await _product(db_session, "Kaffe", unit="kg")
+        link = await _link(db_session, product, ica, "0.45", package_size="450 g")
+        db_session.add(
+            _point(
+                link,
+                "62.95",
+                "80.00",  # store's own basis says 139.89 — the printed figure is off
+                raw_data={"source": "ica_page", "unit_price_unit": "fop.price.per.kg"},
+            )
+        )
+        await db_session.flush()
+
+        rows = await unit_price_mismatches(db_session)
+
+        assert len(rows) == 1
+        assert rows[0]["package_size"] == "450 g"
+
+    @pytest.mark.asyncio
+    async def test_unrecognised_measure_code_still_judges(self, db_session) -> None:
+        """Only a POSITIVELY known, different measure may veto the comparison — an
+        unknown code (Rusta's "/disk") must keep judging, or the check goes blind for
+        every store whose extractor records no measure at all."""
+        rusta = await _store(db_session, "rusta")
+        product = await _product(db_session, "Maskindisk", unit="st")
+        link = await _link(db_session, product, rusta, "100")
+        db_session.add(
+            _point(
+                link,
+                "99.00",
+                "9.90",  # computed 0.99 — a real tenfold contradiction
+                raw_data={"source": "rusta_page", "comparison_unit": "/disk"},
+            )
+        )
+        await db_session.flush()
+
+        rows = await unit_price_mismatches(db_session)
+
+        assert len(rows) == 1
 
     @pytest.mark.asyncio
     async def test_quantity_rounding_noise_stays_inside_tolerance(self, db_session) -> None:

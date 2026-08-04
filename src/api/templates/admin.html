@@ -2623,10 +2623,11 @@ function buildSilentErrors(counts, q) {
         for (const r of regressions) {
             const impact = TIER_IMPACT[r.expected_source]
                 || 'vi läser en sämre källa än butiken publicerar';
+            const pkg = r.package_size ? ` · ${escapeHtml(r.package_size)}` : '';
             html += `<div class="issue-row">
                 <div class="issue-main">
                     <div class="issue-name">${escapeHtml(r.product_name)}</div>
-                    <div class="issue-sub">${escapeHtml(r.store_name)} · sedan ${escapeHtml(formatShortWhen(r.checked_at))}</div>
+                    <div class="issue-sub">${escapeHtml(r.store_name)}${pkg} · sedan ${escapeHtml(formatShortWhen(r.checked_at))}</div>
                 </div>
                 <div class="issue-right">
                     <div class="issue-impact">${escapeHtml(impact)}</div>
@@ -2636,6 +2637,7 @@ function buildSilentErrors(counts, q) {
                         <span class="source-chip is-actual">${escapeHtml(r.actual_source)}</span>
                     </div>
                     <button class="action-btn" data-issue-action="open-link"
+                        data-link-id="${escapeHtml(r.product_store_id || '')}"
                         data-product="${escapeHtml(r.product_name)}"
                         data-store="${escapeHtml(r.store_name)}">Visa länken</button>
                 </div>
@@ -2648,10 +2650,11 @@ function buildSilentErrors(counts, q) {
             + '<span class="group-why">— butikens tryckta jfr-pris mot vårt beräknade; antingen '
             + 'priset eller mängden är fel</span></div>';
         for (const m of mismatches) {
+            const pkg = m.package_size ? ` · ${escapeHtml(m.package_size)}` : '';
             html += `<div class="issue-row">
                 <div class="issue-main">
                     <div class="issue-name">${escapeHtml(m.product_name)}</div>
-                    <div class="issue-sub">${escapeHtml(m.store_name)} · priset eller mängden är fel</div>
+                    <div class="issue-sub">${escapeHtml(m.store_name)}${pkg} · priset eller mängden är fel</div>
                 </div>
                 <div class="issue-right">
                     <div class="mismatch-nums">
@@ -2660,6 +2663,7 @@ function buildSilentErrors(counts, q) {
                     </div>
                     <div class="deviation">${escapeHtml(formatMargin(m.deviation_pct))}</div>
                     ${IS_ADMIN ? `<button class="action-btn" data-issue-action="fix-amount"
+                        data-link-id="${escapeHtml(m.product_store_id || '')}"
                         data-product="${escapeHtml(m.product_name)}"
                         data-store="${escapeHtml(m.store_name)}">Rätta mängd</button>` : ''}
                 </div>
@@ -2795,18 +2799,27 @@ async function saveGapAmount(linkId, entryUnit) {
     }
 }
 
-// The two silent-error actions resolve a (produkt, butik) pair back to the LINK — the
-// validator reports names, not ids, because its judgement is about the pair. Both land in
-// the links panel, which is where a link's real actions already live.
-function findLink(productName, storeName) {
+// The two silent-error actions resolve the row back to the LINK — by product_store_id
+// when the validator sent one, because the name pair is AMBIGUOUS under the 04.1 model:
+// one product can hold several links at the same butik (different pack sizes), and a
+// first-match on names can open the 6-pack's dialog from the 32-pack's alarm row —
+// "correcting" the wrong link's amount rewrites that link's whole kr/unit history.
+// Both land in the links panel, which is where a link's real actions already live.
+function findLink(linkId, productName, storeName) {
+    if (linkId) {
+        for (const product of allProducts || []) {
+            const link = (product.stores || []).find(s => s.product_store_id === linkId);
+            if (link) return { product, link };
+        }
+    }
     const product = (allProducts || []).find(p => p.name === productName);
     if (!product) return null;
     const link = (product.stores || []).find(s => s.store_name === storeName);
     return link ? { product, link } : null;
 }
 
-async function openIssueLink(productName, storeName, openPackaging) {
-    const hit = findLink(productName, storeName);
+async function openIssueLink(linkId, productName, storeName, openPackaging) {
+    const hit = findLink(linkId, productName, storeName);
     if (!hit) { showToast('Länken hittades inte — ladda om sidan', 'error'); return; }
     await showProductLinks(hit.product.id, hit.product.name, hit.product.unit);
     if (openPackaging) showEditPackagingModal(hit.link.product_store_id);
@@ -4305,9 +4318,11 @@ document.getElementById('luckor-container').addEventListener('click', (e) => {
     if (!btn) return;
     const action = btn.getAttribute('data-issue-action');
     if (action === 'open-link') {
-        openIssueLink(btn.getAttribute('data-product'), btn.getAttribute('data-store'), false);
+        openIssueLink(btn.getAttribute('data-link-id'), btn.getAttribute('data-product'),
+            btn.getAttribute('data-store'), false);
     } else if (action === 'fix-amount') {
-        openIssueLink(btn.getAttribute('data-product'), btn.getAttribute('data-store'), true);
+        openIssueLink(btn.getAttribute('data-link-id'), btn.getAttribute('data-product'),
+            btn.getAttribute('data-store'), true);
     } else if (action === 'check') {
         checkLinkNow(btn.getAttribute('data-link'));
     } else if (action === 'save-amount') {
