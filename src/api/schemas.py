@@ -210,6 +210,33 @@ class PricePointResponse(BaseModel):
     offer_type: str | None
     offer_details: str | None
     in_stock: bool
+    # WHICH ladder tier produced the row — or "manual" when a human typed it (see
+    # ManualPricePoint). A hand-recorded price must never be mistaken for one the tracker
+    # read off the store's own page: it cannot be re-verified and it will not repeat.
+    source: str | None
+
+
+class ManualPricePoint(BaseModel):
+    """A price a HUMAN observed, recorded against a link that already exists.
+
+    Some offers are never on the page the tracker fetches: ICA Björksätra advertises
+    pre-order campaigns on Facebook ("32-p toalettpapper 109 kr om du bokar i förväg"),
+    and that FB page is behind a login and a bot sensor — discovery stays human, exactly
+    like the butiksblad (domain/blad.py). But the OBSERVATION is not a new kind of thing:
+    it is the same link, the same package, at a known moment, for a price that really
+    could be paid. So it is an ordinary price point, with the human as the source.
+
+    `regular_price_sek` is the ordinarie it beats — supply it and the point becomes an
+    OFFER (ordinarie + offer, the v0.25.2 shape); leave it out and it is a plain observed
+    price. `observed_on` is a Swedish civil DATE, not an instant: nobody remembers the
+    minute they saw a Facebook post, and dating it today is what makes it the link's
+    latest point and therefore this week's buy-list row.
+    """
+
+    price_sek: float
+    regular_price_sek: float | None = None
+    observed_on: str | None = None  # YYYY-MM-DD, Europe/Stockholm. Omitted = now.
+    note: str | None = None  # The condition, verbatim: "Förbokning via Facebook"
 
 
 class DealResponse(BaseModel):
@@ -271,4 +298,5 @@ __all__ = [
     "ProductResponse",
     "PricePointResponse",
     "DealResponse",
+    "ManualPricePoint",
 ]

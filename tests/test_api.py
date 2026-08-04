@@ -1457,6 +1457,114 @@ class TestDealsEndpoints:
         assert deals[0]["offer_type"] == "erbjudande"
 
 
+class TestManualPriceNotation:
+    """POST /product-stores/{id}/prices — the manual half of discovery.
+
+    ICA Björksätra advertises pre-order campaigns on Facebook (32-p toalettpapper at
+    109 kr against a 162 kr shelf); the page the tracker fetches never shows it and the
+    FB source cannot be scraped. The observation is still ordinary — same link, known
+    day, a price that could really be paid — so it lands as a price point.
+    """
+
+    def _link(self, mock_session):
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_size="32-p", package_quantity="32")
+        mock_session.execute.return_value = _scalar(ps)
+        return ps
+
+    def test_a_campaign_price_is_recorded_as_ordinarie_plus_offer(self, client, mock_session):
+        """The shape every extractor produces (v0.25.2): price_sek is the ordinarie,
+        offer_price_sek is what you pay."""
+        ps = self._link(mock_session)
+
+        r = client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 109, "regular_price_sek": 162, "note": "Förbokning via Facebook"},
+        )
+
+        assert r.status_code == 201
+        added = mock_session.add.call_args.args[0]
+        assert added.price_sek == Decimal("162.00")
+        assert added.offer_price_sek == Decimal("109.00")
+        assert added.offer_type == "manuellt pris"
+        assert added.offer_details == "Förbokning via Facebook"
+        assert added.raw_data["source"] == "manual"
+        # 109/32 — the number the whole notation exists to put on record.
+        assert r.json()["unit_price_sek"] == pytest.approx(3.41)
+
+    def test_a_bare_price_is_no_campaign(self, client, mock_session):
+        """No ordinarie given: a price that was charged, not an offer. Inventing one
+        would put a fake deal in the buy list."""
+        ps = self._link(mock_session)
+
+        r = client.post(f"/product-stores/{ps.id}/prices", json={"price_sek": 109})
+
+        assert r.status_code == 201
+        added = mock_session.add.call_args.args[0]
+        assert added.price_sek == Decimal("109.00")
+        assert added.offer_price_sek is None
+        assert added.offer_type is None
+
+    def test_an_inverted_pair_is_refused(self, client, mock_session):
+        """The v0.32.1 invariant, at the one place a human can type it: an offer is what
+        you PAY. Inverted, it would re-price the link at the HIGHER number everywhere,
+        because effective_price = coalesce(offer, price)."""
+        ps = self._link(mock_session)
+
+        r = client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 162, "regular_price_sek": 109},
+        )
+
+        assert r.status_code == 400
+        assert "Ordinarie" in r.json()["detail"]
+        mock_session.add.assert_not_called()
+
+    def test_the_notation_is_not_a_check(self, client, mock_session):
+        """last_checked_at must keep meaning 'we looked at the store's page'. Nothing
+        here looked at anything — the same rule that stopped a blocked check from
+        stamping it (v0.29.2)."""
+        ps = self._link(mock_session)
+        ps.last_checked_at = None
+
+        client.post(f"/product-stores/{ps.id}/prices", json={"price_sek": 109})
+
+        assert ps.last_checked_at is None
+
+    def test_a_date_is_a_swedish_civil_day(self, client, mock_session):
+        """Midday Swedish, converted to the app's naive-UTC storage convention — midday
+        so a date typed today lands AFTER that morning's scheduled check and therefore
+        becomes the link's latest point."""
+        ps = self._link(mock_session)
+
+        client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 109, "observed_on": "2026-08-04"},
+        )
+
+        added = mock_session.add.call_args.args[0]
+        # 12:00 in CEST (UTC+2) = 10:00 UTC, stored naive.
+        assert added.checked_at == datetime(2026, 8, 4, 10, 0, 0)
+
+    def test_an_unparseable_date_is_refused_in_swedish(self, client, mock_session):
+        ps = self._link(mock_session)
+
+        r = client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 109, "observed_on": "4 augusti"},
+        )
+
+        assert r.status_code == 400
+        mock_session.add.assert_not_called()
+
+    def test_a_missing_link_is_404(self, client, mock_session):
+        mock_session.execute.return_value = _scalar(None)
+
+        r = client.post(f"/product-stores/{uuid.uuid4()}/prices", json={"price_sek": 109})
+
+        assert r.status_code == 404
+
+
 class TestWatchesEndpoint:
     def test_watches_carry_the_current_lowest_price(self, client, mock_session):
         """A watch row must answer 'how close is it?' — the current cheapest effective

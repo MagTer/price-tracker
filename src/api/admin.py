@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ from api.auth import Principal, get_principal, require_admin_for_writes, require
 from api.schemas import (
     BladAnalyzeRequest,
     DealResponse,
+    ManualPricePoint,
     PricePointResponse,
     PriceWatchCreate,
     PriceWatchUpdate,
@@ -60,7 +61,12 @@ from domain.quickadd import (
     suggest_store_label,
 )
 from domain.result import StoreBlockedError
-from domain.schedule import effective_schedule, is_inherited, next_check_time_for_link
+from domain.schedule import (
+    STORE_TIMEZONE,
+    effective_schedule,
+    is_inherited,
+    next_check_time_for_link,
+)
 from domain.service import PriceTrackerService, perform_price_check
 from domain.stats import build_statistics
 from domain.tenant import DEFAULT_TENANT_ID
@@ -1554,6 +1560,125 @@ async def update_link_packaging(
         raise HTTPException(status_code=500, detail="Failed to update packaging") from e
 
 
+@router.post(
+    "/product-stores/{product_store_id}/prices",
+    status_code=201,
+)
+async def record_manual_price(
+    product_store_id: str,
+    data: ManualPricePoint,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, str | float | None]:
+    """Record a price a HUMAN observed for this link — the manual half of discovery.
+
+    ICA Björksätra advertises pre-order campaigns on Facebook (a 32-pack of toilet paper
+    at 109 kr against a 162 kr shelf) and Willys prints a butiksblad; neither is on the
+    page the tracker fetches, and neither source can be scraped (both sit behind a login
+    or a JS sensor). Discovery is therefore human — but the RESULT is an ordinary
+    observation of a link that already exists, so it becomes an ordinary price point
+    rather than a second kind of truth.
+
+    Three things it deliberately does NOT do:
+    - **`last_checked_at` is untouched.** We did not look at the store's page, and
+      "Senast kollad" must keep meaning exactly that (the same rule that stopped a
+      blocked check from stamping it in v0.29.2).
+    - **No `check_attempts` row.** That table records what the STORES answered; a
+      keystroke is not an outgoing request, and counting it would corrupt the one
+      dataset that measures how often a store talks to us.
+    - **No printed jämförpris.** `store_unit_price_sek` stays None, so the validator's
+      contradiction check skips the row instead of comparing our own arithmetic to itself.
+
+    Dating it today makes it the link's LATEST point, so it leads Att köpa until the next
+    real check replaces it — which is right: the offer is live now. Its lasting value is
+    the floor `domain/deals.py` judges every later campaign against.
+
+    Security:
+        Requires IAP header auth; the write gate makes this admin-only.
+    """
+    try:
+        ps_uuid = uuid.UUID(product_store_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_store_id") from e
+
+    if data.price_sek <= 0:
+        raise HTTPException(status_code=400, detail="Priset måste vara större än noll")
+    # The v0.32.1 invariant, enforced at the one place a human can type it: an offer is what
+    # you PAY, lower than the ordinarie by definition. An inverted pair here would re-price
+    # the link at the HIGHER number in every ranking (effective = coalesce(offer, price)).
+    if data.regular_price_sek is not None and data.regular_price_sek <= data.price_sek:
+        raise HTTPException(
+            status_code=400,
+            detail="Ordinarie priset måste vara högre än priset du betalar",
+        )
+
+    observed_at = datetime.now(UTC).replace(tzinfo=None)
+    if data.observed_on:
+        try:
+            day = date.fromisoformat(data.observed_on)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="Ogiltigt datum (ÅÅÅÅ-MM-DD)") from e
+        # A civil date, converted like every other civil rule in this app (domain/schedule):
+        # midday Swedish, then back to the naive-UTC storage convention. Midday, not
+        # midnight, so a date typed today lands AFTER the morning's scheduled check and
+        # therefore becomes the link's latest point rather than being silently outranked.
+        local_noon = datetime.combine(day, time(12, 0)).replace(tzinfo=STORE_TIMEZONE)
+        observed_at = local_noon.astimezone(UTC).replace(tzinfo=None)
+
+    try:
+        product_store = (
+            await session.execute(select(ProductStore).where(ProductStore.id == ps_uuid))
+        ).scalar_one_or_none()
+        if not product_store:
+            raise HTTPException(status_code=404, detail="Produkt–butikslänken hittades inte")
+
+        paid = Decimal(str(data.price_sek)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        regular = (
+            Decimal(str(data.regular_price_sek)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if data.regular_price_sek is not None
+            else None
+        )
+        note = (data.note or "").strip()[:255] or None
+
+        point = PricePoint(
+            product_store_id=product_store.id,
+            # ordinarie + offer, the shape every extractor produces (v0.25.2). Without an
+            # ordinarie there is no campaign to record — just a price that was charged.
+            price_sek=regular if regular is not None else paid,
+            offer_price_sek=paid if regular is not None else None,
+            # Surfaces in the deal row's metadata and the email, so the reader can see the
+            # number was typed rather than read off a page.
+            offer_type="manuellt pris" if regular is not None else None,
+            offer_details=note,
+            in_stock=True,
+            raw_data={"source": "manual", "note": note},
+            checked_at=observed_at,
+        )
+        session.add(point)
+        await session.commit()
+
+        LOGGER.info(
+            "Manual price recorded for link %s: %s kr (ordinarie %s) observed %s",
+            sanitize_log(product_store_id),
+            paid,
+            regular,
+            observed_at.isoformat(),
+        )
+        return {
+            "message": "Manual price recorded",
+            "checked_at": observed_at.isoformat(),
+            "price_sek": float(point.price_sek),
+            "offer_price_sek": float(paid) if regular is not None else None,
+            "unit_price_sek": _computed_unit_price(paid, product_store.package_quantity),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.exception(
+            "Failed to record manual price for link %s", sanitize_log(product_store_id)
+        )
+        raise HTTPException(status_code=500, detail="Failed to record manual price") from e
+
+
 @router.delete(
     "/product-stores/{product_store_id}",
 )
@@ -1669,6 +1794,13 @@ async def get_price_history(
                 offer_type=price_point.offer_type,
                 offer_details=price_point.offer_details,
                 in_stock=price_point.in_stock,
+                # THE reader of raw_data["source"] is domain.result.extraction_source, but it
+                # takes an extraction RESULT; here the stored dict is all there is.
+                source=(
+                    price_point.raw_data.get("source")
+                    if isinstance(price_point.raw_data, dict)
+                    else None
+                ),
             )
             for price_point, store, product_store in rows
         ]
