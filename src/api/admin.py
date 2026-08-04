@@ -3428,7 +3428,7 @@ def _get_admin_nav_css() -> str:
            shopping list IN the store. The sidebar collapses to a dark title bar and a
            four-tab bottom menu; the breadcrumb header goes away entirely (the page's own
            header says where you are). --- */
-        .mobile-topbar, .mobile-tabs, .mobile-sheet { display: none; }
+        .mobile-topbar, .mobile-tabs, .mobile-sheet, .mobile-status { display: none; }
         @media (max-width: 768px) {
             .admin-sidebar { display: none; }
             .admin-main { margin-left: 0; padding-bottom: 66px; }
@@ -3513,6 +3513,50 @@ def _get_admin_nav_css() -> str:
                 text-align: left;
                 cursor: pointer;
             }
+            /* The sheet's scope row reuses .segmented but must undo the sheet's own
+               full-width button rule above, or three buttons stack a screen tall. */
+            .mobile-sheet-scope {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 18px 12px;
+                border-bottom: 1px solid var(--border);
+            }
+            .mss-label { font-size: 12.5px; color: var(--text-muted); flex: 0 0 auto; }
+            .mobile-sheet-scope .segmented { flex: 1; display: flex; }
+            .mobile-sheet-scope .segmented button {
+                flex: 1;
+                width: auto;
+                padding: 8px 0;
+                justify-content: center;
+                text-align: center;
+                font-size: 13.5px;
+            }
+            .mobile-sheet-sched {
+                padding: 12px 18px 4px;
+                border-top: 1px solid var(--border);
+                font-size: 12px;
+                line-height: 1.7;
+                color: var(--text-muted);
+            }
+            /* The sidebar's status colours are tuned for its dark ground — on the white
+               sheet the pale tints have no contrast, so they darken here. */
+            .mobile-sheet-sched .sched-state { color: #047857; }
+            .mobile-sheet-sched .sched-state.is-paused { color: #b45309; }
+            .mobile-sheet-sched .sched-state.is-blocked,
+            .mobile-sheet-sched .sched-state.is-off { color: #b91c1c; }
+            /* Blocked/paused must not hide behind "Mer": a strip under the title bar,
+               amber for a pause (self-inflicted, lapses on its own), red for a block. */
+            .mobile-status {
+                display: block;
+                padding: 7px 14px;
+                font-size: 12.5px;
+                font-weight: 600;
+                background: #fef3c7;
+                color: #92400e;
+            }
+            .mobile-status.is-blocked { background: #fee2e2; color: #991b1b; }
+            .mobile-status[hidden] { display: none; }
             .page-head { align-items: flex-start; gap: 10px; }
             .page-title { font-size: 19px; letter-spacing: -0.01em; }
             .page-sub { font-size: 12.5px; }
@@ -3641,6 +3685,13 @@ def _get_mobile_chrome_html(principal: Principal) -> str:
     on a resize, means the first paint on a phone is the desktop shell. The fourth tab is
     "Mer": Bevakningar, Fel & luckor and Loggar do not earn a permanent tab, but they must
     not become deep-link-only either.
+
+    The sheet also carries the phone's copy of two desktop-header/sidebar controls that
+    `display: none` would otherwise make invisible exactly where the app is used (in the
+    aisle): the scope switch — without it a Livsmedel filter persisted from a desktop
+    session filters the buy list with no visible control anywhere — and the scheduler
+    line. A blocked/paused scheduler additionally gets a status strip under the title bar
+    (#mobile-status), because "ICA:s priser slutar uppdateras" must not hide behind "Mer".
     """
     return f"""
     <div class="mobile-topbar">
@@ -3648,6 +3699,7 @@ def _get_mobile_chrome_html(principal: Principal) -> str:
             <span id="mobile-page-title">Att köpa</span></span>
         <span class="user-avatar">{_initial(principal.email)}</span>
     </div>
+    <div class="mobile-status" id="mobile-status" hidden></div>
     <nav class="mobile-tabs" id="mobile-tabs">
         <button type="button" data-page="kopa">
             <span class="mt-icon">&#127991;&#65039;</span>Att köpa</button>
@@ -3659,9 +3711,24 @@ def _get_mobile_chrome_html(principal: Principal) -> str:
     </nav>
     <div class="mobile-sheet" id="mobile-sheet">
         <div class="mobile-sheet-inner">
+            <div class="mobile-sheet-scope">
+                <span class="mss-label">Visa</span>
+                <div class="segmented" id="scope-switch-m">
+                    <button type="button" data-scope="">Allt</button>
+                    <button type="button" data-scope="grocery">Livsmedel</button>
+                    <button type="button" data-scope="pharmacy">Apotek</button>
+                </div>
+            </div>
             <button type="button" data-page="bevakningar">&#128276; Bevakningar</button>
             <button type="button" data-page="luckor">&#9888;&#65039; Fel &amp; luckor</button>
             <button type="button" data-page="loggar">&#128220; Loggar</button>
+            <div class="mobile-sheet-sched">
+                <div class="sched-state" id="sched-state-m">
+                    <span class="sched-dot"></span><span
+                        id="sched-state-text-m">Schemaläggare</span>
+                </div>
+                <div id="sched-when-m"></div>
+            </div>
         </div>
     </div>
     """

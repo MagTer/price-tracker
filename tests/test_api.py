@@ -1,6 +1,5 @@
 """Tests for FastAPI admin endpoints and auth."""
 
-import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -371,9 +370,17 @@ class TestAdminDashboard:
 
     def test_sidebar_footer_shows_the_version(self, client):
         """The footer version comes from the same source of truth as the release tag
-        (pyproject.toml / installed metadata), so what you see is what prod runs."""
+        (pyproject.toml / installed metadata), so what you see is what prod runs.
+
+        Asserting THE resolved version, not any ``v\\d+`` pattern: the template's JS
+        comments contain version literals, so a loose regex passes even with the
+        injection deleted — which is exactly the silent rot this test exists to catch.
+        """
+        from api.admin import _APP_VERSION
+
+        assert _APP_VERSION, "version must resolve from metadata or pyproject.toml"
         r = client.get("/")
-        assert re.search(r"v\d+\.\d+\.\d+", r.text)
+        assert f"v{_APP_VERSION}" in r.text
 
     def test_sidebar_has_one_nav_item_per_page(self, client):
         """The sections are hash-routed pages picked from the left menu — a long

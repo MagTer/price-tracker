@@ -1439,10 +1439,20 @@ function formatWhen(iso) {
 
 // "fre 09:12" — the tight form, for places where the full date would crowd the number
 // beside it out of the row.
+// Weekday + clock reads naturally for the current week, but "sett fre 09:12" on a row
+// nine days old cannot say WHICH Friday — and both the stale-deal caveat and the
+// tier-regression "sedan …" exist precisely for state that outlives a week. Beyond six
+// days the date joins in ("fre 24/7 09:12"); the boundary is where the weekday name
+// stops being unambiguous.
 function formatShortWhen(iso) {
     const d = parseUtc(iso);
     if (!d || isNaN(d)) return '';
-    return d.toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const opts = { weekday: 'short', hour: '2-digit', minute: '2-digit' };
+    if (Math.abs(Date.now() - d.getTime()) > 6 * 24 * 3600 * 1000) {
+        opts.day = 'numeric';
+        opts.month = 'numeric';
+    }
+    return d.toLocaleString('sv-SE', opts);
 }
 
 function formatDay(iso) {
@@ -1505,8 +1515,11 @@ function setScope(value) {
     renderProducts();
 }
 
+// One scope state, THREE controls: the desktop header segment, Produkter's chips, and the
+// phone's copy in the Mer sheet (the header is display: none under 768px, and a filter you
+// cannot see or change is worse than no filter).
 function applyScopeControls() {
-    for (const btn of document.querySelectorAll('#scope-switch button')) {
+    for (const btn of document.querySelectorAll('#scope-switch button, #scope-switch-m button')) {
         btn.classList.toggle('active', (btn.getAttribute('data-scope') || '') === scope);
     }
 }
@@ -1553,44 +1566,66 @@ function updateIssueBadges() {
 // it lapses on its own, while a block means a butik is actively refusing us and its prices
 // will simply stop updating.
 function renderSchedulerFooter(sched) {
-    const state = document.getElementById('sched-state');
-    const text = document.getElementById('sched-state-text');
-    const when = document.getElementById('sched-when');
-    if (!state || !text || !when) return;
     // parseUtc, NOT new Date(): paused_until is naive UTC, and a bare timestamp parses as
     // LOCAL time — in CEST that read the pause 2h in the past, so it always showed "aktiv".
     const pausedUntil = parseUtc(sched.paused_until);
     const blocked = Array.isArray(sched.blocked_stores) ? sched.blocked_stores : [];
-    state.className = 'sched-state';
+    let cls = '', label = '', title = '';
     if (blocked.length) {
-        state.classList.add('is-blocked');
-        text.textContent = 'Butik blockerar oss';
-        state.title = 'Butiker som blockerar oss (botskydd) — alla anrop dit pausas:\n'
+        cls = 'is-blocked';
+        label = 'Butik blockerar oss';
+        title = 'Butiker som blockerar oss (botskydd) — alla anrop dit pausas:\n'
             + blocked.map(function (b) {
                 const until = parseUtc(b.blocked_until);
                 const t = until ? until.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'}) : '?';
                 return b.store + ' till ' + t + ' (' + b.consecutive_blocks + ' i rad)';
             }).join('\n');
     } else if (pausedUntil && pausedUntil > new Date()) {
-        state.classList.add('is-paused');
-        text.textContent = 'Pausad till ' + pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
-        state.title = 'Bakgrundskontroller pausade — förlängs varje gång du lägger till en produkt';
+        cls = 'is-paused';
+        label = 'Pausad till ' + pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
+        title = 'Bakgrundskontroller pausade — förlängs varje gång du lägger till en produkt';
     } else if (sched.running) {
-        text.textContent = 'Schemaläggare aktiv';
-        state.title = '';
+        label = 'Schemaläggare aktiv';
     } else {
-        state.classList.add('is-off');
-        text.textContent = 'Schemaläggare av';
-        state.title = '';
+        cls = 'is-off';
+        label = 'Schemaläggare av';
     }
     const parts = [];
     if (sched.last_check_at) parts.push('Senast ' + formatShortWhen(sched.last_check_at));
     if (sched.next_check_at) parts.push('nästa ' + formatShortWhen(sched.next_check_at));
-    when.textContent = parts.join(' · ');
+    const whenText = parts.join(' · ');
+    // The sidebar's line and the Mer sheet's copy — the sidebar is display: none on the
+    // phone, and "is the scheduler running" must not be desktop-only knowledge.
+    for (const suffix of ['', '-m']) {
+        const state = document.getElementById('sched-state' + suffix);
+        const text = document.getElementById('sched-state-text' + suffix);
+        const when = document.getElementById('sched-when' + suffix);
+        if (!state || !text || !when) continue;
+        state.className = 'sched-state' + (cls ? ' ' + cls : '');
+        state.title = title;
+        text.textContent = label;
+        when.textContent = whenText;
+    }
+    // Blocked/paused/off gets a strip under the phone's title bar — a butik actively
+    // refusing us means its prices stop updating, which must not hide behind "Mer".
+    const strip = document.getElementById('mobile-status');
+    if (strip) {
+        if (cls) {
+            strip.textContent = label + (blocked.length
+                ? ' — ' + blocked.map(b => b.store).join(', ') : '');
+            strip.className = 'mobile-status' + (cls === 'is-paused' ? '' : ' is-blocked');
+            strip.hidden = false;
+        } else {
+            strip.hidden = true;
+        }
+    }
 }
 
 // Kept under its old name because a dozen call sites in the dialogs refresh "the stats"
-// after a write. What it refreshes now is the scheduler line and the nav counters.
+// after a write. A write can change what is a deal and everything /stats counts (spans,
+// validator findings, coverage), so it refreshes the deals AND the statistics — the old
+// contract — not just the scheduler line: a "Kolla nu" that found an offer must show up
+// in Att köpa, its counter and the korgremsa without a page reload.
 async function loadStats() {
     try {
         schedulerStatus = await apiGet('/scheduler/status');
@@ -1598,7 +1633,8 @@ async function loadStats() {
     } catch (e) {
         console.error('Scheduler status failed', e);
     }
-    updateIssueBadges();
+    loadDeals();
+    loadStatistics();
 }
 
 async function loadStores() {
@@ -1881,7 +1917,11 @@ function renderProductChips() {
     chips.push(`<button type="button" class="chip${allActive ? ' active' : ''}" data-chip="all">Alla ${allProducts.length}</button>`);
     for (const [type, label] of [['grocery', 'Livsmedel'], ['pharmacy', 'Apotek']]) {
         const n = countScope(type);
-        if (!n) continue;
+        // An empty chip is never OFFERED — but an ACTIVE one must stay visible even at
+        // zero hits: a stored filter whose last hit disappeared (the broken links got
+        // fixed since last sitting) would otherwise filter the list to "0 av 15" with no
+        // visible control anywhere to release it.
+        if (!n && scope !== type) continue;
         chips.push(`<button type="button" class="chip${scope === type ? ' active' : ''}" `
             + `data-chip="scope" data-value="${type}">${label} ${n}</button>`);
     }
@@ -1893,8 +1933,8 @@ function renderProductChips() {
     ];
     for (const [value, label, extra] of statuses) {
         const n = inScope.filter(p => productMatchesStatus(p, value)).length;
-        if (!n) continue;
         const active = productFilters.status === value;
+        if (!n && !active) continue;
         chips.push(`<button type="button" class="chip ${extra}${active ? ' active' : ''}" `
             + `data-chip="status" data-value="${value}">${label} ${n}</button>`);
     }
@@ -1947,6 +1987,10 @@ function clearProductFilters() {
     productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS);
     saveProductFilters();
     applyFiltersToControls();
+    // productFiltersActive() counts the scope, so the Rensa button SHOWS for a lone
+    // scope filter — then it must clear it too, or it is a button that visibly does
+    // nothing. setScope re-renders products and deals; a no-op scope returns early.
+    setScope('');
     renderProducts();
 }
 
@@ -2029,8 +2073,11 @@ function dealMarginPct(d) {
 }
 
 function dealAltLabel(d) {
-    const store = possessive(d.best_alt_store);
-    return d.best_alt_package_size ? store + ' ' + d.best_alt_package_size : store;
+    // The genitive belongs to a head noun ("ICA Maxis 1 kg") — with no package label the
+    // plain name IS the sentence, and "billigare än ICA Maxis." dangles.
+    return d.best_alt_package_size
+        ? possessive(d.best_alt_store) + ' ' + d.best_alt_package_size
+        : String(d.best_alt_store || '');
 }
 
 function isDealStale(d) {
@@ -2383,7 +2430,7 @@ const STATS_PERIODS = {
 // too small to matter stays neutral rather than shouting about rounding.
 function changeCell(value) {
     if (value == null) return `<span class="best-link">${DASH}</span>`;
-    const cls = value <= -0.05 ? 'price-good' : (value >= 0.05 ? 'price-bad' : '');
+    const cls = value <= -0.5 ? 'price-good' : (value >= 0.5 ? 'price-bad' : '');
     return '<span class="' + cls + '">' + formatPct(value) + '</span>';
 }
 
@@ -2398,7 +2445,7 @@ function buildStatsHeadline(data) {
     const avg = withChange.length
         ? withChange.reduce((t, p) => t + p.change_pct, 0) / withChange.length
         : null;
-    const avgCls = avg == null ? '' : (avg <= -0.05 ? 'price-good' : (avg >= 0.05 ? 'price-bad' : ''));
+    const avgCls = avg == null ? '' : (avg <= -0.5 ? 'price-good' : (avg >= 0.5 ? 'price-bad' : ''));
     const best = data.stores.slice().sort(
         (a, b) => (b.cheapest_count - a.cheapest_count) || (a.compared_products - b.compared_products)
     )[0];
@@ -2472,7 +2519,7 @@ function buildStatsStores(data) {
             ? `${r.cheapest_count} av ${r.compared_products} billigast`
             : 'ingen jämförbar produkt';
         const cls = r.avg_premium_pct == null ? ''
-            : (r.avg_premium_pct <= -0.05 ? 'price-good' : (r.avg_premium_pct >= 0.05 ? 'price-bad' : ''));
+            : (r.avg_premium_pct <= -0.5 ? 'price-good' : (r.avg_premium_pct >= 0.5 ? 'price-bad' : ''));
         html += `<div class="store-cmp-row">
             <div class="store-cmp-name">${escapeHtml(r.store_name)}</div>
             <div class="store-cmp-bar"><div class="bar-track"><div class="bar-fill" style="width:${(share * 100).toFixed(1)}%"></div></div></div>
@@ -2547,6 +2594,13 @@ async function loadStatistics() {
         updateIssueBadges();
     } catch (e) {
         container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda statistik.</p></div>';
+        // Fel & luckor reads the same payload — without this it hangs on "Laddar…"
+        // forever while its sidebar badge quietly claims zero silent errors.
+        const luckor = document.getElementById('luckor-container');
+        if (luckor && !statsData) {
+            luckor.innerHTML = '<div class="card"><div class="empty-state"><p>Kunde inte '
+                + 'ladda felen och luckorna — försök igen om en stund.</p></div></div>';
+        }
     }
 }
 
@@ -2735,8 +2789,11 @@ function buildAmountGaps(rows) {
         const entry = gapEntry(product.unit);
         // Only shown when we actually HAVE it: the page's own reading is evidence, and a
         // hint we do not hold must not be invented.
+        // NOT formatSek: the money formatter's 2 decimals round a 24 g sachet (0.024 kg,
+        // the v0.45.0 case) to "0,02 kg — bekräfta", and obeying that hint re-enters the
+        // exact error the 4-decimal column exists to correct. Amounts show all 4.
         const hint = link.scraped_package_quantity != null
-            ? `sidan säger ${formatSek(link.scraped_package_quantity)} ${product.unit || ''} — bekräfta`
+            ? `sidan säger ${Number(link.scraped_package_quantity).toLocaleString('sv-SE', { maximumFractionDigits: 4 })} ${product.unit || ''} — bekräfta`
             : (link.package_size ? `sidan säger ${link.package_size}` : 'sidan säger inget antal');
         const price = effectivePrice(link);
         html += `<div class="issue-row">
@@ -2793,7 +2850,10 @@ async function saveGapAmount(linkId, entryUnit) {
         });
         showToast('Mängd sparad — jfr-priset räknas om');
         await loadProducts();
-        loadDeals();
+        // loadStats, not just loadDeals: the "Länkar utan mängd" counter sitting right
+        // above the row comes from /stats coverage — dropping the row while the counter
+        // keeps the old number would contradict the page it happens on.
+        loadStats();
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
     }
@@ -4185,6 +4245,12 @@ document.getElementById('scope-switch').addEventListener('click', (e) => {
     setScope(btn.getAttribute('data-scope') || '');
 });
 
+document.getElementById('scope-switch-m').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-scope]');
+    if (!btn) return;
+    setScope(btn.getAttribute('data-scope') || '');
+});
+
 // The facet fold starts closed on a phone and MUST reopen when the viewport goes wide:
 // desktop CSS hides the summary (nothing left to click), and a closed <details>' content
 // is unrendered no matter what display: rule applies to it.
@@ -4404,8 +4470,11 @@ function renderPage() {
     }
     document.getElementById('mobile-sheet').classList.remove('open');
     // Loggar is fetched only when shown, and re-fetched on each visit so it is fresh
-    // without polling. The other pages render from data that is already in memory.
+    // without polling. Prisutveckling and Fel & luckor re-fetch /stats on each visit
+    // too: in a long-lived tab their numbers would otherwise silently age until the
+    // manual ↻ — the pages render immediately from memory, then repaint fresh.
     if (page === 'loggar') loadLogs();
+    if (page === 'utveckling' || page === 'luckor') loadStatistics();
 }
 
 document.getElementById('mobile-tabs').addEventListener('click', (e) => {
@@ -4436,11 +4505,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderPage();
     await loadStores();
     loadProducts();
-    loadDeals();
     loadWatches();
+    // loadStats covers /scheduler/status, /deals AND /stats. The latter two are loaded
+    // up front, not lazily as Statistik once was: Att köpa's span bars, the silent-error
+    // link and the sidebar's Fel & luckor badge all read from /stats, and the start page
+    // must not render without them.
     loadStats();
-    // /stats is loaded up front, not lazily as Statistik once was: Att köpa's span bars,
-    // the silent-error link and the sidebar's Fel & luckor badge all read from it, and the
-    // start page must not render without them.
-    loadStatistics();
 });
