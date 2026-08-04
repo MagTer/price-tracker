@@ -2128,8 +2128,18 @@ function dealSpanHtml(d, stat) {
     const low = stat ? stat.low_unit_price : null;
     const high = stat ? stat.high_unit_price : null;
     const now = d.unit_price_sek;
-    if (low == null || high == null || now == null || high <= low) {
+    // Three reasons no bar can be drawn, each named truthfully: a missing amount is a GAP
+    // (the "kan inte jämföras" verdict beside it says the same), one observation is short
+    // history, and a flat span is real history that happens to hold one price — calling
+    // either of the last two "en observation" misstates what we know.
+    if (now == null) {
+        return `<div class="span-note">inget jfr-pris ${DASH} länken saknar mängd</div>`;
+    }
+    if (low == null || high == null) {
         return `<div class="span-note">en observation ${DASH} inget spann än</div>`;
+    }
+    if (high <= low) {
+        return `<div class="span-note">priset har inte rört sig ${DASH} inget spann än</div>`;
     }
     const pos = clamp01((now - low) / (high - low));
     const isLow = pos <= 1 / 3;
@@ -2253,6 +2263,16 @@ function renderBasketStrip() {
     const saved = shown.reduce((t, g) => t + g.saved, 0);
     const top = groups[0];
 
+    // The list rides BEST and UNKNOWN together on purpose (not KNOWN to be bad ≠ known to
+    // be good) — but the reader should be able to see how much of the buy list is CONFIRMED
+    // cheapest versus not comparable. Follows the pill filter like every other figure here.
+    const scopedRows = hit ? rows.filter(d => d.store_name === hit.store) : rows;
+    const unknownN = scopedRows.filter(d => classifyDeal(d) === DEAL_UNKNOWN).length;
+    const split = unknownN
+        ? `<span class="basket-note">${scopedRows.length - unknownN} billigast · `
+            + `${unknownN} går inte att jämföra</span>`
+        : '';
+
     const pills = groups.map(g =>
         `<button type="button" class="store-pill${g.store === storeFilter ? ' active' : ''}" `
         + `data-store="${escapeHtml(g.store)}">${escapeHtml(g.store + ' ' + g.n)}</button>`).join('');
@@ -2279,6 +2299,7 @@ function renderBasketStrip() {
     el.innerHTML = '<span class="basket-label">Veckans korg</span>'
         + `<span class="basket-sum">${escapeHtml(kr(total))}</span>`
         + `<span class="basket-saved">${escapeHtml(kr(saved))} under ordinarie</span>`
+        + split
         + '<span class="basket-divider"></span>'
         + `<div class="store-pills">${pills}</div>`
         + `<span class="basket-note">${note}</span>`
@@ -2451,8 +2472,14 @@ function buildStatsHeadline(data) {
     )[0];
     const offers = data.stores.reduce((sum, r) => sum + (r.offers || 0), 0);
     const judged = data.stores.reduce((sum, r) => sum + (r.offers_judged || 0), 0);
+    // The figure is the average change over the SELECTED period — with "4 veckor" picked,
+    // a label reading "mot start" claims something the number does not measure.
+    const weeks = (data.period && data.period.weeks) || 0;
+    const basketLabel = weeks === 0
+        ? 'Korgen mot start'
+        : 'Korgen, ' + (STATS_PERIODS[String(weeks)] || 'senaste ' + weeks + ' veckorna');
     return '<div class="stat-grid stat-grid-3">'
-        + '<div class="stat-box"><div class="stat-label">Korgen mot start</div>'
+        + `<div class="stat-box"><div class="stat-label">${escapeHtml(basketLabel)}</div>`
         + `<div class="stat-value ${avgCls}">${avg == null ? DASH : formatPct(avg)}</div>`
         + `<div class="stat-note">${withChange.length} av ${data.coverage.products_priced} produkter har underlag</div></div>`
         + '<div class="stat-box"><div class="stat-label">Billigast oftast</div>'
@@ -2671,9 +2698,14 @@ function buildSilentErrors(counts, q) {
         + 'är inte den butiken publicerar</span></div>';
 
     if (regressions.length) {
+        // Cause-neutral on purpose: the same rows appear when the store changed shape AND
+        // when a deploy just improved an extractor (every link's latest ok-check then
+        // predates the better code until the scheduler laps it) — the client cannot tell
+        // the cases apart, so the heading must not pick one.
         html += '<div class="group-head">Extraktionen har fallit ner en pinne '
-            + '<span class="group-why">— butikens sida har ändrat form, så vi läser en sämre '
-            + 'källa än vi borde</span></div>';
+            + '<span class="group-why">— vi läser en sämre källa än butiken publicerar: '
+            + 'sidan kan ha ändrat form, eller så har länken inte hunnit kontrolleras '
+            + 'sedan appen förbättrades</span></div>';
         for (const r of regressions) {
             const impact = TIER_IMPACT[r.expected_source]
                 || 'vi läser en sämre källa än butiken publicerar';
