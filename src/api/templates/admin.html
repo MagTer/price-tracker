@@ -1,36 +1,69 @@
-<!-- The stats row is GLOBAL status (products, watches, deals today, scheduler) and stays
-     visible on every page; the three cards below are hash-routed pages (#/produkter,
-     #/erbjudanden, #/bevakningar) toggled by renderPage() so a long product list can
-     never push the deals out of sight. -->
-<div class="stats-grid">
-    <a class="stat-box" href="#/produkter">
-        <div class="stat-value" id="stat-products">-</div>
-        <div class="stat-label">Produkter</div>
-    </a>
-    <a class="stat-box" href="#/bevakningar">
-        <div class="stat-value" id="stat-watches">-</div>
-        <div class="stat-label">Aktiva bevakningar</div>
-    </a>
-    <a class="stat-box" href="#/erbjudanden">
-        <div class="stat-value" id="stat-deals">-</div>
-        <div class="stat-label">Köpvärda erbjudanden</div>
-    </a>
-    <div class="stat-box">
-        <div class="stat-value" id="stat-scheduler">-</div>
-        <div class="stat-label">Schemaläggare</div>
-    </div>
-</div>
+<!-- Six hash-routed pages (#/kopa, #/produkter, #/utveckling, #/bevakningar, #/luckor,
+     #/loggar) in ONE served document; renderPage() in fragment 3 owns which one is visible
+     and which nav item is .active. Each page answers one question and says so in its own
+     heading — the global stat row that used to sit above every page is gone: its four
+     numbers are now the sidebar's live counters and the scheduler line in its foot, which
+     is where a number you never act on belongs. -->
 
+<!-- ATT KÖPA — "vad ska jag köpa den här veckan?" Ranked on how much cheaper per unit an
+     offer is than the product's next-best link, NOT on the store's own discount figure
+     (30 % off a bad price is still a bad price). The whole list is built by the JS from
+     /deals joined with /stats on product_id — the span bar needs history, which the deals
+     payload does not carry. -->
+<section class="app-page" data-page="kopa">
+    <div class="page-head">
+        <div>
+            <div class="page-title" id="kopa-heading">Att köpa</div>
+            <div class="page-sub">Rangordnat efter hur mycket billigare de är än näst bästa
+                alternativ just nu. Stapeln säger något annat: var priset ligger mellan
+                produktens lägsta och högsta noterade — alltså om det också är rätt
+                <em>tillfälle</em>.</div>
+        </div>
+    </div>
+    <!-- Korgremsan. Every figure in it is derived from the rows the list below actually
+         shows — pill counts, subtotals, the total and the closing sentence — so a pill can
+         never promise a round the list does not hold. The pills ARE the store filter. -->
+    <div id="basket-strip"></div>
+    <div id="deals-table-container">
+        <div class="loading">Laddar erbjudanden…</div>
+    </div>
+    <!-- Butiksbladets offline-erbjudanden täcker in-store-only-sortiment och kan aldrig bli
+         trackade länkar (veckoscopade, butiksscopade, ingen produktsida) — men analysen av ett
+         inklistrat erbjudande är automatisk. Admin-only: knappen spenderar en ledger-slot mot
+         willys.se. It sits at the FOOT of the page: it is a lookup, not part of the ranking. -->
+    <div class="card admin-only">
+        <div class="card-header">
+            <div>
+                <div class="card-title">Kolla bladerbjudande</div>
+                <div class="page-sub">Klistra in en erbjudandelänk från Willys butiksblad —
+                    jämförs per enhet mot dina produkter</div>
+            </div>
+        </div>
+        <div class="card-pad">
+            <div class="blad-form">
+                <input type="url" id="blad-url" class="search-input"
+                       placeholder="https://www.willys.se/erbjudanden/offline-…">
+                <button class="btn btn-primary" id="blad-analyze-btn" onclick="analyzeBlad()">Analysera</button>
+            </div>
+            <div id="blad-result"></div>
+        </div>
+    </div>
+</section>
+
+<!-- PRODUKTER — the catalogue, filtered entirely in the browser. allProducts is ALWAYS the
+     full list; the facets sit between it and the render (the watch dialog's product select
+     reads that same array, so narrowing it would silently narrow the dialog too). -->
 <section class="app-page" data-page="produkter">
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Produkter</div>
-        <div class="header-actions">
-            <!-- ONE primary button. Snabbtillägg is the 95 % path; two blue buttons side by
-                 side mean neither is the primary one. The manual form and the backup plumbing
-                 are real but rare, so they live behind the overflow instead of competing with
-                 the control used on every add. -->
-            <button class="btn btn-primary admin-only" onclick="showQuickAddModal()">⚡ Snabbtillägg</button>
+    <div class="page-head">
+        <div>
+            <div class="page-title">Produkter</div>
+            <div class="page-sub" id="product-basis"></div>
+        </div>
+        <div class="page-actions">
+            <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
+            <!-- ONE primary button. Snabbtillägg is the 95 % path; the manual form and the
+                 backup plumbing are real but rare, so they live behind the overflow. -->
+            <button class="btn btn-primary admin-only" onclick="showQuickAddModal()">&#9889; Snabbtillägg</button>
             <details class="menu">
                 <summary class="btn" title="Fler åtgärder">&#8943;</summary>
                 <div class="menu-items">
@@ -42,34 +75,18 @@
             </details>
         </div>
     </div>
-    <!-- Filters, on their own row because five controls in the card header would push the
-         primary button off the line. Every one of them is answered from the list already in
-         memory — no round trip, no debounce. The <select>s are FILLED FROM THE DATA (only
-         categories and butiker that actually occur), so there is no second copy of the
-         taxonomy here; the canonical order is read back off the injected category <select>. -->
+    <!-- Chips carry the facets you press weekly (omfång, status, sortering) and are BUILT
+         FROM THE DATA with their counts, so a chip that would return nothing is never
+         offered. The three selects behind them — kategori, butik, täckning — are the rarer
+         questions; on the phone they fold behind the Filter summary while search stays out,
+         because search is the control used standing in the shop. -->
     <div class="filter-bar">
-        <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
-        <!-- On the phone the facet selects fold behind this summary — search stays out, it is
-             the control used standing in the store. On desktop the summary is hidden and
-             display:contents melts the <details> into the flex row, so nothing changes there.
-             The count in the summary is what keeps a folded-away active filter from silently
-             narrowing the list. Closed-<details> content is unrendered regardless of CSS, so
-             the script reopens it whenever the viewport goes wide (see the wiring). -->
+        <div class="chip-row" id="product-chips"></div>
         <details class="filter-more" id="filter-more" open>
             <summary class="btn btn-sm">Filter<span id="filter-more-count"></span></summary>
             <select id="filter-category" class="search-input"></select>
             <select id="filter-store" class="search-input"></select>
             <select id="filter-missing" class="search-input"></select>
-            <select id="filter-status" class="search-input">
-                <option value="">Alla produkter</option>
-                <option value="offer">Har erbjudande</option>
-                <option value="needs_amount">Saknar mängd</option>
-                <option value="no_price">Saknar pris</option>
-            </select>
-            <select id="product-sort" class="search-input">
-                <option value="name">Sortera: namn</option>
-                <option value="aisle">Sortera: butiksordning</option>
-            </select>
             <button type="button" class="btn btn-sm" id="filter-clear" onclick="clearProductFilters()">Rensa</button>
         </details>
         <!-- A filter that hides rows must say how many, always. -->
@@ -78,65 +95,19 @@
     <div id="products-table-container">
         <div class="loading">Laddar produkter…</div>
     </div>
-</div>
 </section>
 
-<section class="app-page" data-page="erbjudanden">
-<div class="card">
-    <div class="card-header">
+<!-- PRISUTVECKLING — cross-product questions the per-product history modal structurally
+     cannot ask. READ-ONLY by construction: nothing here may feed back into check scheduling
+     (domain/stats.py), so the page has a period picker and a refresh button and no other
+     controls at all. Every panel states what it was computed from. -->
+<section class="app-page" data-page="utveckling">
+    <div class="page-head">
         <div>
-            <div class="card-title">Aktuella erbjudanden</div>
-            <!-- The weekly rhythm made visible: when were prices last refreshed, when is
-                 the next round — filled by loadStats() from /scheduler/status. -->
-            <div class="best-link" id="deals-freshness"></div>
+            <div class="page-title">Prisutveckling</div>
+            <div class="page-sub" id="stats-basis"></div>
         </div>
-        <div class="header-actions">
-            <select id="deal-filter" class="search-input" onchange="loadDeals()">
-                <option value="">Alla butiker</option>
-                <option value="grocery">Livsmedel</option>
-                <option value="pharmacy">Apotek</option>
-            </select>
-        </div>
-    </div>
-    <div id="deals-table-container">
-        <div class="loading">Laddar erbjudanden…</div>
-    </div>
-</div>
-<!-- Butiksbladets offline-erbjudanden täcker in-store-only-sortiment och kan aldrig bli
-     trackade länkar (veckoscopade, butiksscopade, ingen produktsida) — men analysen av ett
-     inklistrat erbjudande är automatisk. Admin-only: knappen spenderar en ledger-slot mot
-     willys.se. -->
-<div class="card admin-only">
-    <div class="card-header">
-        <div>
-            <div class="card-title">Kolla bladerbjudande</div>
-            <div class="best-link">Klistra in en erbjudandelänk från Willys butiksblad —
-                jämförs per enhet mot dina produkter</div>
-        </div>
-    </div>
-    <div class="blad-form">
-        <input type="url" id="blad-url" class="search-input"
-               placeholder="https://www.willys.se/erbjudanden/offline-…">
-        <button class="btn btn-primary" id="blad-analyze-btn" onclick="analyzeBlad()">Analysera</button>
-    </div>
-    <div id="blad-result"></div>
-</div>
-</section>
-
-<!-- Statistik: cross-product questions the per-product history modal structurally cannot ask.
-     READ-ONLY by construction — nothing here may feed back into check scheduling (see
-     domain/stats.py), so the page has a period picker and a refresh button, and no other
-     controls at all. Every panel states what it was computed from, so a thin answer reads as
-     thin instead of as a confident flat line; the page therefore needs no "come back later"
-     gate and matures on its own as history accumulates. -->
-<section class="app-page" data-page="statistik">
-<div class="card">
-    <div class="card-header">
-        <div>
-            <div class="card-title">Statistik</div>
-            <div class="best-link" id="stats-basis"></div>
-        </div>
-        <div class="header-actions">
+        <div class="page-actions">
             <select id="stats-period" class="search-input" onchange="loadStatistics()">
                 <option value="0">Sedan start</option>
                 <option value="4">Senaste 4 veckorna</option>
@@ -144,54 +115,83 @@
                 <option value="26">Senaste 26 veckorna</option>
                 <option value="52">Senaste året</option>
             </select>
-            <button class="btn" onclick="loadStatistics()">↻ Uppdatera</button>
+            <button class="btn" onclick="loadStatistics()">&#8635; Uppdatera</button>
         </div>
     </div>
     <div id="stats-container">
         <div class="loading">Laddar statistik…</div>
     </div>
-</div>
 </section>
 
+<!-- BEVAKNINGAR — each row shows the DISTANCE to its target as a bar, because a watch
+     without "how close is it?" is a write-only register. -->
 <section class="app-page" data-page="bevakningar">
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Prisbevakningar</div>
-        <div class="header-actions">
+    <div class="page-head">
+        <div>
+            <div class="page-title">Bevakningar</div>
+            <div class="page-sub" id="watches-basis"></div>
+        </div>
+        <div class="page-actions">
             <button class="btn btn-primary admin-only" onclick="showCreateWatchModal()">+ Ny bevakning</button>
         </div>
     </div>
     <div id="watches-table-container">
         <div class="loading">Laddar bevakningar…</div>
     </div>
-</div>
 </section>
 
-<section class="app-page" data-page="loggar">
-<div class="card">
-    <div class="card-header">
+<!-- FEL & LUCKOR — a to-do list, not statistics, and built around ONE distinction.
+     A gap announces itself (a jfr-pris is missing, a cell is empty). A SILENT error does
+     not: the check reports "ok", the price looks plausible, and nothing anywhere in the
+     interface reveals that the figure is wrong. That is exactly the miss that produced
+     domain/validation.py — ICA's campaigns were invisible for weeks while every check said
+     "ok". So the silent errors sit at the TOP and in red, before the counters; the gaps
+     keep amber below.
+
+     It is also the answer to "how do I see a parser failure without digging in the logs":
+     the log shows EVENTS, this page shows STATE. A tier regression that happened on
+     Thursday has rolled out of the ring buffer by Monday; the state stays here until a
+     successful check clears it. Nothing here can be dismissed — there is no persisted
+     flag to acknowledge, and a dismiss button would hide an error that is still running. -->
+<section class="app-page" data-page="luckor">
+    <div class="page-head">
         <div>
-            <div class="card-title">Loggar</div>
-            <!-- What the app actually did: which extraktionsväg vann (API/JSON-LD/LLM),
-                 modellbyten i kaskaden, och när en hämtning blockerades av en butiks WAF.
-                 Läses ur en minnesbuffert — nollställs vid omstart. -->
-            <div class="best-link">Senaste händelser · nollställs vid omstart</div>
+            <div class="page-title">Fel &amp; luckor</div>
+            <div class="page-sub">Att göra-lista, inte statistik. Överst det som ser rätt ut
+                men inte är det — de felen skriver ingenting i loggen, så de måste synas här.
+                Under det luckorna som hindrar jämförelser.</div>
         </div>
-        <div class="header-actions">
+    </div>
+    <div id="luckor-container">
+        <div class="loading">Laddar…</div>
+    </div>
+</section>
+
+<!-- LOGGAR — what the app actually did: which extraction tier won, model changes in the
+     cascade, blocked fetches. Read from an in-memory ring buffer, cleared on restart. -->
+<section class="app-page" data-page="loggar">
+    <div class="page-head">
+        <div>
+            <div class="page-title">Loggar</div>
+            <div class="page-sub">Vad appen faktiskt gjorde: vilken extraktionsväg vann,
+                modellbyten i kaskaden, blockerade hämtningar. Läses ur en minnesbuffert —
+                nollställs vid omstart.</div>
+        </div>
+        <div class="page-actions">
             <select id="log-level" class="search-input" onchange="loadLogs()">
                 <option value="INFO">Info och uppåt</option>
                 <option value="WARNING">Varning och uppåt</option>
                 <option value="ERROR">Endast fel</option>
                 <option value="DEBUG">Allt (debug)</option>
             </select>
-            <button class="btn" onclick="loadLogs()">↻ Uppdatera</button>
+            <button class="btn" onclick="loadLogs()">&#8635; Uppdatera</button>
         </div>
     </div>
     <div id="logs-container">
         <div class="loading">Laddar loggar…</div>
     </div>
-</div>
 </section>
+
 
 <!-- Create Product Modal -->
 <div class="modal" id="modal-create-product" style="display:none;">
@@ -642,15 +642,17 @@
 <div class="shared-toast" id="toast"></div>
 
 <!-- SECTION_SEPARATOR -->
-/* Admin dashboard-specific styles */
-/* Wide tables scroll inside their own container — the PAGE never scrolls sideways.
-   Matters most on the phone, where the app doubles as the in-store shopping list. */
-#products-table-container,
-#deals-table-container,
-#watches-table-container,
+/* Page-specific styles. The tokens, the shell and the shared primitives (card, chip, btn,
+   bar-track, stat-box) live in _get_admin_nav_css in api/admin.py — nothing here may
+   introduce a colour that is not one of those variables. */
+
+/* Wide content scrolls inside its own container — the PAGE never scrolls sideways.
+   Matters most on the phone, where the app doubles as the in-store shopping list.
+   The list pages no longer need it (their rows wrap), but the tables still do. */
+#stats-container,
 #product-links-table,
-#blad-result,
-#stats-container {
+#price-history-table,
+#blad-result {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
@@ -659,22 +661,395 @@
     gap: 8px;
     margin-bottom: 12px;
 }
-.blad-form input { flex: 1; }
+.blad-form input { flex: 1; min-width: 0; }
+
+/* Hash-routed pages: exactly one .app-page is visible; the sidebar picks it. */
+.app-page { display: none; flex-direction: column; gap: 16px; }
+.app-page.active { display: flex; }
+
 .search-input {
     padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 1px solid var(--border-control);
+    border-radius: 8px;
     font-size: 13px;
+    background: #fff;
+    color: var(--text);
     min-width: 180px;
 }
-.search-input:focus {
-    outline: none;
-    border-color: var(--primary);
+#product-search { width: 220px; min-width: 160px; }
+.search-input:focus { outline-color: var(--primary); }
+
+/* --- The product filter row --- */
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
 }
+.filter-bar .search-input { min-width: 150px; }
+/* Left-flowing, right after the controls that changed it — feedback belongs next to the
+   knob. Pushed to the right edge it would also sit under the header's open overflow menu. */
+.result-count {
+    margin-left: 4px;
+    font-size: 12px;
+    color: var(--text-faint);
+    white-space: nowrap;
+}
+/* display:contents dissolves the <details> so its children are flex items of .filter-bar —
+   the desktop row looks exactly as it would without the fold. The summary is hidden on
+   desktop, which also makes the details unclosable there. */
+.filter-more { display: contents; }
+.filter-more > summary {
+    display: none;
+    list-style: none;
+    user-select: none;
+}
+.filter-more > summary::-webkit-details-marker { display: none; }
+
+/* --- Att köpa: korgremsan. The pills ARE the store filter, so they are buttons, and
+   everything in the strip is derived from the rows the list below shows. --- */
+#basket-strip:empty { display: none; }
+.basket-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px 18px;
+    flex-wrap: wrap;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 18px;
+}
+.basket-label { font-size: 13px; color: var(--text-muted); }
+.basket-sum { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.basket-saved { font-size: 13px; font-weight: 600; color: var(--success); }
+.basket-divider { width: 1px; height: 18px; background: #e2e8f0; }
+.store-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.store-pill {
+    font-size: 12.5px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-control);
+    cursor: pointer;
+}
+.store-pill:hover { border-color: var(--text-faint); }
+.store-pill.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.basket-note { font-size: 13px; color: var(--text-faint); }
+.basket-link {
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: var(--primary);
+}
+/* The way in to Fel & luckor. Red while a SILENT error is standing (we are showing a
+   wrong number right now), amber when it is only gaps to close. */
+.basket-link.is-error { color: var(--error-strong); margin-left: auto; }
+.basket-link.is-gap { color: var(--warning-link); margin-left: auto; }
+
+/* --- Att köpa: the offer row.
+   No percentage column: the margin lives INSIDE the verdict sentence, where it has a
+   subject and an object. It was a column of its own in an earlier draft and lost — the
+   percentage and the span bar answer DIFFERENT questions (how much cheaper than the next
+   best link, right now / where this price sits in the product's own range, over time),
+   but side by side as two graphics both read as the row's "how good is this" score, and
+   the percentage won by being first and biggest. --- */
+.deal-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--row-line);
+}
+.deal-row:last-child { border-bottom: 0; }
+/* Not KNOWN to be bad — just not comparable. Muted, never hidden. */
+.deal-row.is-unknown { background: var(--hover); }
+.deal-main { flex: 1 1 300px; min-width: 260px; }
+/* Everything after the text zone travels in ONE wrapper with margin-left:auto. Without it
+   the zones pack from the left when the row wraps, stranding the price in mid-row with a
+   few hundred pixels of nothing to its right. */
+.deal-right { margin-left: auto; display: flex; align-items: flex-start; gap: 18px; }
+.deal-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.deal-name:hover { color: var(--primary); text-decoration: underline; }
+.is-unknown .deal-name { color: var(--neutral-chip-fg); }
+.deal-pkg { font-weight: 400; color: var(--text-faint); font-size: 16px; }
+.deal-verdict { font-size: 13.5px; color: var(--text-secondary); margin-top: 3px; }
+.deal-pct { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
+.deal-verdict.no-compare { color: var(--text-faint); }
+.deal-fix { font-weight: 600; color: var(--warning-link); background: none; border: 0; padding: 0; cursor: pointer; font-size: 13.5px; }
+.deal-meta { font-size: 12px; color: var(--text-faint); margin-top: 5px; }
+.deal-terms {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--warning);
+    background: var(--warning-chip-bg);
+    padding: 3px 9px;
+    border-radius: 6px;
+    margin-top: 7px;
+}
+.deal-span { flex: 0 1 240px; min-width: 132px; }
+/* The bar earned a label of its own once it became the row's only graphic. */
+.span-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 5px;
+}
+.span-ends { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-faint); }
+.span-track {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--bg);
+    margin-top: 5px;
+    position: relative;
+}
+.span-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--primary); }
+.span-fill.is-low { background: var(--success-bar); }
+.span-marker { position: absolute; top: -3px; bottom: -3px; width: 3px; border-radius: 2px; background: var(--text); }
+.span-note { font-size: 11.5px; margin-top: 6px; color: var(--text-muted); }
+.span-note.is-low { color: var(--success); }
+.deal-price { text-align: right; white-space: nowrap; min-width: 104px; }
+.deal-price-main { font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.deal-unit { font-size: 13px; font-weight: 600; margin-top: 6px; color: var(--success); }
+.is-unknown .deal-unit { color: var(--text-faint); }
+/* Collapsed, not deleted: this is the answer to "men ICA har ju kampanj på den?". */
+.deal-extra { margin-top: 4px; }
+.deal-extra > summary {
+    cursor: pointer;
+    font-size: 13.5px;
+    color: var(--text-muted);
+    list-style: none;
+    padding: 4px 0;
+}
+.deal-extra > summary::-webkit-details-marker { display: none; }
+.deal-extra > summary:hover { color: var(--text); }
+.deal-extra .card { margin-top: 10px; }
+
+/* --- Produkter: one row per product --- */
+.p-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--row-line);
+    cursor: pointer;
+}
+.p-row:last-child { border-bottom: 0; }
+.p-row:hover { background: var(--hover); }
+.p-main { flex: 1 1 240px; min-width: 220px; }
+/* The product NAME carries the visible affordance and is a real <button>, so it takes
+   focus and answers Enter; the rest of the row is a quiet convenience target. */
+.p-name {
+    font-weight: 600;
+    font-size: 14.5px;
+    color: var(--text);
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.p-row:hover .p-name, .p-name:hover { color: var(--primary); text-decoration: underline; }
+.p-meta { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.p-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.p-price { flex: 0 1 250px; min-width: 170px; text-align: right; }
+.p-unit { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.p-unit.has-offer { color: var(--success); }
+.p-unit.no-unit { color: var(--neutral-chip-fg); }
+.p-best { font-size: 12px; color: var(--text-faint); }
+/* NOT part of the row's click target: empty space beside two buttons that silently opens
+   a panel is an invisible third button. */
+.p-actions { display: flex; gap: 6px; cursor: default; }
+
+/* --- Bevakningar: the distance to the target, as a bar --- */
+.w-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--row-line);
+}
+.w-row:last-child { border-bottom: 0; }
+.w-row.is-met { background: var(--success-row); }
+/* Same rule as the issue rows: the text zone must not grow, or the action buttons wrap
+   to a line of their own. */
+/* The text zone shrinks; it never grows. A growing text zone starves the zone beside it,
+   and since `flex-basis: auto` on a WRAPPING flex container resolves to fit-content (not to
+   the sum of its children), the right zone would then break its own buttons onto a second
+   line while several hundred pixels sat unused. The right zone is nowrap instead: its three
+   parts travel together, and if they do not fit, the OUTER row wraps and drops the whole
+   zone below the name. Same rule on the issue rows. */
+.w-main { flex: 0 1 420px; min-width: 200px; }
+.w-name { font-weight: 600; font-size: 14.5px; }
+.w-meta { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.w-right {
+    margin-left: auto;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    flex-wrap: nowrap;
+}
+.w-progress { flex: 0 1 230px; min-width: 150px; }
+.w-progress-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-muted); }
+.w-progress .bar-track { margin-top: 5px; }
+.w-now { width: 170px; text-align: right; }
+.w-now-value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.w-now-value.is-met { color: var(--success); }
+.w-store { font-size: 12px; color: var(--text-faint); }
+.w-actions { display: flex; gap: 6px; }
+
+/* --- Fel & luckor. The silent errors sit at the top and in red because their entire
+   failure mode is that they are not heard: the check reported "ok", the price is
+   plausible, and nothing else in the interface would ever mention them. --- */
+.silent-card { background: var(--bg-card); border: 1px solid var(--error-border); border-radius: 12px; overflow: hidden; }
+.silent-head {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--error-line);
+    background: var(--error-bg);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.silent-title { font-size: 15px; font-weight: 600; color: var(--error-strong); }
+.silent-count {
+    font-size: 11.5px;
+    font-weight: 700;
+    background: var(--error-line);
+    color: var(--error-strong);
+    padding: 2px 8px;
+    border-radius: 5px;
+}
+.silent-explain { font-size: 13px; color: var(--error); }
+.group-head { padding: 14px 18px 6px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.group-head .group-why { font-weight: 400; color: var(--text-faint); }
+/* Without this line an ICA wall reads as a breakdown, and the natural response —
+   deleting the links — is exactly wrong. */
+.silent-foot { padding: 11px 18px; font-size: 12px; color: var(--text-faint); background: var(--hover); }
+
+.issue-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--row-line);
+}
+.issue-row:last-child { border-bottom: 0; }
+/* The text zone does NOT grow: letting it take the free space starves the action zone,
+   which then wraps its own Spara button onto a second line. The right zone takes the
+   remainder instead and packs its content against the edge. */
+.issue-main { flex: 0 1 420px; min-width: 200px; }
+.issue-name { font-weight: 600; font-size: 14.5px; }
+.issue-sub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.issue-right {
+    margin-left: auto;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    flex-wrap: nowrap;
+}
+/* `ica_page → jsonld` says nothing to anyone who does not know the codebase; the
+   consequence sentence is the designed part, derived from the expected source. */
+.issue-impact { font-size: 12.5px; color: var(--error); flex: 0 1 260px; min-width: 200px; }
+.issue-hint { font-size: 12.5px; color: var(--text-muted); flex: 0 1 260px; min-width: 190px; }
+.source-swap { display: flex; align-items: center; gap: 7px; font-size: 12px; white-space: nowrap; }
+.source-chip {
+    font-weight: 600;
+    color: var(--neutral-chip-fg);
+    background: var(--neutral-chip-bg);
+    padding: 2px 8px;
+    border-radius: 5px;
+}
+.source-chip.is-actual { color: var(--error-strong); background: var(--error-line); }
+.source-arrow { color: var(--text-faint); }
+.mismatch-nums { text-align: right; font-size: 12.5px; white-space: nowrap; color: var(--text-muted); }
+.mismatch-nums b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.deviation {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--error);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    min-width: 56px;
+    text-align: right;
+}
+.gap-hint { font-size: 13px; color: var(--text-muted); flex: 0 1 180px; min-width: 130px; }
+.gap-price { width: 130px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gap-input {
+    width: 130px;
+    padding: 7px 10px;
+    border: 1px solid var(--border-control);
+    border-radius: 8px;
+    font-size: 13px;
+}
+.gap-save { padding: 7px 12px; font-size: 12.5px; font-weight: 600; }
+
+/* --- Prisutveckling --- */
+.stats-section + .stats-section { margin-top: 16px; }
+.stats-basis { color: var(--text-muted); font-size: 12.5px; margin-top: 3px; margin-bottom: 12px; }
+.store-cmp-row { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--row-line-weak); }
+.store-cmp-row:last-child { border-bottom: 0; }
+.store-cmp-name { width: 200px; font-weight: 600; }
+.store-cmp-bar { flex: 1; min-width: 60px; }
+.store-cmp-count { width: 150px; font-size: 12.5px; color: var(--text-muted); }
+.store-cmp-prem { width: 110px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+th.sortable-col { cursor: pointer; user-select: none; }
+th.sortable-col:hover { color: var(--primary); }
+
+/* --- Loggar --- */
+.log-row { display: flex; align-items: baseline; gap: 14px; padding: 11px 18px; border-bottom: 1px solid var(--row-line-weak); }
+.log-row:last-child { border-bottom: 0; }
+.log-time { font-size: 12.5px; color: var(--text-faint); white-space: nowrap; width: 64px; flex: 0 0 64px; font-variant-numeric: tabular-nums; }
+.log-level { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 5px; width: 74px; flex: 0 0 74px; text-align: center; }
+.log-source { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; width: 150px; flex: 0 0 150px; overflow: hidden; text-overflow: ellipsis; }
+.log-msg { font-size: 13px; flex: 1; min-width: 0; word-break: break-word; }
+
+/* --- Colour helpers shared by several pages --- */
+.price-good { color: var(--success); font-weight: 600; }
+.price-warn { color: var(--warning); font-weight: 600; }
+.price-bad { color: var(--error); font-weight: 600; }
+.unit-price { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The link the winning kr/unit came from: which store, which package, what it costs. The
+   bare kr/unit is comparable but unbuyable — you cannot ask a shop for "1,79 kr/st". */
+.best-link { color: var(--text-faint); font-size: 12px; font-weight: 400; }
+/* The store's PRINTED unit price. Muted and NOT sortable on purpose: one store prints
+   kr/rulle and another kr/100g for the same goods, so sorting on it would confidently
+   recommend the wrong pack. It is a raw signal, not a comparison. */
+.store-says { color: var(--text-faint); font-weight: 400; }
+.needs-amount { border-color: var(--warning-border); color: var(--warning); font-weight: 600; }
+
+/* --- Modals. Unchanged in behaviour; only the radii and edges follow the new palette. --- */
 .modal {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.5);
+    background: rgba(15,23,42,0.45);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -682,7 +1057,7 @@
 }
 .modal-content {
     background: var(--bg-card);
-    border-radius: 8px;
+    border-radius: 12px;
     width: 90%;
     max-width: 520px;
     max-height: 90vh;
@@ -690,38 +1065,20 @@
        (a table, a canvas) push the dialog past the viewport instead of scrolling inside it. */
     min-width: 0;
     overflow-y: auto;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    box-shadow: 0 12px 40px rgba(15,23,42,0.18);
 }
-.modal-large {
-    max-width: 960px;
-}
-/* Phone: dialogs become bottom sheets — full width, thumb-reachable, scrollable. */
-@media (max-width: 768px) {
-    .modal { align-items: flex-end; }
-    .modal-content {
-        width: 100%;
-        max-width: 100%;
-        max-height: 92vh;
-        border-radius: 12px 12px 0 0;
-    }
-}
+.modal-large { max-width: 960px; }
 .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--row-line);
 }
-.modal-header h3 {
-    font-size: 16px;
-    font-weight: 600;
-}
-form {
-    padding: 20px;
-}
-.form-group {
-    margin-bottom: 16px;
-}
+.modal-header h3 { font-size: 16px; font-weight: 600; }
+form { padding: 20px; }
+.form-group { margin-bottom: 16px; }
 .form-group label {
     display: block;
     font-size: 13px;
@@ -732,198 +1089,49 @@ form {
 .form-input {
     width: 100%;
     padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 1px solid var(--border-control);
+    border-radius: 8px;
     font-size: 13px;
     background: var(--bg-card);
     color: var(--text);
 }
-.form-input:focus {
-    outline: none;
-    border-color: var(--primary);
-}
+.form-input:focus { outline-color: var(--primary); }
 .form-actions {
     display: flex;
     gap: 10px;
     justify-content: flex-end;
     padding-top: 8px;
 }
-.price-good {
-    color: var(--success);
-    font-weight: 600;
-}
-.price-warn {
-    color: var(--warning);
-    font-weight: 600;
-}
-.price-bad {
-    color: var(--error);
-    font-weight: 600;
-}
-.action-btn {
-    padding: 4px 8px;
-    font-size: 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    background: var(--bg-card);
-}
-.action-btn:hover {
-    background: var(--bg);
-}
-.chart-wrap {
-    height: 300px;
-    padding: 16px;
-}
-.pkg-entry-units {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-}
-.pkg-entry-units:empty {
-    display: none;
-}
-.entry-unit-active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-}
-.history-modes {
-    display: flex;
-    gap: 6px;
-    padding: 12px 20px 4px;
-}
-.history-modes .btn.active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-}
-/* The chart gets a real height of its own: without one, Chart.js's responsive canvas
-   collapses toward its default aspect and the graph reads as a cramped strip. */
-#price-history-chart-container {
-    height: 420px;
-    padding: 4px 20px 8px;
-}
-#price-history-table {
-    padding: 0 20px 20px;
-    overflow-x: auto;   /* wide history tables scroll HERE, never the page (v0.41.3 rule) */
-}
-@media (max-width: 768px) {
-    #price-history-chart-container {
-        height: 300px;
-        padding: 4px 8px 8px;
-    }
-    .history-modes { padding: 12px 8px 4px; }
-    #price-history-table { padding: 0 8px 16px; }
-}
-.links-table {
-    padding: 4px 0 16px;
-}
-th.sortable-col {
-    cursor: pointer;
-    user-select: none;
-}
-th.sortable-col:hover {
-    color: var(--primary);
-}
-/* The store's PRINTED unit price. Muted and NOT sortable on purpose: one store prints
-   kr/rulle and another kr/100g for the same goods, so sorting on it would confidently
-   recommend the wrong pack. It is a raw signal, not a comparison. */
-.store-says {
-    color: var(--text-muted);
-    font-weight: 400;
-}
-.unit-price {
-    font-weight: 600;
-}
-/* The link the winning kr/unit came from: which store, which package, what it actually costs.
-   The bare kr/unit is comparable but unbuyable — you cannot walk into a shop and ask for
-   "1.79 kr/st". */
-.best-link {
-    color: var(--text-muted);
-    font-size: 0.85em;
-    font-weight: 400;
-}
 /* Help text under a form field — where a control's meaning is not obvious from its label
    (an empty field that CLEARS a value rather than leaving it alone, say). */
 .form-hint {
     display: block;
     margin-top: 4px;
-    color: var(--text-muted);
-    font-size: 0.85em;
-}
-.needs-amount {
-    border-color: var(--warning);
-    color: var(--warning);
-    font-weight: 600;
-}
-/* --- The product filter row. Wraps rather than compressing: on the phone these become two
-   or three lines of full-width controls, which is the right shape for a thumb. --- */
-.filter-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 14px;
-}
-.filter-bar .search-input { min-width: 150px; }
-/* Left-flowing, right after the controls that changed it — feedback belongs next to the knob.
-   Pushed to the right edge it would also sit under the card header's open overflow menu. */
-.result-count {
-    margin-left: 4px;
+    color: var(--text-faint);
     font-size: 12px;
-    color: var(--text-muted);
-    white-space: nowrap;
 }
-/* display:contents dissolves the <details> so its children are flex items of .filter-bar —
-   the desktop row looks exactly as it did before the fold existed. The summary is hidden on
-   desktop, which also makes the details unclosable there. */
-.filter-more { display: contents; }
-.filter-more > summary {
-    display: none;
-    list-style: none;
-    user-select: none;
-}
-.filter-more > summary::-webkit-details-marker { display: none; }
-@media (max-width: 768px) {
-    .filter-bar .search-input { flex: 1 1 140px; min-width: 0; }
-    #product-search { flex: 1 1 160px; }
-    .filter-more > summary { display: inline-flex; flex: 0 0 auto; }
-}
-/* --- Phone. The app doubles as the shopping list IN the store, so these are not
-   nice-to-haves: name and price must share the screen without sideways scrolling, and a
-   fingertip must be enough. --- */
-/* Desktop has the verdict as its own column; the inline copy exists for the phone only.
-   (Base rule BEFORE the media block — same specificity, so source order decides.) */
-.deal-verdict-inline { display: none; }
-@media (max-width: 768px) {
-    /* iOS Safari auto-zooms any focused field under 16px — the page jumps on every search. */
-    .search-input, .form-input { font-size: 16px; }
-    /* Finger-sized targets (the row buttons were 12px text with 4px padding). */
-    .action-btn { padding: 9px 12px; }
-    .btn-sm { padding: 8px 12px; }
-    /* Secondary columns hide instead of forcing the table into sideways scroll — what they
-       carry is reachable elsewhere (search matches brand/category; recency and alert flags
-       live in the dialogs). The overflow-x container stays as the fallback for what is
-       still too wide. */
-    .col-secondary { display: none; }
-    /* Squeeze the chrome, not the content: tighter cell padding and plain headers buy the
-       last column its place on a 390px screen. */
-    th, td { padding: 8px 6px; }
-    th { letter-spacing: 0; font-size: 11px; }
-    .deal-verdict-inline { display: block; margin-top: 4px; }
-}
+/* Destructive, and pushed to the far left of a right-aligned .form-actions so it can never
+   be the button you hit on the way to Spara. */
+.btn-danger { color: var(--error); border-color: #fecaca; margin-right: auto; }
+.btn-danger:hover { background: var(--error-line); border-color: var(--error); color: var(--error); }
+.pkg-entry-units { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.pkg-entry-units:empty { display: none; }
+.entry-unit-active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.history-modes { display: flex; gap: 6px; padding: 12px 20px 4px; }
+.history-modes .btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+/* The chart gets a real height of its own: without one, Chart.js's responsive canvas
+   collapses toward its default aspect and the graph reads as a cramped strip. */
+#price-history-chart-container { height: 420px; padding: 4px 20px 8px; }
+#price-history-table { padding: 0 20px 20px; }
+.links-table { padding: 4px 0 16px; }
+/* The link dialog can be opened FROM the links panel, so it has to stack above it — and
+   so does the packaging dialog, which Fel & luckor opens the same way. */
+#modal-link-store, #modal-edit-packaging { z-index: 210; }
 
-/* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers the
-   keyboard). Deliberately NOT used inside the product table: #products-table-container is an
-   overflow-x container, which computes overflow-y to auto and would clip a dropdown on the
-   last row. In a card header there is nothing to clip against. --- */
+/* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers
+   the keyboard). --- */
 .menu { position: relative; display: inline-block; }
-.menu > summary {
-    list-style: none;
-    cursor: pointer;
-    line-height: 1;
-}
+.menu > summary { list-style: none; cursor: pointer; line-height: 1; }
 .menu > summary::-webkit-details-marker { display: none; }
 .menu-items {
     position: absolute;
@@ -935,14 +1143,14 @@ th.sortable-col:hover {
     padding: 4px;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(15,23,42,0.12);
     z-index: 60;
 }
 .menu-item {
     padding: 8px 10px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     background: none;
     color: var(--text);
     font-size: 13px;
@@ -951,97 +1159,155 @@ th.sortable-col:hover {
     cursor: pointer;
 }
 .menu-item:hover { background: var(--bg); }
-/* Destructive, and pushed to the far left of a right-aligned .form-actions so it can never be
-   the button you hit on the way to Spara. */
-.btn-danger { color: var(--error); border-color: #fecaca; margin-right: auto; }
-.btn-danger:hover { background: #fee2e2; border-color: var(--error); }
-/* The product row IS the Länkar button — that panel is what the table leads into. The NAME
-   carries the visible affordance (and is a real <button>, so it takes focus and Enter); the
-   rest of the row is a convenience target, quiet until hover. */
-.product-row { cursor: pointer; }
-.product-name {
-    padding: 0;
-    border: none;
-    background: none;
-    font: inherit;
-    font-weight: 500;
-    color: var(--text);
-    text-align: left;
-    cursor: pointer;
-}
-.product-row:hover .product-name { color: var(--primary); text-decoration: underline; }
-/* On Erbjudanden the name button sits in a row with no whole-row target, so it must
-   reveal itself on its own hover — on Produkter this is subsumed by the row rule above. */
-.product-name:hover { color: var(--primary); text-decoration: underline; }
-.product-name:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-/* NOT clickable: a whole-row target under the empty space beside the buttons reads as an
-   invisible third button. Only the buttons act in this cell. */
-.product-row td.row-actions { cursor: default; }
-/* The link dialog can be opened FROM the links panel, so it has to stack above it. */
-#modal-link-store { z-index: 210; }
 
-/* --- Statistik: sections stacked in one card, each carrying its own basis line so a number
-   can never be read without what it was computed from. --- */
-.stats-section { margin-bottom: 28px; }
-.stats-section:last-child { margin-bottom: 0; }
-.stats-title {
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 4px;
-}
-.stats-basis {
-    color: var(--text-muted);
-    font-size: 0.85em;
-    margin-bottom: 10px;
-}
-.stats-health {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-}
-.stats-health-box {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px;
-}
-.stats-health-box .stat-value { font-size: 20px; }
-/* A count that leads somewhere says so. */
-.stats-health-box.clickable { cursor: pointer; }
-.stats-health-box.clickable:hover { border-color: var(--primary); }
-.stats-health-box.clickable:hover .stat-value { color: var(--primary-dark); }
+/* ============================ PHONE ============================
+   Cards instead of tables, filter chips scrolling horizontally at the top, and every
+   touch target at least 44px. The app is used standing in the shop — this is the surface
+   that has to work, not a courtesy. */
+@media (max-width: 768px) {
+    #product-search { width: auto; flex: 1 1 160px; min-width: 0; }
+    .filter-bar .search-input { flex: 1 1 140px; min-width: 0; }
+    .filter-more > summary { display: inline-flex; flex: 0 0 auto; }
+    /* The chips scroll sideways in their own strip rather than stacking three rows deep. */
+    .chip-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        width: 100%;
+        padding-bottom: 2px;
+    }
+    .chip { flex: 0 0 auto; padding: 6px 12px; }
 
-/* --- Erbjudanden: two groups, one heading each. The second is collapsed because a campaign
-   that is not the cheapest way to buy the product is an ANSWER ("yes, we saw it — it still
-   loses to Willys"), not a recommendation. --- */
-.deal-group-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    margin: 4px 0 8px;
-}
-.deal-group-extra {
-    margin-top: 16px;
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
-}
-.deal-group-extra > summary {
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-muted);
-    list-style-position: inside;
-}
-.deal-group-extra > summary:hover { color: var(--text); }
-/* Muted, not hidden: an offer older than the check cadence may already be over. */
-.deal-stale { color: var(--text-muted); }
+    .basket-strip { padding: 12px 14px; gap: 8px 12px; }
+    .basket-link.is-error, .basket-link.is-gap { margin-left: 0; }
 
-/* Hash-routed pages: exactly one .app-page is visible; the sidebar picks it. */
-.app-page { display: none; }
-.app-page.active { display: block; }
+    /* Deals and watches become one card per row; the container card gets out of the way.
+       Products stay ONE card with a two-column list — a card per product would be six
+       screens of chrome for what is a scan. */
+    .list-flat { border: 0; background: transparent; border-radius: 0; overflow: visible; }
 
+    /* The offer card: name and price on one baseline, then meta, terms, the span bar, and
+       a foot holding the jfr-pris and the verdict sentence. The wrappers melt with
+       display:contents so the leaves can be placed directly — the desktop grouping exists
+       only to keep the right-hand zones flush when the row wraps. */
+    .deal-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        column-gap: 10px;
+        grid-template-areas:
+            "name  price"
+            "meta  meta"
+            "terms terms"
+            "span  span"
+            "unit  unit"
+            "verdict verdict";
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--bg-card);
+        margin-bottom: 10px;
+    }
+    .deal-row.is-unknown { background: var(--hover); }
+    .deal-main, .deal-right, .deal-price { display: contents; }
+    .deal-head { grid-area: name; align-self: baseline; }
+    .deal-name, .deal-pkg { font-size: 15.5px; }
+    .deal-price-main { grid-area: price; align-self: baseline; text-align: right; font-size: 17px; }
+    .deal-meta { grid-area: meta; }
+    .deal-terms { grid-area: terms; justify-self: start; }
+    .deal-span { grid-area: span; min-width: 0; margin-top: 9px; }
+    .deal-unit {
+        grid-area: unit;
+        /* The foot reads left-to-right: jfr-pris, then the verdict sentence. Without this
+           it inherits the price zone's right alignment. */
+        text-align: left;
+        margin-top: 9px;
+        padding-top: 9px;
+        border-top: 1px solid var(--row-line);
+        font-size: 13px;
+        font-weight: 700;
+    }
+    .deal-verdict { grid-area: verdict; margin-top: 4px; font-size: 12.5px; }
+
+    /* Name and price on one baseline, then the metadata and the chip, then the winning
+       link and the two actions. Same technique as the offer card: the desktop wrappers
+       melt with display:contents so the leaves can be placed directly — they exist only
+       to keep the right-hand zones flush when a wide row wraps. The actions stay (Historik
+       has no other way in on a phone), they just move to the last line. */
+    .p-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        column-gap: 10px;
+        row-gap: 4px;
+        grid-template-areas:
+            "name  price"
+            "meta  tag"
+            "best  act";
+        padding: 12px;
+    }
+    .p-main, .p-right, .p-price { display: contents; }
+    .p-name { grid-area: name; align-self: baseline; }
+    .p-unit { grid-area: price; justify-self: end; font-size: 15px; }
+    .p-meta { grid-area: meta; }
+    .p-right > .badge { grid-area: tag; justify-self: end; align-self: center; }
+    .p-best { grid-area: best; text-align: left; }
+    /* Context columns fold away rather than squeezing the table into an unreadable
+       ribbon: name, price and the change are what a phone is asked for. */
+    .col-secondary { display: none; }
+    .p-actions { grid-area: act; justify-self: end; margin-top: 4px; }
+
+    /* Name and the current value on one baseline, then what the target is and how far
+       away, then the bar, then the butik. The wrappers melt so the leaves can be placed —
+       same technique as the offer and product cards. */
+    .w-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        column-gap: 10px;
+        grid-template-areas:
+            "name  value"
+            "meta  meta"
+            "prog  prog"
+            "store act";
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--bg-card);
+        padding: 12px;
+        margin-bottom: 10px;
+    }
+    .w-row.is-met { background: var(--success-row); }
+    .w-main, .w-right, .w-now { display: contents; }
+    .w-name { grid-area: name; align-self: baseline; }
+    .w-now-value { grid-area: value; justify-self: end; align-self: baseline; }
+    .w-meta { grid-area: meta; }
+    .w-progress { grid-area: prog; width: auto; max-width: none; margin-top: 8px; }
+    .w-store { grid-area: store; align-self: center; text-align: left; }
+    .w-actions { grid-area: act; justify-self: end; margin-top: 10px; }
+
+    .issue-row, .log-row { padding: 12px; }
+    .issue-right { margin-left: 0; width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+    .issue-impact, .issue-hint, .gap-hint { flex: 1 1 100%; min-width: 0; }
+    .mismatch-nums { text-align: left; }
+    /* Full-width entry, thumb-sized save — this is where a gap actually gets closed. */
+    .gap-input { flex: 1 1 auto; width: auto; min-width: 0; }
+    .gap-price { width: auto; }
+    .gap-save { padding: 10px 14px; }
+
+    .store-cmp-row { flex-wrap: wrap; }
+    .store-cmp-name { width: auto; flex: 1 1 auto; }
+    .store-cmp-bar { flex: 1 1 100%; order: 3; }
+    .store-cmp-count { width: auto; order: 4; }
+    .store-cmp-prem { width: auto; }
+
+    .log-row { flex-wrap: wrap; gap: 6px 8px; }
+    .log-time, .log-level, .log-source { flex: 0 0 auto; width: auto; }
+    .log-msg { flex: 1 1 100%; }
+
+    /* Dialogs become bottom sheets — full width, thumb-reachable, scrollable. */
+    .modal { align-items: flex-end; }
+    .modal-content { width: 100%; max-width: 100%; max-height: 92vh; border-radius: 12px 12px 0 0; }
+    #price-history-chart-container { height: 300px; padding: 4px 8px 8px; }
+    .history-modes { padding: 12px 8px 4px; }
+    #price-history-table { padding: 0 8px 16px; }
+}
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
 const API_BASE = '';
@@ -1051,6 +1317,9 @@ const API_BASE = '';
 const IS_ADMIN = document.body.classList.contains('role-admin');
 let allProducts = [];
 let allStores = [];
+let allDeals = [];
+let watchesCache = [];
+let schedulerStatus = null;
 
 function showToast(message, type='success') {
     const toast = document.getElementById('toast');
@@ -1105,65 +1374,84 @@ async function apiDelete(path) {
     return r.json();
 }
 
-async function loadStats() {
-    try {
-        const [products, watches, deals, sched] = await Promise.all([
-            apiGet('/products'),
-            apiGet('/watches'),
-            apiGet('/deals'),
-            apiGet('/scheduler/status')
-        ]);
-        document.getElementById('stat-products').textContent = products.length;
-        document.getElementById('stat-watches').textContent = watches.length || 0;
-        // The COUNT that means something: campaigns that are actually the cheapest way to buy
-        // the product. Counting every offer made the box lead with a number half of which the
-        // deals page itself files under "ej billigast" — the tooltip still gives the total.
-        const dealGroups = rankDeals(deals);
-        const dealsEl = document.getElementById('stat-deals');
-        dealsEl.textContent = dealGroups.best.length;
-        dealsEl.title = [
-            dealGroups.best.length + ' billigast per enhet',
-            dealGroups.unknown.length + ' kan inte jämföras',
-            dealGroups.worse.length + ' kampanjer som ändå inte är billigast'
-        ].join('\n');
-        // Paused (auto-set while you add products) overrides the PÅ/AV state — it's why the
-        // background prices aren't refreshing, so say so instead of showing a misleading "PÅ".
-        const schedEl = document.getElementById('stat-scheduler');
-        // parseUtc, NOT new Date(): paused_until is naive UTC, and a bare timestamp parses as
-        // LOCAL time — in CEST that read the pause 2h in the past, so it always showed PÅ.
-        const pausedUntil = parseUtc(sched.paused_until);
-        // A blocked store outranks a pause: a pause is something you caused by adding products
-        // and it lapses on its own, while a block means a butik is actively refusing us and
-        // its prices will simply stop updating. Without this the only trace was a log line.
-        const blocked = Array.isArray(sched.blocked_stores) ? sched.blocked_stores : [];
-        if (blocked.length) {
-            const lines = blocked.map(function (b) {
-                const until = parseUtc(b.blocked_until);
-                const t = until ? until.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'}) : '?';
-                return b.store + ' till ' + t + ' (' + b.consecutive_blocks + ' i rad)';
-            });
-            schedEl.textContent = 'BLOCKERAD';
-            schedEl.style.color = 'var(--error)';
-            schedEl.title = 'Butiker som blockerar oss (botskydd) — alla anrop dit pausas:\n' + lines.join('\n');
-        } else if (pausedUntil && pausedUntil > new Date()) {
-            const t = pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
-            schedEl.textContent = 'PAUSAD';
-            schedEl.style.color = 'var(--warning)';
-            schedEl.title = 'Bakgrundskontroller pausade till ' + t + ' — förlängs varje gång du lägger till en produkt';
-        } else {
-            schedEl.textContent = sched.running ? 'PÅ' : 'AV';
-            schedEl.style.color = sched.running ? 'var(--success)' : 'var(--error)';
-            schedEl.title = '';
-        }
-        renderFreshness(sched);
-    } catch (e) {
-        console.error('Stats load failed', e);
-    }
+// --- Formatting. ONE set of rules, used by every page ---
+//
+// Money is always two decimals with a comma; a raw 42.9 reads as a truncated number, not
+// as a price. Percentages carry a real minus sign (U+2212, not a hyphen) and a thin space
+// before the %. A missing value is an em dash — never a 0, which would be a confident
+// claim about something we did not observe.
+const NUM2 = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const DASH = '\u2014';
+
+function formatSek(value) {
+    return typeof value === 'number' && isFinite(value) ? NUM2.format(value) : String(value);
 }
 
-async function loadStores() {
-    allStores = await apiGet('/stores');
+function kr(value) {
+    return value == null ? DASH : formatSek(value) + ' kr';
 }
+
+// "3,75 kr/st" — the unit comes from the product's comparison unit, never from the store's
+// printed jämförpris (stores print in different units; D-05).
+function unitKr(value, unit) {
+    return value == null ? DASH : formatSek(value) + ' ' + unitPriceHeading(unit);
+}
+
+function formatPct(value, decimals = 1) {
+    if (value == null) return DASH;
+    const sign = value < 0 ? '\u2212' : '+';
+    // U+202F NARROW NO-BREAK SPACE, not U+2009 THIN SPACE: a thin space is a break
+    // opportunity, and in a narrow column the % wraps to a line of its own.
+    return sign + Math.abs(value).toFixed(decimals).replace('.', ',') + '\u202f%';
+}
+
+// The buy-margin: always a saving or nothing, so it carries no sign of its own.
+function formatMargin(value, decimals = 1) {
+    return Math.abs(value).toFixed(decimals).replace('.', ',') + '\u202f%';
+}
+
+const NUMBER_WORDS = ['noll', 'en', 'två', 'tre', 'fyra', 'fem', 'sex', 'sju', 'åtta', 'nio',
+                      'tio', 'elva', 'tolv'];
+
+function numberWord(n, capitalize) {
+    const w = NUMBER_WORDS[n] != null ? NUMBER_WORDS[n] : String(n);
+    return capitalize ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+}
+
+// "ICA Maxi Sandviken" -> "ICA Maxi Sandvikens", "Willys" -> "Willys". Swedish genitive
+// takes no extra s after s/x/z, which is exactly the case that matters here (Willys).
+function possessive(name) {
+    const n = String(name || '');
+    return /[sxz]$/i.test(n) ? n : n + 's';
+}
+
+// DB timestamps are naive UTC — parse them AS UTC or Swedish wall-clock drifts 1-2h.
+function parseUtc(iso) {
+    if (!iso) return null;
+    return new Date(/Z|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+}
+
+function formatWhen(iso) {
+    const d = parseUtc(iso);
+    if (!d || isNaN(d)) return '';
+    return d.toLocaleString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// "fre 09:12" — the tight form, for places where the full date would crowd the number
+// beside it out of the row.
+function formatShortWhen(iso) {
+    const d = parseUtc(iso);
+    if (!d || isNaN(d)) return '';
+    return d.toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDay(iso) {
+    const d = parseUtc(iso);
+    if (!d || isNaN(d)) return '';
+    return d.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
+}
+
+function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
 // The price actually paid — the offer when there is one, else the ordinary price. The JS twin of
 // _effective_price() in api/admin.py. Used ONLY for display of the winning link's pack price:
@@ -1174,17 +1462,150 @@ function effectivePrice(link) {
     return link.offer_price_sek != null ? link.offer_price_sek : link.price_sek;
 }
 
-// Money, always to the öre: a raw 42.9 reads as a truncated number, not as a price.
-function formatSek(value) {
-    return typeof value === 'number' ? value.toFixed(2) : String(value);
-}
-
 // A human label for the link's package: what the store called it, else the amount we hold.
 function packageLabel(link, unit) {
     if (link.package_size) return link.package_size;
     if (link.package_quantity != null) return link.package_quantity + (unit ? ' ' + unit : '');
     return null;
 }
+
+// Every store-name emission is a way IN to the store's own page — the app's endpoint
+// is a purchase decision, not a table row.
+function storeLinkHtml(name, url) {
+    if (!url) return escapeHtml(name);
+    return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">'
+        + escapeHtml(name) + ' &#8599;</a>';
+}
+
+// --- Scope: Allt / Livsmedel / Apotek ---
+//
+// store_type on the server for Att köpa (/deals?store_type=), and the same question answered
+// client-side for Produkter (a product has no type of its own — its LINKS' stores do). One
+// state, two controls: the header segment and the chip row are the same switch.
+const SCOPE_STORAGE = 'pt.scope';
+let scope = '';
+
+function storeTypeBySlug() {
+    const map = {};
+    for (const s of (allStores || [])) map[s.slug] = s.store_type;
+    return map;
+}
+
+function productInScope(p, types) {
+    if (!scope) return true;
+    return (p.stores || []).some(s => types[s.store_slug] === scope);
+}
+
+function setScope(value) {
+    if (scope === value) return;
+    scope = value;
+    try { sessionStorage.setItem(SCOPE_STORAGE, value); } catch (e) { /* private mode */ }
+    applyScopeControls();
+    loadDeals();
+    renderProducts();
+}
+
+function applyScopeControls() {
+    for (const btn of document.querySelectorAll('#scope-switch button')) {
+        btn.classList.toggle('active', (btn.getAttribute('data-scope') || '') === scope);
+    }
+}
+
+// --- Sidebar: live counters and the scheduler line ---
+//
+// The counters ARE the old global stat row, moved to where they cost no vertical space.
+// Each is set by the loader that owns the list it counts, so the number and the page can
+// never disagree.
+function setNavCount(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value ? String(value) : '';
+}
+
+// Fel & luckor counts the same rows the page lists — silent errors + broken links + links
+// without an amount — derived from the lists, not from a separate figure. Red the moment a
+// SILENT error is among them (we are showing a wrong number right now), amber otherwise.
+function issueCounts() {
+    const q = (statsData && statsData.data_quality) || {};
+    const regressions = (q.tier_regressions || []).length;
+    const mismatches = (q.unit_price_mismatches || []).length;
+    const broken = brokenLinkRows().length;
+    const gaps = missingAmountRows().length;
+    return {
+        regressions, mismatches, broken, gaps,
+        silent: regressions + mismatches,
+        total: regressions + mismatches + broken + gaps
+    };
+}
+
+function updateIssueBadges() {
+    const counts = issueCounts();
+    const el = document.getElementById('nav-count-luckor');
+    if (el) {
+        el.textContent = counts.total ? String(counts.total) : '';
+        el.classList.toggle('count-error', counts.silent > 0);
+        el.classList.toggle('count-gap', counts.silent === 0);
+    }
+    renderBasketStrip();
+}
+
+// The scheduler line in the sidebar foot: is it running, when did it last look, when next.
+// A blocked store outranks a pause — a pause is something you caused by adding products and
+// it lapses on its own, while a block means a butik is actively refusing us and its prices
+// will simply stop updating.
+function renderSchedulerFooter(sched) {
+    const state = document.getElementById('sched-state');
+    const text = document.getElementById('sched-state-text');
+    const when = document.getElementById('sched-when');
+    if (!state || !text || !when) return;
+    // parseUtc, NOT new Date(): paused_until is naive UTC, and a bare timestamp parses as
+    // LOCAL time — in CEST that read the pause 2h in the past, so it always showed "aktiv".
+    const pausedUntil = parseUtc(sched.paused_until);
+    const blocked = Array.isArray(sched.blocked_stores) ? sched.blocked_stores : [];
+    state.className = 'sched-state';
+    if (blocked.length) {
+        state.classList.add('is-blocked');
+        text.textContent = 'Butik blockerar oss';
+        state.title = 'Butiker som blockerar oss (botskydd) — alla anrop dit pausas:\n'
+            + blocked.map(function (b) {
+                const until = parseUtc(b.blocked_until);
+                const t = until ? until.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'}) : '?';
+                return b.store + ' till ' + t + ' (' + b.consecutive_blocks + ' i rad)';
+            }).join('\n');
+    } else if (pausedUntil && pausedUntil > new Date()) {
+        state.classList.add('is-paused');
+        text.textContent = 'Pausad till ' + pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
+        state.title = 'Bakgrundskontroller pausade — förlängs varje gång du lägger till en produkt';
+    } else if (sched.running) {
+        text.textContent = 'Schemaläggare aktiv';
+        state.title = '';
+    } else {
+        state.classList.add('is-off');
+        text.textContent = 'Schemaläggare av';
+        state.title = '';
+    }
+    const parts = [];
+    if (sched.last_check_at) parts.push('Senast ' + formatShortWhen(sched.last_check_at));
+    if (sched.next_check_at) parts.push('nästa ' + formatShortWhen(sched.next_check_at));
+    when.textContent = parts.join(' · ');
+}
+
+// Kept under its old name because a dozen call sites in the dialogs refresh "the stats"
+// after a write. What it refreshes now is the scheduler line and the nav counters.
+async function loadStats() {
+    try {
+        schedulerStatus = await apiGet('/scheduler/status');
+        renderSchedulerFooter(schedulerStatus);
+    } catch (e) {
+        console.error('Scheduler status failed', e);
+    }
+    updateIssueBadges();
+}
+
+async function loadStores() {
+    allStores = await apiGet('/stores');
+}
+
+// --- Produkter ---
 
 // The product row's ONE comparable number: the cheapest kr/unit across the product's links.
 //
@@ -1208,76 +1629,78 @@ function bestUnitPrice(product) {
     return priced[0];
 }
 
-// The product row's price cell. Three honest states, never a blank and never a 0 (D-02):
+// The product row's price zone. Three honest states, never a blank and never a 0 (D-02):
 //   1. at least one link has an amount -> cheapest kr/unit + the link it came from
 //   2. no link has an amount           -> lowest ABSOLUTE price, explicitly labelled as not
 //                                         comparable, because two pack sizes are not
 //   3. no link has a price at all      -> an em dash
-// A link with no amount cannot enter the minimum, so the row would otherwise quietly compare
-// fewer links than it lists stores. It says so instead.
-function buildBestPriceCell(product, links) {
+function productPriceHtml(product) {
     const unit = product.unit;
-    const missing = links.filter(s => s.needs_amount === true).length;
-    const missingBadge = missing
-        ? ` <span class="badge badge-warning">${missing} utan mängd</span>`
-        : '';
-
+    const links = product.stores || [];
     const best = bestUnitPrice(product);
     if (best) {
-        const parts = [best.store_name, packageLabel(best, unit), formatSek(effectivePrice(best)) + ' kr']
+        const cls = best.offer_price_sek != null ? 'p-unit has-offer' : 'p-unit';
+        const parts = [best.store_name, packageLabel(best, unit), kr(effectivePrice(best))]
             .filter(part => part != null);
-        return `<span class="unit-price">${escapeHtml(best.unit_price_sek.toFixed(2))} `
-             + `${escapeHtml(unitPriceHeading(unit))}</span>${missingBadge}`
-             + `<div class="best-link">${escapeHtml(parts.join(' · '))}</div>`;
+        return `<div class="${cls}">${escapeHtml(unitKr(best.unit_price_sek, unit))}</div>`
+             + `<div class="p-best">${escapeHtml(parts.join(' · '))}</div>`;
     }
-
     const pricedLinks = links.filter(s => effectivePrice(s) != null);
-    if (!pricedLinks.length) return '&#8212;';
-
-    const cheapest = pricedLinks.reduce(
-        (a, b) => (effectivePrice(b) < effectivePrice(a) ? b : a)
-    );
-    return `<span class="unit-price">${escapeHtml(formatSek(effectivePrice(cheapest)))} kr</span>${missingBadge}`
-         + `<div class="best-link">${escapeHtml(cheapest.store_name)} &#183; jfr-pris saknas</div>`;
+    if (!pricedLinks.length) return `<div class="p-unit no-unit">${DASH}</div>`;
+    const cheapest = pricedLinks.reduce((a, b) => (effectivePrice(b) < effectivePrice(a) ? b : a));
+    return `<div class="p-unit no-unit">${escapeHtml(kr(effectivePrice(cheapest)))}</div>`
+         + `<div class="p-best">${escapeHtml(cheapest.store_name)} &#183; jfr-pris saknas</div>`;
 }
 
-function buildProductsTable(products, filtered) {
+// One chip per row, or none. "Inget att säga" is a legitimate state and gets no decoration.
+function productTagHtml(product) {
+    const links = product.stores || [];
+    if (links.some(s => s.offer_price_sek != null)) {
+        return '<span class="badge badge-success">erbjudande</span>';
+    }
+    if (links.some(s => s.needs_amount === true)) {
+        return '<span class="badge badge-warning">saknar mängd</span>';
+    }
+    if (new Set(links.map(s => s.store_name)).size === 1) {
+        return '<span class="badge badge-muted">en butik</span>';
+    }
+    return '';
+}
+
+function buildProductsList(products, filtered) {
     if (!products.length) {
         return filtered
-            ? '<div class="empty-state"><div class="empty-state-icon">&#128269;</div>'
-              + '<p>Ingen produkt matchar filtret.</p></div>'
-            : '<div class="empty-state"><div class="empty-state-icon">&#128230;</div><p>Inga produkter än. Lägg till en för att komma igång.</p></div>';
+            ? '<div class="card"><div class="empty-state"><div class="empty-state-icon">&#128269;</div>'
+              + '<p>Ingen produkt matchar filtret.</p></div></div>'
+            : '<div class="card"><div class="empty-state"><div class="empty-state-icon">&#128230;</div>'
+              + '<p>Inga produkter än. Lägg till en för att komma igång.</p></div></div>';
     }
-    // The ROW is the primary action: it opens Länkar, the panel this whole table exists to
-    // lead into. Five buttons per row (Länkar / Länka / Historik / Redigera / Ta bort) meant
-    // 75 buttons on a 15-product list, two of which differed by one letter while doing
-    // completely different things. What is left is the pair you press weekly; the rest moved
-    // to where its context already is — Länka into the Länkar panel, Ta bort into the edit
-    // dialog next to the fields it destroys.
-    // col-secondary hides on the phone: search already matches brand and category, so the
-    // columns that must share a phone screen are name, count, price and the two buttons.
-    let html = '<table><thead><tr><th>Namn</th><th class="col-secondary">Varumärke</th><th class="col-secondary">Kategori</th><th class="col-secondary">Butiker</th><th>Lägsta jfr-pris</th><th>Åtgärder</th></tr></thead><tbody>';
+    // The ROW is the Länkar button: that panel is what this list leads into. The name is a
+    // real <button> so it takes focus and answers Enter; the rest of the row is a quiet
+    // convenience target, and the actions cell is excluded from it (empty space beside two
+    // buttons that silently opens a panel is an invisible third button).
+    let html = '<div class="card">';
     for (const p of products) {
         const links = p.stores || [];
-        // COUNT, not names: linked store names made this column swallow the table, and
-        // the names (with outbound links) already live behind the Länkar button.
-        // Distinct display names, so two pack sizes at one butik still count as one.
         const storeCount = new Set(links.map(s => s.store_name)).size;
-        const storeCell = storeCount ? String(storeCount) : '&#8212;';
-        html += `<tr class="product-row" data-action="links" data-id="${escapeHtml(p.id)}">
-            <td><button type="button" class="product-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></td>
-            <td class="col-secondary">${escapeHtml(p.brand || '-')}</td>
-            <td class="col-secondary">${escapeHtml(p.category || '-')}</td>
-            <td class="col-secondary">${storeCell}</td>
-            <td>${buildBestPriceCell(p, links)}</td>
-            <td class="row-actions">
-                <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
-                ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>` : ''}
-            </td>
-        </tr>`;
+        const meta = [p.brand, p.category, storeCount + ' butik' + (storeCount === 1 ? '' : 'er')]
+            .filter(Boolean).join(' · ');
+        html += `<div class="p-row" data-action="links" data-id="${escapeHtml(p.id)}">
+            <div class="p-main">
+                <button type="button" class="p-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>
+                <div class="p-meta">${escapeHtml(meta)}</div>
+            </div>
+            <div class="p-right">
+                ${productTagHtml(p)}
+                <div class="p-price">${productPriceHtml(p)}</div>
+                <div class="p-actions">
+                    <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
+                    ${IS_ADMIN ? `<button class="action-btn" data-action="edit" data-id="${escapeHtml(p.id)}">Redigera</button>` : ''}
+                </div>
+            </div>
+        </div>`;
     }
-    html += '</tbody></table>';
-    return html;
+    return html + '</div>';
 }
 
 // --- Product filtering, in the browser ---
@@ -1289,15 +1712,15 @@ function buildProductsTable(products, filtered) {
 // allProducts is now always the full list; the filter lives between it and the render.
 // The server keeps its ?search= param: the REST API and MCP still use it.
 const PRODUCT_FILTER_STORAGE = 'pt.product-filters';
+// The four controls that are <input>/<select> elements and wire up by id. Status and sort
+// are chips (see #product-chips) and live in the same state object without being in here.
 const PRODUCT_FILTER_CONTROLS = [
     ['product-search', 'search'],
     ['filter-category', 'category'],
     ['filter-store', 'store'],
-    ['filter-missing', 'missing'],
-    ['filter-status', 'status'],
-    ['product-sort', 'sort']
+    ['filter-missing', 'missing']
 ];
-const PRODUCT_FILTER_KEYS = PRODUCT_FILTER_CONTROLS.map(c => c[1]);
+const PRODUCT_FILTER_KEYS = PRODUCT_FILTER_CONTROLS.map(c => c[1]).concat(['status', 'sort']);
 const EMPTY_PRODUCT_FILTERS = {
     search: '', category: '', store: '', missing: '', status: '', sort: 'name'
 };
@@ -1351,11 +1774,21 @@ function missingFromStore(p, slug) {
 }
 
 function productFiltersActive() {
-    return PRODUCT_FILTER_KEYS.some(k => productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]);
+    return scope !== '' || PRODUCT_FILTER_KEYS.some(k => productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]);
 }
 
-function productMatchesFilters(p) {
+function productMatchesStatus(p, status) {
+    const links = p.stores || [];
+    if (status === 'offer') return links.some(s => s.offer_price_sek != null);
+    if (status === 'needs_amount') return links.some(s => s.needs_amount === true);
+    if (status === 'no_price') return !links.some(s => effectivePrice(s) != null);
+    if (status === 'broken') return links.some(s => s.is_broken === true);
+    return true;
+}
+
+function productMatchesFilters(p, types) {
     const f = productFilters;
+    if (!productInScope(p, types || storeTypeBySlug())) return false;
     if (f.search) {
         // Every word must appear somewhere, in any order: "lambi hushåll" finds it whether
         // the brand sits in the name or in the brand column.
@@ -1367,15 +1800,9 @@ function productMatchesFilters(p) {
     const links = p.stores || [];
     if (f.store && !links.some(s => s.store_name === f.store)) return false;
     // Kombinerbart med butiksfiltret: "Butik: Willys" + "Saknar ICA" är precis frågan
-    // "vad jämför jag inte?" — men var för sig duger de oftast, eftersom nästan allt
-    // ligger i båda kedjorna.
+    // "vad jämför jag inte?".
     if (f.missing && !missingFromStore(p, f.missing)) return false;
-    // The status filters are the ways a product needs attention — the "saknar
-    // mängd" badge already counts one of them; this is how you work through them in a batch.
-    if (f.status === 'offer' && !links.some(s => s.offer_price_sek != null)) return false;
-    if (f.status === 'needs_amount' && !links.some(s => s.needs_amount === true)) return false;
-    if (f.status === 'no_price' && links.some(s => effectivePrice(s) != null)) return false;
-    if (f.status === 'broken' && !links.some(s => s.is_broken === true)) return false;
+    if (f.status && !productMatchesStatus(p, f.status)) return false;
     return true;
 }
 
@@ -1423,9 +1850,8 @@ function buildFacetOptions() {
     // Täckningsluckor. Varje alternativ bär ANTALET produkter det skulle visa, vilket gör
     // tröskelvärden onödiga: "Saknar ICA (5)" är en åtgärdslista, "Saknar Lyko (19)" ser
     // man direkt att det inte är en jämförelselucka utan bara en butik du knappt använder.
-    // Minsta lucka först — det är den som är närmast att stänga. Kedjor utan lucka bjuds
-    // inte alls, samma regel som för de andra facetterna: ett filter som ger noll rader
-    // ska aldrig gå att välja.
+    // Minsta lucka först. Kedjor utan lucka bjuds inte alls, samma regel som för de andra
+    // facetterna: ett filter som ger noll rader ska aldrig gå att välja.
     const linked = new Set(
         allProducts.flatMap(p => (p.stores || []).map(s => s.store_slug)).filter(Boolean)
     );
@@ -1440,34 +1866,53 @@ function buildFacetOptions() {
         .sort((a, b) => a.count - b.count || String(a.name).localeCompare(String(b.name), 'sv'))
         .map(g => ({ value: g.value, label: `Saknar ${g.name} (${g.count})` }));
     fillFacet('filter-missing', 'missing', 'Täckning: alla', gaps);
+}
 
-    // "Trasig länk" is a DATA-driven option among the static status choices: it appears
-    // only when the server flagged at least one link (is_broken — repeated non-blocked
-    // failures, domain/link_health.py), and carries the count like the täckning options.
-    // Offered empty it would be a filter that always returns zero rows — the rule the
-    // other facets already follow. If a stored filter points at a removed option,
-    // applyFiltersToControls clears it.
-    const brokenCount = allProducts.filter(
-        p => (p.stores || []).some(s => s.is_broken === true)
+// The chips: omfång, status and sort order. Built FROM THE DATA with their counts, and a
+// status chip appears only when it would return something — the rule the selects follow too.
+function renderProductChips() {
+    const types = storeTypeBySlug();
+    const inScope = allProducts.filter(p => productInScope(p, types));
+    const countScope = t => allProducts.filter(
+        p => (p.stores || []).some(s => types[s.store_slug] === t)
     ).length;
-    const statusEl = document.getElementById('filter-status');
-    let brokenOpt = statusEl.querySelector('option[value="broken"]');
-    if (brokenCount > 0) {
-        if (!brokenOpt) {
-            brokenOpt = document.createElement('option');
-            brokenOpt.value = 'broken';
-            statusEl.appendChild(brokenOpt);
-        }
-        brokenOpt.textContent = `Trasig länk (${brokenCount})`;
-    } else if (brokenOpt) {
-        brokenOpt.remove();
+    const chips = [];
+    const allActive = !scope && !productFilters.status;
+    chips.push(`<button type="button" class="chip${allActive ? ' active' : ''}" data-chip="all">Alla ${allProducts.length}</button>`);
+    for (const [type, label] of [['grocery', 'Livsmedel'], ['pharmacy', 'Apotek']]) {
+        const n = countScope(type);
+        if (!n) continue;
+        chips.push(`<button type="button" class="chip${scope === type ? ' active' : ''}" `
+            + `data-chip="scope" data-value="${type}">${label} ${n}</button>`);
     }
+    const statuses = [
+        ['offer', 'Har erbjudande', ''],
+        ['needs_amount', 'Luckor', 'chip-warn'],
+        ['no_price', 'Saknar pris', ''],
+        ['broken', 'Trasig länk', 'chip-warn']
+    ];
+    for (const [value, label, extra] of statuses) {
+        const n = inScope.filter(p => productMatchesStatus(p, value)).length;
+        if (!n) continue;
+        const active = productFilters.status === value;
+        chips.push(`<button type="button" class="chip ${extra}${active ? ' active' : ''}" `
+            + `data-chip="status" data-value="${value}">${label} ${n}</button>`);
+    }
+    // The label names the ORDER it gives, not the one in force — a chip is read as the
+    // thing pressing it does.
+    const aisle = productFilters.sort === 'aisle';
+    chips.push(`<button type="button" class="chip${aisle ? ' active' : ''}" data-chip="sort">`
+        + 'Sortera: butiksordning</button>');
+    document.getElementById('product-chips').innerHTML = chips.join('');
 }
 
 function renderProducts() {
+    const types = storeTypeBySlug();
     const active = productFiltersActive();
-    const rows = sortProducts(allProducts.filter(productMatchesFilters));
-    document.getElementById('products-table-container').innerHTML = buildProductsTable(rows, active);
+    const rows = sortProducts(allProducts.filter(p => productMatchesFilters(p, types)));
+    document.getElementById('products-table-container').innerHTML = buildProductsList(rows, active);
+    renderProductChips();
+
     const count = document.getElementById('product-count');
     count.textContent = rows.length === allProducts.length
         ? allProducts.length + ' produkter'
@@ -1475,10 +1920,21 @@ function renderProducts() {
     document.getElementById('filter-clear').style.display = active ? '' : 'none';
     // The phone folds the facet selects away (see #filter-more) — an active one must still
     // announce itself, or a forgotten filter reads as a shrunken product list.
-    const folded = PRODUCT_FILTER_KEYS.filter(
-        k => k !== 'search' && productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]
+    const folded = ['category', 'store', 'missing'].filter(
+        k => productFilters[k] !== EMPTY_PRODUCT_FILTERS[k]
     ).length;
     document.getElementById('filter-more-count').textContent = folded ? ` (${folded})` : '';
+
+    // The page's own basis line: what the catalogue holds, and what is blocking comparisons.
+    const links = allProducts.flatMap(p => p.stores || []);
+    const priced = allProducts.filter(p => bestUnitPrice(p)).length;
+    const noAmount = links.filter(s => s.needs_amount === true).length;
+    const basis = [
+        allProducts.length + ' produkter',
+        priced + ' har ett jämförpris',
+        noAmount + ' länk' + (noAmount === 1 ? '' : 'ar') + ' saknar mängd'
+    ];
+    document.getElementById('product-basis').textContent = basis.join(' · ');
 }
 
 function setProductFilter(key, value) {
@@ -1512,10 +1968,13 @@ function restoreProductFilters() {
                 if (typeof saved[key] === 'string') productFilters[key] = saved[key];
             }
         }
+        const savedScope = sessionStorage.getItem(SCOPE_STORAGE);
+        if (savedScope === 'grocery' || savedScope === 'pharmacy') scope = savedScope;
     } catch (e) { productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS); }
-    // State only. The facet <select>s have no options until the products land, and writing a
-    // restored value into an empty <select> would silently reset it to "Alla" — loadProducts
-    // syncs every control once the options exist.
+    applyScopeControls();
+    // Filter state only. The facet <select>s have no options until the products land, and
+    // writing a restored value into an empty <select> would silently reset it to "Alla" —
+    // loadProducts syncs every control once the options exist.
 }
 
 function applyFiltersToControls() {
@@ -1532,105 +1991,47 @@ async function loadProducts() {
         buildFacetOptions();
         applyFiltersToControls();
         renderProducts();
+        setNavCount('nav-count-produkter', allProducts.length);
+        renderLuckor();
+        updateIssueBadges();
     } catch (e) {
-        document.getElementById('products-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda produkter.</p></div>';
+        document.getElementById('products-table-container').innerHTML =
+            '<div class="card"><div class="empty-state"><p>Kunde inte ladda produkter.</p></div></div>';
     }
 }
 
-// DB timestamps are naive UTC — parse them AS UTC or Swedish wall-clock drifts 1-2h.
-function parseUtc(iso) {
-    if (!iso) return null;
-    return new Date(/Z|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
-}
-
-function formatWhen(iso) {
-    const d = parseUtc(iso);
-    if (!d || isNaN(d)) return '';
-    return d.toLocaleString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-}
-
-// The weekly rhythm, spelled out: prices refresh on the links' check days, so say when
-// the numbers are from and when the next round comes instead of letting the user guess.
-function renderFreshness(sched) {
-    const el = document.getElementById('deals-freshness');
-    if (!el) return;
-    const parts = [];
-    if (sched.last_check_at) parts.push('Priserna kontrollerades senast ' + formatWhen(sched.last_check_at));
-    if (sched.next_check_at) parts.push('nästa kontroll ' + formatWhen(sched.next_check_at));
-    el.textContent = parts.join(' · ');
-}
-
-// --- Erbjudanden: a campaign is only news if it is the cheapest way to buy the product ---
+// --- Att köpa ---
 //
-// The store's discount percentage is the STORE's framing: 30 % off a bad price is still a bad
-// price. Ours is the cross-link kr/unit, and it splits the page in three:
-//   BEST    — nothing else beats it per unit. This is the answer to "vad ska jag köpa?"
-//   WORSE   — a real campaign, but another link is still cheaper per unit. Information, not news.
-//   UNKNOWN — no honest comparison exists (no amount on this link, or no other link at all).
-// Ranking on checked_at put all three in one recency-ordered pile, so a campaign we happened to
-// check last landed above a genuine win.
+// A campaign is only news if it is the cheapest way to buy the product. The store's discount
+// percentage is the STORE's framing (30 % off a bad price is still a bad price); ours is the
+// cross-link kr/unit margin, and it is what the list is ranked on.
 //
-// THE judgement lives in domain/deals.py since v0.41.0 (the weekly email needs the same one) —
-// /deals returns `verdict` and `savings_per_unit_sek`, and these two are READERS of that
-// answer. Do not re-derive the comparison here: that is how the definitions drift apart.
+// THE judgement lives in domain/deals.py since v0.41.0 (the weekly email needs the same one)
+// — /deals returns `verdict` and `savings_per_unit_sek`, and everything here READS that
+// answer. Do not re-derive the comparison: that is how the definitions drift apart.
 const DEAL_BEST = 'best';
 const DEAL_WORSE = 'worse';
 const DEAL_UNKNOWN = 'unknown';
+const DEAL_STALE_HOURS = 48;
+let storeFilter = null;
 
-function classifyDeal(d) {
-    return d.verdict;
-}
+function classifyDeal(d) { return d.verdict; }
+function dealSavings(d) { return d.savings_per_unit_sek; }
 
-// Signed kr/unit against the product's next-best link: positive = this offer wins by that much,
-// negative = it loses by that much. Null when there is nothing to compare against.
-function dealSavings(d) {
-    return d.savings_per_unit_sek;
+// The margin as a PERCENTAGE of the next-best link's kr/unit — not in kronor, because
+// kronor per unit cannot be compared between rows (0,62 kr/st against 8,20 kr/kg says
+// nothing about which is the better buy) and percent can. It is NOT discount_percent:
+// that is the store's own framing against its ordinarie and ranks nothing.
+function dealMarginPct(d) {
+    const saving = dealSavings(d);
+    if (saving == null || !d.best_alt_unit_price_sek) return null;
+    return saving / d.best_alt_unit_price_sek * 100;
 }
 
 function dealAltLabel(d) {
-    return d.best_alt_store + (d.best_alt_package_size ? ' ' + d.best_alt_package_size : '');
+    const store = possessive(d.best_alt_store);
+    return d.best_alt_package_size ? store + ' ' + d.best_alt_package_size : store;
 }
-
-// The cell that turns a percentage into a decision. It names the margin in kr/unit, not just
-// the verdict — "0,45 kr/l billigare än Willys" is what you act on.
-function dealComparisonCell(d) {
-    const kind = classifyDeal(d);
-    const unitLabel = unitPriceHeading(d.unit);
-    if (kind === DEAL_UNKNOWN) {
-        // NOT "enda länken": best_alt is also null when sibling links exist but none
-        // is comparable (no mängd on them) — that wording hid the actual fix.
-        const why = d.unit_price_sek == null
-            ? 'jfr-pris saknas — länken har ingen mängd'
-            : 'ingen annan jämförbar länk';
-        return '<span class="badge badge-muted">Kan inte jämföras</span>'
-            + '<div class="best-link">' + escapeHtml(why) + '</div>';
-    }
-    const margin = dealSavings(d);
-    if (kind === DEAL_BEST) {
-        const lead = margin > 0
-            ? formatSek(margin) + ' ' + unitLabel + ' billigare än ' + dealAltLabel(d)
-            : 'lika billigt som ' + dealAltLabel(d);
-        return '<span class="price-good">Billigast</span>'
-            + '<div class="best-link">' + escapeHtml(lead) + '</div>';
-    }
-    return '<span class="price-warn">Ej billigast</span>'
-        + '<div class="best-link">'
-        + escapeHtml(formatSek(-margin) + ' ' + unitLabel + ' dyrare än ' + dealAltLabel(d))
-        + '</div>';
-}
-
-// Every store-name emission is a way IN to the store's own page — the app's endpoint
-// is a purchase decision, not a table row.
-function storeLinkHtml(name, url) {
-    if (!url) return escapeHtml(name);
-    return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">'
-        + escapeHtml(name) + ' &#8599;</a>';
-}
-
-// An offer seen days ago may already be over — the deals window is 7 days wide while most
-// links are checked weekly. Say WHEN, in the same Swedish format as everywhere else (the raw
-// ISO slice this replaced was the only date in the app that wasn't), and mute the old ones.
-const DEAL_STALE_HOURS = 48;
 
 function isDealStale(d) {
     if (!d.checked_at) return false;
@@ -1638,69 +2039,119 @@ function isDealStale(d) {
     return !!(seen && !isNaN(seen) && (Date.now() - seen.getTime()) > DEAL_STALE_HOURS * 3600000);
 }
 
-function dealSeenCell(d) {
-    if (!d.checked_at) return '&#8212;';
-    const text = escapeHtml(formatWhen(d.checked_at) || String(d.checked_at).slice(0, 10));
-    return isDealStale(d)
-        ? '<span class="deal-stale" title="Äldre än två dygn — kampanjen kan ha hunnit ta slut">' + text + '</span>'
-        : text;
+// The verdict as a SENTENCE, with the percentage inside it. It had a column of its own in an
+// earlier draft: there the number and the span bar read as two competing scores for the same
+// row, and the percentage won by sitting first and being biggest. In a sentence it has a
+// subject and an object and cannot be mistaken for the bar's message.
+function dealVerdictHtml(d) {
+    const unit = d.unit || 'enhet';
+    const store = storeLinkHtml(d.store_name, d.product_url);
+    const kind = classifyDeal(d);
+    if (kind === DEAL_UNKNOWN) {
+        // NOT "enda länken": best_alt is also null when sibling links exist but none is
+        // comparable (no mängd on them) — that wording hid the actual fix.
+        const why = d.unit_price_sek == null
+            ? 'Den här länken saknar mängd — går inte att jämföra.'
+            : 'Ingen annan länk har en mängd att jämföra mot — går inte att rangordna.';
+        const fix = d.unit_price_sek == null
+            ? ' <button type="button" class="deal-fix" data-deal-action="gaps">Ange mängd</button>'
+            : '';
+        return `<div class="deal-verdict no-compare">${why}${fix} ${store}</div>`;
+    }
+    const pct = dealMarginPct(d);
+    if (kind === DEAL_BEST) {
+        const lead = (pct && pct > 0.05)
+            ? `<span class="deal-pct">${formatMargin(pct)}</span> billigare per ${escapeHtml(unit)} än ${escapeHtml(dealAltLabel(d))}.`
+            : `Lika billigt per ${escapeHtml(unit)} som ${escapeHtml(dealAltLabel(d))}.`;
+        return `<div class="deal-verdict">${lead} ${store}</div>`;
+    }
+    return '<div class="deal-verdict">'
+        + `<span class="deal-pct is-bad">${formatMargin(pct || 0)}</span> dyrare per ${escapeHtml(unit)} `
+        + `än ${escapeHtml(dealAltLabel(d))}. ${store}</div>`;
 }
 
-// The Sett column hides on the phone, but an expired campaign costs a wasted trip
-// exactly there — the staleness caveat re-enters inline, like the verdict does.
-function dealStaleInline(d) {
-    if (!isDealStale(d)) return '';
-    const when = formatWhen(d.checked_at) || String(d.checked_at).slice(0, 10);
-    return '<div class="deal-verdict-inline deal-stale">'
-        + escapeHtml('sett ' + when + ' — kan ha hunnit ta slut') + '</div>';
+// Where this price sits between the product's own lowest and highest observed kr/unit —
+// a different question from the margin: not "is it the cheapest anywhere" but "is this the
+// right MOMENT". They can point opposite ways, and that is the point.
+//
+// When high == low (one observation, or all of them equal) NO bar is drawn — a bar without a
+// span would claim a position that does not exist. Same rule domain/stats.py already follows:
+// one observation is not a trend, so change_pct is None rather than 0.
+function dealSpanHtml(d, stat) {
+    const low = stat ? stat.low_unit_price : null;
+    const high = stat ? stat.high_unit_price : null;
+    const now = d.unit_price_sek;
+    if (low == null || high == null || now == null || high <= low) {
+        return `<div class="span-note">en observation ${DASH} inget spann än</div>`;
+    }
+    const pos = clamp01((now - low) / (high - low));
+    const isLow = pos <= 1 / 3;
+    let note, noteClass;
+    if (pos <= 0.02) {
+        const since = statsData && statsData.period ? formatDay(statsData.period.first_observation) : '';
+        note = since ? 'lägsta noterade sedan ' + since : 'lägsta noterade';
+        noteClass = 'span-note is-low';
+    } else if (isLow) {
+        note = 'nära lägsta noterade';
+        noteClass = 'span-note is-low';
+    } else {
+        note = 'har varit ' + formatSek(now - low) + ' kr billigare';
+        noteClass = 'span-note';
+    }
+    const width = (pos * 100).toFixed(1) + '%';
+    return '<div class="span-label">Prisläge i eget spann</div>'
+        + `<div class="span-ends"><span>${escapeHtml(formatSek(low))}</span><span>${escapeHtml(formatSek(high))}</span></div>`
+        + '<div class="span-track">'
+        + `<div class="span-fill${isLow ? ' is-low' : ''}" style="width:${width}"></div>`
+        + `<div class="span-marker" style="left:${width}"></div>`
+        + '</div>'
+        + `<div class="${noteClass}">${escapeHtml(note)}</div>`;
 }
 
-function buildDealRow(d) {
-    const pct = d.discount_percent.toFixed ? d.discount_percent.toFixed(1) : d.discount_percent;
-    const jfr = d.unit_price_sek != null
-        ? '<div class="best-link">' + escapeHtml(d.unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(d.unit)) + '</div>'
-        : '';
-    // formatSek, not the raw number: a 13.9 next to a 13.90 kr/liter reads as a different,
-    // truncated price. Money is always to the öre in this app.
-    const ord = d.price_sek != null
-        ? '<div class="best-link">ord. ' + escapeHtml(formatSek(d.price_sek)) + ' kr</div>'
-        : '';
-    // The store's own framing ("Välj & blanda! 2 för 99,00") carries the multi-buy
-    // CONDITION — a per-unit price without it claims the discount applies to a single
-    // unit, and a shopper buys one and pays ordinarie. It rides in the price cell, not
-    // a col-secondary one, because the condition must survive the phone in the aisle.
-    const villkor = d.offer_details
-        ? '<div class="best-link">' + escapeHtml(d.offer_details) + '</div>'
-        : '';
-    // The verdict is rendered twice: as its own column, and duplicated under the product
-    // name in a phone-only block. Four content-heavy columns honestly do not fit 390px, and
-    // the verdict is the one thing that must not be the column that gets clipped.
-    return `<tr>
-        <td><button type="button" class="product-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${d.package_size ? '<div class="best-link">' + escapeHtml(d.package_size) + '</div>' : ''}<div class="deal-verdict-inline">${dealComparisonCell(d)}</div>${dealStaleInline(d)}</td>
-        <td>${storeLinkHtml(d.store_name, d.product_url)}</td>
-        <td><span class="price-good">${escapeHtml(formatSek(d.offer_price_sek))} kr</span>${villkor}${jfr}${ord}</td>
-        <td class="col-secondary">${dealComparisonCell(d)}</td>
-        <td class="col-secondary"><span class="price-good">${pct}%</span> <span class="badge badge-success">${escapeHtml(d.offer_type)}</span></td>
-        <td class="col-secondary">${dealSeenCell(d)}</td>
-    </tr>`;
+function dealMetaHtml(d) {
+    const parts = [];
+    if (d.checked_at) parts.push('sett ' + (formatShortWhen(d.checked_at) || ''));
+    // An offer seen days ago may already be over — the deals window is 7 days wide while
+    // most links are checked weekly. Say so; never hide the row.
+    if (isDealStale(d)) parts.push('kan ha hunnit ta slut');
+    if (d.offer_type && d.offer_type !== 'kampanj') parts.push(d.offer_type);
+    if (d.price_sek != null) parts.push('ordinarie ' + kr(d.price_sek));
+    // The store's own framing, kept as metadata and never as the ranking — whole percent
+    // is all the precision it deserves.
+    if (d.discount_percent) parts.push(Math.round(d.discount_percent) + '\u202f% rabatt');
+    return `<div class="deal-meta">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
-// Rabatt and Sett hide on the phone (col-secondary): the store's own framing and our check
-// schedule are not what you act on in the aisle — product, butik, price and the verdict are.
-// The verdict column hides too, but re-enters inline under the product name (see buildDealRow).
-function buildDealTable(rows) {
-    return '<table><thead><tr><th>Produkt</th><th>Butik</th><th>Erbjudande</th>'
-        + '<th class="col-secondary">Jämförelse</th><th class="col-secondary">Rabatt</th><th class="col-secondary">Sett</th></tr></thead><tbody>'
-        + rows.map(buildDealRow).join('')
-        + '</tbody></table>';
+function dealRowHtml(d, spans) {
+    const unknown = classifyDeal(d) === DEAL_UNKNOWN;
+    const stat = spans[d.product_id];
+    const pkg = d.package_size ? ` <span class="deal-pkg">${escapeHtml(d.package_size)}</span>` : '';
+    const terms = d.offer_details
+        ? `<div class="deal-terms">${escapeHtml(d.offer_details)}</div>`
+        : '';
+    return `<div class="deal-row${unknown ? ' is-unknown' : ''}">
+        <div class="deal-main">
+            <div class="deal-head"><button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}</div>
+            ${dealVerdictHtml(d)}
+            ${dealMetaHtml(d)}
+            ${terms}
+        </div>
+        <div class="deal-right">
+            <div class="deal-span">${dealSpanHtml(d, stat)}</div>
+            <div class="deal-price">
+                <div class="deal-price-main">${escapeHtml(kr(d.offer_price_sek))}</div>
+                <div class="deal-unit">${escapeHtml(unitKr(d.unit_price_sek, d.unit))}</div>
+            </div>
+        </div>
+    </div>`;
 }
 
 // Best buys first, and among them the one that beats its alternative by the most. Recency is
-// a column, not a ranking: it says when we looked, which is our schedule's business, not a
-// reason to put one campaign above another.
+// NOT a ranking: it says when we looked, which is our schedule's business, not a reason to
+// put one campaign above another. Rows that cannot be compared ride along at the end — they
+// are not KNOWN to be bad, and the fix is one click away.
 function rankDeals(deals) {
-    const byMargin = (a, b) => (dealSavings(b) - dealSavings(a))
-        || (b.discount_percent - a.discount_percent)
+    const byMargin = (a, b) => ((dealMarginPct(b) || 0) - (dealMarginPct(a) || 0))
         || String(b.checked_at).localeCompare(String(a.checked_at));
     const byDiscount = (a, b) => (b.discount_percent - a.discount_percent)
         || String(b.checked_at).localeCompare(String(a.checked_at));
@@ -1712,10 +2163,145 @@ function rankDeals(deals) {
     };
 }
 
-// Cached so the history-button handler can resolve name + unit for the modal without a
-// round trip — the deals wire already carries both. NOT allProducts: Erbjudanden can be
-// the first page shown, before the product list has ever loaded.
-let allDeals = [];
+// The rows the list actually shows: what is worth buying, ranked, plus the ones we cannot
+// judge. Everything in the korgremsa is derived from THIS array.
+function buyableDeals() {
+    const groups = rankDeals(allDeals);
+    return groups.best.concat(groups.unknown);
+}
+
+function dealsInStore(rows) {
+    return storeFilter ? rows.filter(d => d.store_name === storeFilter) : rows;
+}
+
+function spansByProduct() {
+    const map = {};
+    for (const p of ((statsData && statsData.products) || [])) map[p.product_id] = p;
+    return map;
+}
+
+// The korgremsa. Pill counts, the subtotals, the total and the closing sentence are ALL
+// derived from the rows below — a pill that promised a round the list does not hold would
+// read as a broken feature, and a butik missing from the pills would make its rows
+// unreachable. The pills ARE the store filter; there is no separate store picker.
+function renderBasketStrip() {
+    const el = document.getElementById('basket-strip');
+    if (!el) return;
+    const rows = buyableDeals();
+    if (!rows.length) { el.innerHTML = ''; el.className = ''; return; }
+
+    const byStore = new Map();
+    for (const d of rows) {
+        const g = byStore.get(d.store_name) || { store: d.store_name, n: 0, sum: 0, saved: 0 };
+        g.n += 1;
+        g.sum += d.offer_price_sek || 0;
+        if (d.price_sek != null) g.saved += Math.max(0, d.price_sek - d.offer_price_sek);
+        byStore.set(d.store_name, g);
+    }
+    const groups = [...byStore.values()].sort(
+        (a, b) => b.n - a.n || String(a.store).localeCompare(String(b.store), 'sv'));
+    const hit = groups.find(g => g.store === storeFilter);
+    const shown = hit ? [hit] : groups;
+    const total = shown.reduce((t, g) => t + g.sum, 0);
+    const saved = shown.reduce((t, g) => t + g.saved, 0);
+    const top = groups[0];
+
+    const pills = groups.map(g =>
+        `<button type="button" class="store-pill${g.store === storeFilter ? ' active' : ''}" `
+        + `data-store="${escapeHtml(g.store)}">${escapeHtml(g.store + ' ' + g.n)}</button>`).join('');
+    const note = hit
+        ? 'bara ' + escapeHtml(hit.store)
+        : (top ? `en runda till ${escapeHtml(top.store)} täcker ${numberWord(top.n)} av ${numberWord(rows.length)}` : '');
+    const clear = hit
+        ? '<button type="button" class="basket-link" data-basket="clear">Visa alla butiker</button>'
+        : '';
+
+    // The way in to Fel & luckor: silent errors first (we are showing a wrong number RIGHT
+    // NOW), otherwise the gaps that block comparisons. Nothing at all when both are zero.
+    const counts = issueCounts();
+    let issues = '';
+    if (counts.silent) {
+        issues = `<button type="button" class="basket-link is-error" data-basket="luckor">`
+            + `${counts.silent} tysta fel &#8594;</button>`;
+    } else if (counts.broken + counts.gaps) {
+        issues = `<button type="button" class="basket-link is-gap" data-basket="luckor">`
+            + `${counts.broken + counts.gaps} luckor &#8594;</button>`;
+    }
+
+    el.className = 'basket-strip';
+    el.innerHTML = '<span class="basket-label">Veckans korg</span>'
+        + `<span class="basket-sum">${escapeHtml(kr(total))}</span>`
+        + `<span class="basket-saved">${escapeHtml(kr(saved))} under ordinarie</span>`
+        + '<span class="basket-divider"></span>'
+        + `<div class="store-pills">${pills}</div>`
+        + `<span class="basket-note">${note}</span>`
+        + clear
+        + issues;
+}
+
+function renderDeals() {
+    const container = document.getElementById('deals-table-container');
+    if (!container) return;
+    const spans = spansByProduct();
+    const groups = rankDeals(allDeals);
+    const top = dealsInStore(groups.best.concat(groups.unknown));
+    const worse = dealsInStore(groups.worse);
+
+    // The heading counts what the list shows, and says where when a butik is picked.
+    const heading = document.getElementById('kopa-heading');
+    if (storeFilter) {
+        heading.textContent = 'Billigast just nu hos ' + storeFilter;
+    } else if (!top.length) {
+        heading.textContent = 'Inget är billigast just nu';
+    } else if (top.length === 1) {
+        heading.textContent = 'En sak är billigast just nu';
+    } else {
+        heading.textContent = numberWord(top.length, true) + ' saker är billigast just nu';
+    }
+
+    let html = '';
+    if (top.length) {
+        html += '<div class="card list-flat">' + top.map(d => dealRowHtml(d, spans)).join('') + '</div>';
+    } else {
+        // A page with nothing to recommend says so in a sentence rather than showing an
+        // empty table and letting the reader wonder whether it loaded.
+        html += '<div class="card"><div class="empty-state">'
+            + (allDeals.length
+                ? '<p>Inget av veckans erbjudanden är billigast per enhet — de ligger i listan nedan.</p>'
+                : '<p>Inga aktiva erbjudanden just nu.</p>')
+            + '</div></div>';
+    }
+    if (worse.length) {
+        const word = numberWord(worse.length, true);
+        const label = worse.length === 1
+            ? `${word} kampanj till, men den är inte billigast per enhet`
+            : `${word} kampanjer till, men de är inte billigast per enhet`;
+        html += `<details class="deal-extra"><summary>&#9656; ${escapeHtml(label)}</summary>`
+            + '<div class="card list-flat">' + worse.map(d => dealRowHtml(d, spans)).join('') + '</div>'
+            + '</details>';
+    }
+    container.innerHTML = html;
+    renderBasketStrip();
+}
+
+function setStoreFilter(store) {
+    storeFilter = (storeFilter === store) ? null : store;
+    renderDeals();
+}
+
+async function loadDeals() {
+    try {
+        const url = scope ? `/deals?store_type=${encodeURIComponent(scope)}` : '/deals';
+        allDeals = await apiGet(url);
+        // A store filter left over from a wider scope would silently empty the list.
+        if (storeFilter && !allDeals.some(d => d.store_name === storeFilter)) storeFilter = null;
+        setNavCount('nav-count-kopa', buyableDeals().length);
+        renderDeals();
+    } catch (e) {
+        document.getElementById('deals-table-container').innerHTML =
+            '<div class="card"><div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div></div>';
+    }
+}
 
 // Bladerbjudande-analys: manuell upptäckt (listnings-API:t sitter bakom Akamais JS-sensor),
 // automatisk bedömning. Svaret är butikens egna siffror plus kandidatmatchningar mot de
@@ -1735,18 +2321,18 @@ async function analyzeBlad() {
         const d = await apiPost('/blad/analyze', { url });
         const unit = UNIT_SHORT[d.unit_price_unit] || d.unit_price_unit || '';
         const pant = d.excludes_deposit ? ' +pant' : '';
-        let html = `<div class="deal-group-title">${escapeHtml(d.name)}`
-            + (d.brands.length ? ` <span class="best-link">${escapeHtml(d.brands.join(', '))}</span>` : '')
-            + '</div><p>';
+        let html = `<div class="card-title">${escapeHtml(d.name)}`
+            + (d.brands.length ? ` <span class="card-title-note">${escapeHtml(d.brands.join(', '))}</span>` : '')
+            + '</div><p style="margin:6px 0">';
         if (d.offer_price_sek != null) {
-            html += `<strong>${escapeHtml(d.offer_price_sek.toFixed(2))} kr</strong>`;
+            html += `<strong>${escapeHtml(kr(d.offer_price_sek))}</strong>`;
             if (d.package_text) html += ` för ${escapeHtml(d.package_text)}`;
-            if (d.ordinarie_price_sek != null) html += ` (ordinarie ${escapeHtml(d.ordinarie_price_sek.toFixed(2))} kr)`;
-            if (d.unit_price_sek != null) html += ` — <strong>${escapeHtml(d.unit_price_sek.toFixed(2))} kr/${escapeHtml(unit)}${pant}</strong>`;
+            if (d.ordinarie_price_sek != null) html += ` (ordinarie ${escapeHtml(kr(d.ordinarie_price_sek))})`;
+            if (d.unit_price_sek != null) html += ` — <strong>${escapeHtml(formatSek(d.unit_price_sek))} kr/${escapeHtml(unit)}${pant}</strong>`;
         }
         html += '</p>';
         const meta = d.conditions.slice();
-        if (d.valid_until) meta.push('t.o.m. ' + escapeHtml(d.valid_until));
+        if (d.valid_until) meta.push('t.o.m. ' + d.valid_until);
         if (meta.length) html += `<p class="best-link">${meta.map(escapeHtml).join(' · ')}</p>`;
         if (d.crosscheck_warning) html += `<p><span class="badge badge-warning">${escapeHtml(d.crosscheck_warning)}</span></p>`;
         if (!d.candidates.length) {
@@ -1756,13 +2342,13 @@ async function analyzeBlad() {
             for (const c of d.candidates) {
                 const cUnit = UNIT_SHORT[c.unit] || c.unit || '';
                 const current = c.current_unit_price_sek != null
-                    ? `${escapeHtml(c.current_unit_price_sek.toFixed(2))} kr/${escapeHtml(cUnit)} (${escapeHtml(c.store_name)})`
-                    : '&#8212;';
+                    ? `${escapeHtml(formatSek(c.current_unit_price_sek))} kr/${escapeHtml(cUnit)} (${escapeHtml(c.store_name)})`
+                    : DASH;
                 let verdict = '<span class="best-link">olika enhet &#8212; kan inte jämföras</span>';
                 if (c.unit_price_diff_sek != null) {
                     verdict = c.unit_price_diff_sek < 0
-                        ? `<span class="badge badge-success">bladet ${escapeHtml(Math.abs(c.unit_price_diff_sek).toFixed(2))} kr/${escapeHtml(cUnit)} billigare</span>`
-                        : `<span class="badge badge-warning">bladet ${escapeHtml(c.unit_price_diff_sek.toFixed(2))} kr/${escapeHtml(cUnit)} dyrare</span>`;
+                        ? `<span class="badge badge-success">bladet ${escapeHtml(formatSek(Math.abs(c.unit_price_diff_sek)))} kr/${escapeHtml(cUnit)} billigare</span>`
+                        : `<span class="badge badge-warning">bladet ${escapeHtml(formatSek(c.unit_price_diff_sek))} kr/${escapeHtml(cUnit)} dyrare</span>`;
                 }
                 html += `<tr><td>${escapeHtml(c.product_name)}</td><td>${current}</td><td>${verdict}</td></tr>`;
             }
@@ -1776,72 +2362,28 @@ async function analyzeBlad() {
     }
 }
 
-async function loadDeals() {
-    try {
-        const filter = document.getElementById('deal-filter').value;
-        const url = filter ? `/deals?store_type=${encodeURIComponent(filter)}` : '/deals';
-        const deals = await apiGet(url);
-        allDeals = deals;
-        const container = document.getElementById('deals-table-container');
-        if (!deals.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127873;</div><p>Inga aktiva erbjudanden just nu.</p></div>';
-            return;
-        }
-        const groups = rankDeals(deals);
-        // The unjudgeable ones ride along with the buyable ones rather than being hidden: they
-        // are not KNOWN to be bad, and the fix (give the link its mängd) is one click away.
-        const top = groups.best.concat(groups.unknown);
-        let html = '';
-        if (top.length) {
-            html += `<div class="deal-group-title">Värt att köpa
-                <span class="badge badge-success">${top.length}</span></div>`
-                + buildDealTable(top);
-        } else {
-            html += '<div class="deal-group-title">Värt att köpa</div>'
-                + '<div class="empty-state"><p>Inget av veckans erbjudanden är billigast per '
-                + 'enhet — allt ligger i listan nedan.</p></div>';
-        }
-        // Collapsed, not deleted: this is the answer to "men ICA har ju kampanj på den?".
-        if (groups.worse.length) {
-            html += `<details class="deal-group-extra">
-                <summary>Kampanjer som ändå inte är billigast (${groups.worse.length})</summary>
-                ${buildDealTable(groups.worse)}
-            </details>`;
-        }
-        container.innerHTML = html;
-    } catch (e) {
-        document.getElementById('deals-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div>';
-    }
-}
-
-// --- Statistik ---
+// --- Prisutveckling ---
 //
 // Everything on this page is computed server-side by domain/stats.py (THE definition); this
-// renders it and adds nothing of its own. Two rules it does enforce visually:
+// renders it and adds nothing of its own. Two rules it enforces visually:
 //   * a change of null is an em dash, never "0,0 %" — one observation is not a trend
 //   * every panel prints what it was computed from, so thin data looks thin
-// Loaded on demand when the page is shown, like Loggar.
-
+// kr/unit is never summed or averaged ACROSS products (milk's kr/l plus cheese's kr/kg is
+// nonsense), which is why every cross-product figure here is a percentage.
 let statsData = null;
-let statsSort = { column: 'change_pct', direction: 'desc' };
+// Biggest DROP first: the question the table is opened with is "what got cheaper".
+let statsSort = { column: 'change_pct', direction: 'asc' };
 
-// The period picker's own labels, so the basis line can say which window it means.
 const STATS_PERIODS = {
     '0': 'sedan start', '4': 'senaste 4 veckorna', '12': 'senaste 12 veckorna',
     '26': 'senaste 26 veckorna', '52': 'senaste året'
 };
 
-function formatPct(value, decimals = 1) {
-    if (value == null) return '&#8212;';
-    const sign = value > 0 ? '+' : '';
-    return sign + value.toFixed(decimals) + ' %';
-}
-
 // Cheaper is good, dearer is bad — the colour carries the meaning at a glance, and a change
 // too small to matter stays neutral rather than shouting about rounding.
 function changeCell(value) {
-    if (value == null) return '<span class="best-link">&#8212;</span>';
-    const cls = value <= -0.5 ? 'price-good' : (value >= 0.5 ? 'price-bad' : '');
+    if (value == null) return `<span class="best-link">${DASH}</span>`;
+    const cls = value <= -0.05 ? 'price-good' : (value >= 0.05 ? 'price-bad' : '');
     return '<span class="' + cls + '">' + formatPct(value) + '</span>';
 }
 
@@ -1849,85 +2391,111 @@ function statsBasis(text) {
     return '<div class="stats-basis">' + text + '</div>';
 }
 
+// The three figures the page opens with. Each is a percentage or a name — never a summed
+// kr/unit, which would be adding kr/l to kr/kg.
+function buildStatsHeadline(data) {
+    const withChange = data.products.filter(p => p.change_pct != null);
+    const avg = withChange.length
+        ? withChange.reduce((t, p) => t + p.change_pct, 0) / withChange.length
+        : null;
+    const avgCls = avg == null ? '' : (avg <= -0.05 ? 'price-good' : (avg >= 0.05 ? 'price-bad' : ''));
+    const best = data.stores.slice().sort(
+        (a, b) => (b.cheapest_count - a.cheapest_count) || (a.compared_products - b.compared_products)
+    )[0];
+    const offers = data.stores.reduce((sum, r) => sum + (r.offers || 0), 0);
+    const judged = data.stores.reduce((sum, r) => sum + (r.offers_judged || 0), 0);
+    return '<div class="stat-grid stat-grid-3">'
+        + '<div class="stat-box"><div class="stat-label">Korgen mot start</div>'
+        + `<div class="stat-value ${avgCls}">${avg == null ? DASH : formatPct(avg)}</div>`
+        + `<div class="stat-note">${withChange.length} av ${data.coverage.products_priced} produkter har underlag</div></div>`
+        + '<div class="stat-box"><div class="stat-label">Billigast oftast</div>'
+        + `<div class="stat-value">${escapeHtml(best && best.cheapest_count ? best.store_name : DASH)}</div>`
+        + `<div class="stat-note">${best && best.cheapest_count ? best.cheapest_count + ' av ' + best.compared_products + ' jämförda produkter' : 'ingen matchad korg än'}</div></div>`
+        + '<div class="stat-box"><div class="stat-label">Erbjudanden i perioden</div>'
+        + `<div class="stat-value">${offers}</div>`
+        + `<div class="stat-note">varav ${judged} kunde jämföras</div></div>`
+        + '</div>';
+}
+
 function buildStatsProducts(data) {
     const rows = statsSort.column
         ? sortRows(data.products, statsSort.column, statsSort.direction)
         : data.products;
-    const priced = data.coverage.products_priced;
-    const total = data.coverage.products;
-    let html = '<div class="stats-section"><div class="stats-title">Prisutveckling per produkt</div>'
-        + statsBasis(`${priced} av ${total} produkter har ett jämförpris · `
-            + `${data.period.observations} observationer i perioden · `
-            + 'jfr-pris är det billigaste per enhet över produktens alla länkar');
+    let html = '<div class="card card-pad stats-section"><div class="card-title">Per produkt</div>'
+        + statsBasis('Förändring i jfr-pris över perioden. En förändring som saknar underlag '
+            + 'visas som tankstreck — en observation är ingen trend.');
     if (!rows.length) {
         return html + '<div class="empty-state"><p>Ingen produkt har ett jämförpris ännu — '
             + 'en länk behöver en mängd för att kunna jämföras.</p></div></div>';
     }
     html += `<table><thead><tr>
         <th class="sortable-col" data-stats-sort="name">Produkt</th>
-        <th class="sortable-col" data-stats-sort="current_unit_price">Billigast nu</th>
-        <th class="sortable-col" data-stats-sort="change_pct">Förändring</th>
-        <th>Lägst–högst</th>
-        <th class="sortable-col" data-stats-sort="observations">Obs.</th>
-        <th>Billigast var</th>
+        <th class="sortable-col num-col" data-stats-sort="current_unit_price" style="width:150px">Billigast nu</th>
+        <th class="sortable-col num-col" data-stats-sort="change_pct" style="width:120px">Förändring</th>
+        <th class="num-col col-secondary" style="width:170px">Lägst–högst</th>
+        <th class="sortable-col num-col col-secondary" data-stats-sort="observations" style="width:80px">Obs.</th>
+        <th class="col-secondary" style="width:230px">Billigast var</th>
     </tr></thead><tbody>`;
     for (const r of rows) {
-        const unit = unitPriceHeading(r.unit);
-        const span = (r.low_unit_price != null && r.high_unit_price != null)
+        // One observation is not a span: "460,00 – 460,00" claims a range that was never
+        // seen. Same rule the deal row's bar follows by drawing nothing.
+        const span = (r.low_unit_price != null && r.high_unit_price != null
+                      && r.high_unit_price > r.low_unit_price)
             ? escapeHtml(formatSek(r.low_unit_price) + ' – ' + formatSek(r.high_unit_price))
-            : '&#8212;';
+            : DASH;
         const where = [r.cheapest_store, r.cheapest_package].filter(Boolean).join(' · ');
         html += `<tr>
-            <td>${escapeHtml(r.name)}${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
-            <td><span class="unit-price">${escapeHtml(formatSek(r.current_unit_price))} ${escapeHtml(unit)}</span></td>
-            <td>${changeCell(r.change_pct)}</td>
-            <td class="best-link">${span}</td>
-            <td>${r.observations}</td>
-            <td class="best-link">${escapeHtml(where || '—')}</td>
+            <td><div style="font-weight:600">${escapeHtml(r.name)}</div>${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
+            <td class="num-col" style="font-weight:600; white-space:nowrap">${escapeHtml(unitKr(r.current_unit_price, r.unit))}</td>
+            <td class="num-col" style="font-weight:600">${changeCell(r.change_pct)}</td>
+            <td class="num-col best-link col-secondary" style="white-space:nowrap">${span}</td>
+            <td class="num-col best-link col-secondary">${r.observations}</td>
+            <td class="best-link col-secondary">${escapeHtml(where || DASH)}</td>
         </tr>`;
     }
     return html + '</tbody></table></div>';
 }
 
+// Bars, not a column of numbers: "how often is this store cheapest" is a proportion, and a
+// proportion is read faster as a length than as a fraction.
 function buildStatsStores(data) {
     const rows = data.stores;
-    let html = '<div class="stats-section"><div class="stats-title">Butiksjämförelse</div>'
-        + statsBasis('matchad korg — bara produkter som minst två butiker har, annars jämförs '
-            + 'butikernas sortiment i stället för deras priser · minus betyder billigare än '
-            + 'det bästa alternativet, plus betyder dyrare');
+    let html = '<div class="card card-pad stats-section"><div class="card-title">Butiksjämförelse</div>'
+        + statsBasis('Matchad korg — bara produkter som minst två butiker har. Minus betyder '
+            + 'billigare än det bästa alternativet.');
     if (!rows.length) {
         return html + '<div class="empty-state"><p>Inga butiker att jämföra ännu.</p></div></div>';
     }
-    html += `<table><thead><tr>
-        <th>Butik</th><th>Jämförda produkter</th><th>Billigast</th><th>Snitt mot bästa alternativ</th>
-    </tr></thead><tbody>`;
     for (const r of rows) {
-        const share = r.compared_products
-            ? `${r.cheapest_count} av ${r.compared_products}`
-            : '&#8212;';
-        html += `<tr>
-            <td>${escapeHtml(r.store_name)}</td>
-            <td>${r.compared_products || '&#8212;'}</td>
-            <td>${share}</td>
-            <td>${changeCell(r.avg_premium_pct)}</td>
-        </tr>`;
+        const share = r.compared_products ? r.cheapest_count / r.compared_products : 0;
+        const count = r.compared_products
+            ? `${r.cheapest_count} av ${r.compared_products} billigast`
+            : 'ingen jämförbar produkt';
+        const cls = r.avg_premium_pct == null ? ''
+            : (r.avg_premium_pct <= -0.05 ? 'price-good' : (r.avg_premium_pct >= 0.05 ? 'price-bad' : ''));
+        html += `<div class="store-cmp-row">
+            <div class="store-cmp-name">${escapeHtml(r.store_name)}</div>
+            <div class="store-cmp-bar"><div class="bar-track"><div class="bar-fill" style="width:${(share * 100).toFixed(1)}%"></div></div></div>
+            <div class="store-cmp-count">${escapeHtml(count)}</div>
+            <div class="store-cmp-prem ${cls}">${formatPct(r.avg_premium_pct)}</div>
+        </div>`;
     }
-    return html + '</tbody></table></div>';
+    return html + '</div>';
 }
 
+// Per store: how many offers, how deep the store said they were, and how often they were
+// actually the cheapest way to buy. The last column is ours; the middle one is the store's.
 function buildStatsOffers(data) {
     const rows = data.stores.filter(r => r.offers > 0);
-    const judged = data.stores.reduce((sum, r) => sum + (r.offers_judged || 0), 0);
-    const offers = data.stores.reduce((sum, r) => sum + (r.offers || 0), 0);
-    let html = '<div class="stats-section"><div class="stats-title">Erbjudanden</div>'
-        + statsBasis(`${offers} erbjudanden i perioden, varav ${judged} kunde jämföras mot ett `
-            + 'annat alternativ · rabatten är butikens egen framing, kolumnen längst till '
-            + 'höger är vår');
+    let html = '<div class="card card-pad stats-section"><div class="card-title">Erbjudanden per butik</div>'
+        + statsBasis('Rabatten är butikens egen framing mot sitt ordinariepris; kolumnen längst '
+            + 'till höger är vår — hur ofta kampanjen faktiskt var billigast per enhet.');
     if (!rows.length) {
         return html + '<div class="empty-state"><p>Inga erbjudanden i perioden.</p></div></div>';
     }
     html += `<table><thead><tr>
-        <th>Butik</th><th>Erbjudanden</th><th>Snittrabatt</th><th>Varav faktiskt billigast</th>
+        <th>Butik</th><th class="num-col">Erbjudanden</th><th class="num-col col-secondary">Snittrabatt</th>
+        <th class="num-col">Varav faktiskt billigast</th>
     </tr></thead><tbody>`;
     for (const r of rows) {
         const cheapest = r.offers_judged
@@ -1935,98 +2503,20 @@ function buildStatsOffers(data) {
             : '<span class="best-link">kunde inte jämföras</span>';
         html += `<tr>
             <td>${escapeHtml(r.store_name)}</td>
-            <td>${r.offers}</td>
-            <td>${r.avg_discount_pct != null ? escapeHtml(r.avg_discount_pct.toFixed(1)) + ' %' : '&#8212;'}</td>
-            <td>${cheapest}</td>
+            <td class="num-col">${r.offers}</td>
+            <td class="num-col col-secondary">${r.avg_discount_pct != null ? escapeHtml(r.avg_discount_pct.toFixed(1).replace('.', ',')) + '\u202f%' : DASH}</td>
+            <td class="num-col">${cheapest}</td>
         </tr>`;
     }
     return html + '</tbody></table></div>';
-}
-
-// The health panel is COUNTS with a way in, never lists: the lists already exist on Produkter,
-// where the facets can filter them. A second list here would be a second thing to maintain.
-function buildStatsHealth(data) {
-    const c = data.coverage;
-    const box = (value, label, filter) => {
-        const attr = filter ? ` data-stats-filter="${filter}"` : '';
-        const cls = filter ? 'stats-health-box clickable' : 'stats-health-box';
-        return `<div class="${cls}"${attr}><div class="stat-value">${value}</div>`
-            + `<div class="stat-label">${label}</div></div>`;
-    };
-    const stale = c.stalest_days != null
-        ? `${c.stalest_days} dygn`
-        : '&#8212;';
-    return '<div class="stats-section"><div class="stats-title">Täckning</div>'
-        + statsBasis('att göra-lista, inte statistik — siffrorna leder till produktlistan där '
-            + 'de kan filtreras fram')
-        + '<div class="stats-health">'
-        + box(c.links_without_amount, 'Länkar utan mängd', 'needs_amount')
-        + box(c.products_single_store, 'Produkter i bara en butik', null)
-        + box(c.links_never_checked, 'Länkar aldrig kollade', null)
-        + box(stale, 'Äldsta kontroll', null)
-        + box(c.attempts, 'Kontrollförsök loggade', null)
-        + '</div></div>';
-}
-
-// Datakvalitet: does the tracker still SEE what the stores publish? Two validator layers
-// from domain/validation.py — tier regressions (a store-extractor silently degraded to
-// JSON-LD: checks pass, campaigns go dark) and jämförpris mismatches (printed vs computed
-// kr/enhet disagree: the price or the amount is wrong). Green is a single quiet line —
-// the section earns space only when something needs a human.
-function buildStatsQuality(data) {
-    const q = data.data_quality;
-    if (!q) return '';
-    const regressions = q.tier_regressions || [];
-    const mismatches = q.unit_price_mismatches || [];
-    let html = '<div class="stats-section"><div class="stats-title">Datakvalitet</div>'
-        + statsBasis('larmar när en butiks strukturerade källa slutat svara (kampanjer blir '
-            + 'osynliga fast checkarna ser gröna ut) eller när butikens tryckta jfr-pris '
-            + 'motsäger vårt beräknade (priset eller mängden är fel) · observation, aldrig '
-            + 'automatisk åtgärd');
-    if (!regressions.length && !mismatches.length) {
-        return html + '<p class="best-link">Inga avvikelser — alla länkar läses via sin bästa '
-            + 'källa och tryckta jfr-priser stämmer med de beräknade.</p></div>';
-    }
-    if (regressions.length) {
-        html += `<table><thead><tr>
-            <th>Produkt</th><th>Butik</th><th>Väntad källa</th><th>Faktisk källa</th><th>Senast kollad</th>
-        </tr></thead><tbody>`;
-        for (const r of regressions) {
-            html += `<tr>
-                <td>${escapeHtml(r.product_name)}</td>
-                <td>${escapeHtml(r.store_name)}</td>
-                <td>${escapeHtml(r.expected_source)}</td>
-                <td><span class="badge badge-warning">${escapeHtml(r.actual_source)}</span></td>
-                <td>${escapeHtml(formatWhen(r.checked_at))}</td>
-            </tr>`;
-        }
-        html += '</tbody></table>';
-    }
-    if (mismatches.length) {
-        html += `<table><thead><tr>
-            <th>Produkt</th><th>Butik</th><th>Tryckt jfr-pris</th><th>Beräknat</th><th>Avvikelse</th>
-        </tr></thead><tbody>`;
-        for (const r of mismatches) {
-            const unit = r.unit ? 'kr/' + escapeHtml(r.unit) : 'kr';
-            html += `<tr>
-                <td>${escapeHtml(r.product_name)}</td>
-                <td>${escapeHtml(r.store_name)}</td>
-                <td>${escapeHtml(r.printed_unit_price_sek.toFixed(2))} ${unit}</td>
-                <td>${escapeHtml(r.computed_unit_price_sek.toFixed(2))} ${unit}</td>
-                <td><span class="badge badge-warning">${escapeHtml(r.deviation_pct.toFixed(1))} %</span></td>
-            </tr>`;
-        }
-        html += '</tbody></table>';
-    }
-    return html + '</div>';
 }
 
 function renderStatistics() {
     if (!statsData) return;
     const data = statsData;
     const container = document.getElementById('stats-container');
-    container.innerHTML = buildStatsProducts(data) + buildStatsStores(data)
-        + buildStatsOffers(data) + buildStatsHealth(data) + buildStatsQuality(data);
+    container.innerHTML = buildStatsHeadline(data) + buildStatsProducts(data)
+        + buildStatsStores(data) + buildStatsOffers(data);
 
     // The honest header: how much history there actually is. Trends over a few days are
     // noise, and the page says so rather than letting a table imply otherwise.
@@ -2034,24 +2524,292 @@ function renderStatistics() {
     const days = data.period.days_of_history;
     const parts = [];
     if (data.period.first_observation) {
-        parts.push('Historik sedan ' + formatWhen(data.period.first_observation).split(' ').slice(0, 3).join(' ')
-            + ' (' + days + ' dygn)');
+        parts.push('Historik sedan ' + formatDay(data.period.first_observation) + ' (' + days + ' dygn)');
     }
+    parts.push(data.period.observations + ' observationer');
     parts.push('period: ' + (STATS_PERIODS[String(data.period.weeks || 0)] || 'sedan start'));
+    parts.push('jfr-pris är det billigaste per enhet över produktens alla länkar');
     if (days < 42) parts.push('trender under några veckor är mest brus');
     el.textContent = parts.join(' · ');
 }
 
 async function loadStatistics() {
     const container = document.getElementById('stats-container');
-    container.innerHTML = '<div class="loading">Laddar statistik…</div>';
     try {
         const weeks = document.getElementById('stats-period').value;
         statsData = await apiGet('/stats?weeks=' + encodeURIComponent(weeks));
         renderStatistics();
+        // /stats carries three things no other endpoint does: the price spans Att köpa's
+        // bars need, the validator's findings, and the coverage counts. Everything that
+        // reads them re-renders here.
+        renderDeals();
+        renderLuckor();
+        updateIssueBadges();
     } catch (e) {
         container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda statistik.</p></div>';
     }
+}
+
+// --- Fel & luckor ---
+//
+// The page is built around ONE distinction. A gap announces itself: a jfr-pris is missing, a
+// cell is empty. A SILENT error does not — the check reports "ok", the price is plausible,
+// and nothing anywhere in the interface reveals that the figure is wrong. That is exactly
+// the miss that produced domain/validation.py (ICA's campaigns were invisible for weeks
+// while every check said "ok"), so the silent errors sit at the top and in red, before the
+// counters, and the gaps keep amber below.
+//
+// It is also the answer to "how do I see a parser failure without digging in the logs": the
+// log shows EVENTS, this page shows STATE. A tier regression from Thursday has rolled out of
+// the ring buffer by Monday; the state stays here until a successful check clears it.
+//
+// Nothing here can be dismissed. No flag is persisted — a successful check from the right
+// tier, or a corrected amount, removes the row by itself, and a dismiss button would only
+// hide an error that is still running.
+
+// `ica_page → jsonld` says nothing to anyone who does not know the codebase. The consequence
+// is the designed part, and it is derived from the expected source — never invented per row.
+const TIER_IMPACT = {
+    ica_page: 'kampanjer syns inte — ICA:s JSON-LD bär inga erbjudanden',
+    willys_api: 'kampanjer och jfr-pris syns inte — Willys sida är en SPA utan pris i HTML',
+    rusta_page: 'ordinarie vid rea saknas — sidan hydreras annorlunda',
+    lyko_page: 'ordinarie vid rea saknas — sidan hydreras annorlunda'
+};
+
+// Every link in the catalogue, flattened with its product — the shape both gap lists want.
+function allLinks() {
+    return allProducts.flatMap(p => (p.stores || []).map(s => ({ product: p, link: s })));
+}
+
+function brokenLinkRows() {
+    return allLinks().filter(r => r.link.is_broken === true);
+}
+
+function missingAmountRows() {
+    return allLinks().filter(r => r.link.needs_amount === true);
+}
+
+// The entry unit a gap is filled in: the amount is always typed in something that normalizes
+// INTO the product's comparison unit, which is what decides whether the jfr-pris becomes
+// kr/st, kr/kg or kr/liter.
+const GAP_ENTRY = {
+    st: { unit: 'st', placeholder: 'antal st' },
+    kg: { unit: 'g', placeholder: 'gram' },
+    liter: { unit: 'ml', placeholder: 'ml' }
+};
+
+function gapEntry(unit) {
+    return GAP_ENTRY[unit] || { unit: '', placeholder: 'mängd' };
+}
+
+function buildSilentErrors(counts, q) {
+    const regressions = q.tier_regressions || [];
+    const mismatches = q.unit_price_mismatches || [];
+    if (!regressions.length && !mismatches.length) {
+        return '<div class="card"><div class="card-pad"><div class="card-title">Inga tysta fel'
+            + ' <span class="card-title-note">— alla länkar läses via sin bästa källa och '
+            + 'tryckta jfr-priser stämmer med de beräknade</span></div></div></div>';
+    }
+    let html = '<div class="silent-card"><div class="silent-head">'
+        + '<span class="silent-title">Tysta fel</span>'
+        + `<span class="silent-count">${counts.silent}</span>`
+        + '<span class="silent-explain">kontrollen sa &bdquo;ok&rdquo; — men siffran vi visar '
+        + 'är inte den butiken publicerar</span></div>';
+
+    if (regressions.length) {
+        html += '<div class="group-head">Extraktionen har fallit ner en pinne '
+            + '<span class="group-why">— butikens sida har ändrat form, så vi läser en sämre '
+            + 'källa än vi borde</span></div>';
+        for (const r of regressions) {
+            const impact = TIER_IMPACT[r.expected_source]
+                || 'vi läser en sämre källa än butiken publicerar';
+            html += `<div class="issue-row">
+                <div class="issue-main">
+                    <div class="issue-name">${escapeHtml(r.product_name)}</div>
+                    <div class="issue-sub">${escapeHtml(r.store_name)} · sedan ${escapeHtml(formatShortWhen(r.checked_at))}</div>
+                </div>
+                <div class="issue-right">
+                    <div class="issue-impact">${escapeHtml(impact)}</div>
+                    <div class="source-swap">
+                        <span class="source-chip">${escapeHtml(r.expected_source)}</span>
+                        <span class="source-arrow">&#8594;</span>
+                        <span class="source-chip is-actual">${escapeHtml(r.actual_source)}</span>
+                    </div>
+                    <button class="action-btn" data-issue-action="open-link"
+                        data-product="${escapeHtml(r.product_name)}"
+                        data-store="${escapeHtml(r.store_name)}">Visa länken</button>
+                </div>
+            </div>`;
+        }
+    }
+
+    if (mismatches.length) {
+        html += '<div class="group-head">Jämförpriset går inte ihop '
+            + '<span class="group-why">— butikens tryckta jfr-pris mot vårt beräknade; antingen '
+            + 'priset eller mängden är fel</span></div>';
+        for (const m of mismatches) {
+            html += `<div class="issue-row">
+                <div class="issue-main">
+                    <div class="issue-name">${escapeHtml(m.product_name)}</div>
+                    <div class="issue-sub">${escapeHtml(m.store_name)} · priset eller mängden är fel</div>
+                </div>
+                <div class="issue-right">
+                    <div class="mismatch-nums">
+                        <div>butiken skriver <b>${escapeHtml(unitKr(m.printed_unit_price_sek, m.unit))}</b></div>
+                        <div>vi räknar <b>${escapeHtml(unitKr(m.computed_unit_price_sek, m.unit))}</b></div>
+                    </div>
+                    <div class="deviation">${escapeHtml(formatMargin(m.deviation_pct))}</div>
+                    ${IS_ADMIN ? `<button class="action-btn" data-issue-action="fix-amount"
+                        data-product="${escapeHtml(m.product_name)}"
+                        data-store="${escapeHtml(m.store_name)}">Rätta mängd</button>` : ''}
+                </div>
+            </div>`;
+        }
+    }
+    // Without this line an ICA wall reads as a breakdown, and the natural response —
+    // deleting the links — is exactly wrong.
+    return html + '<div class="silent-foot">Blockerade hämtningar räknas inte som fel här — '
+        + 'en vägg är butikens tillstånd, inte vårt.</div></div>';
+}
+
+function buildLuckorCounters(coverage) {
+    const stale = coverage.stalest_days != null ? coverage.stalest_days + ' dygn' : DASH;
+    return '<div class="stat-grid stat-grid-4">'
+        + '<div class="stat-box is-warning clickable" data-issue-filter="needs_amount">'
+        + `<div class="stat-value">${coverage.links_without_amount}</div>`
+        + '<div class="stat-label">Länkar utan mängd</div></div>'
+        + '<div class="stat-box">'
+        + `<div class="stat-value">${coverage.products_single_store}</div>`
+        + '<div class="stat-label">Produkter i bara en butik</div></div>'
+        + '<div class="stat-box">'
+        + `<div class="stat-value">${coverage.links_never_checked}</div>`
+        + '<div class="stat-label">Länkar aldrig kollade</div></div>'
+        + '<div class="stat-box">'
+        + `<div class="stat-value">${escapeHtml(stale)}</div>`
+        + '<div class="stat-label">Äldsta kontroll</div></div>'
+        + '</div>';
+}
+
+function buildBrokenLinks(rows) {
+    if (!rows.length) return '';
+    let html = '<div class="card"><div class="card-header"><div class="card-title">Trasiga länkar '
+        + '<span class="card-title-note">— tre raka misslyckade försök; en enda lyckad kontroll '
+        + 'rensar flaggan</span></div></div>';
+    for (const { product, link } of rows) {
+        const detail = link.broken_detail || '';
+        // Only say "the page is gone" when the store actually said so. Anything else is a
+        // failure we cannot name, and guessing at it would send the reader to delete a link
+        // that may be fine.
+        const hint = /40[34]|410/.test(detail)
+            ? 'sidan är borta — lägg till ny länk via Snabbtillägg'
+            : 'kontrollen misslyckas — öppna sidan och se om den finns kvar';
+        const seen = link.last_checked_at ? ' · senast ' + formatShortWhen(link.last_checked_at) : '';
+        html += `<div class="issue-row">
+            <div class="issue-main">
+                <div class="issue-name">${escapeHtml(product.name)}</div>
+                <div class="issue-sub">${escapeHtml(link.store_name)} · 3 av 3 senaste försök${escapeHtml(seen)}</div>
+            </div>
+            <div class="issue-right">
+                <span class="badge badge-error">${escapeHtml(detail || 'misslyckad kontroll')}</span>
+                <div class="issue-hint">${escapeHtml(hint)}</div>
+                ${IS_ADMIN ? `<button class="action-btn" data-issue-action="check"
+                    data-link="${escapeHtml(link.product_store_id)}">Kontrollera nu</button>` : ''}
+            </div>
+        </div>`;
+    }
+    return html + '</div>';
+}
+
+// The gap gets fixed WHERE IT IS SHOWN — one field per row, saved in place. Sending the
+// reader to a dialog three clicks away is how a six-item list stays a six-item list.
+function buildAmountGaps(rows) {
+    if (!rows.length) return '';
+    let html = '<div class="card"><div class="card-header"><div class="card-title">Länkar utan mängd '
+        + '<span class="card-title-note">— utan ett antal går länken inte att jämföra</span>'
+        + '</div></div>';
+    for (const { product, link } of rows) {
+        const entry = gapEntry(product.unit);
+        // Only shown when we actually HAVE it: the page's own reading is evidence, and a
+        // hint we do not hold must not be invented.
+        const hint = link.scraped_package_quantity != null
+            ? `sidan säger ${formatSek(link.scraped_package_quantity)} ${product.unit || ''} — bekräfta`
+            : (link.package_size ? `sidan säger ${link.package_size}` : 'sidan säger inget antal');
+        const price = effectivePrice(link);
+        html += `<div class="issue-row">
+            <div class="issue-main">
+                <div class="issue-name">${escapeHtml(product.name)}</div>
+                <div class="issue-sub">${escapeHtml(link.store_name)}</div>
+            </div>
+            <div class="issue-right">
+                <div class="gap-hint">${escapeHtml(hint)}</div>
+                <div class="gap-price">${escapeHtml(kr(price))}</div>
+                ${IS_ADMIN ? `<input type="number" step="any" min="0" class="gap-input"
+                        placeholder="${escapeHtml(entry.placeholder)}"
+                        data-gap-input="${escapeHtml(link.product_store_id)}">
+                    <button class="btn btn-primary gap-save" data-issue-action="save-amount"
+                        data-link="${escapeHtml(link.product_store_id)}"
+                        data-unit="${escapeHtml(entry.unit)}">Spara</button>` : ''}
+            </div>
+        </div>`;
+    }
+    return html + '</div>';
+}
+
+function renderLuckor() {
+    const container = document.getElementById('luckor-container');
+    if (!container) return;
+    if (!statsData) return;   // the counters and the silent errors both come from /stats
+    const counts = issueCounts();
+    const q = statsData.data_quality || {};
+    const broken = brokenLinkRows();
+    const gaps = missingAmountRows();
+    let html = buildSilentErrors(counts, q) + buildLuckorCounters(statsData.coverage)
+        + buildBrokenLinks(broken) + buildAmountGaps(gaps);
+    if (!counts.total) {
+        html += '<div class="card"><div class="empty-state"><p>Inga luckor att åtgärda — '
+            + 'varje länk har en mängd och svarar på sina kontroller.</p></div></div>';
+    }
+    container.innerHTML = html;
+}
+
+// Save an amount straight from the gap list: normalize into the product's canonical unit,
+// write it, then drop the row. The label is suggested the same way the dialogs do it.
+async function saveGapAmount(linkId, entryUnit) {
+    const input = document.querySelector(`[data-gap-input="${linkId}"]`);
+    if (!input) return;
+    const raw = input.value.trim();
+    if (!raw) { showToast('Ange en mängd först', 'error'); return; }
+    const spec = PKG_UNITS[entryUnit];
+    const amount = parseFloat(raw);
+    if (!isFinite(amount) || amount <= 0) { showToast('Mängden måste vara större än noll', 'error'); return; }
+    try {
+        await apiPut('/product-stores/' + linkId + '/packaging', {
+            package_quantity: amount * (spec ? spec.factor : 1),
+            package_size: spec ? spec.label(raw) : null
+        });
+        showToast('Mängd sparad — jfr-priset räknas om');
+        await loadProducts();
+        loadDeals();
+    } catch (err) {
+        showToast('Fel: ' + err.message, 'error');
+    }
+}
+
+// The two silent-error actions resolve a (produkt, butik) pair back to the LINK — the
+// validator reports names, not ids, because its judgement is about the pair. Both land in
+// the links panel, which is where a link's real actions already live.
+function findLink(productName, storeName) {
+    const product = (allProducts || []).find(p => p.name === productName);
+    if (!product) return null;
+    const link = (product.stores || []).find(s => s.store_name === storeName);
+    return link ? { product, link } : null;
+}
+
+async function openIssueLink(productName, storeName, openPackaging) {
+    const hit = findLink(productName, storeName);
+    if (!hit) { showToast('Länken hittades inte — ladda om sidan', 'error'); return; }
+    await showProductLinks(hit.product.id, hit.product.name, hit.product.unit);
+    if (openPackaging) showEditPackagingModal(hit.link.product_store_id);
 }
 
 // --- Loggar: the app's own operational log, tailed from an in-memory ring buffer.
@@ -2073,6 +2831,8 @@ function formatLogTime(iso) {
     return sameDay ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
+// `domain.scheduler` -> `scheduler`: the package prefix is the same on every row and buys
+// nothing, while the module is what tells you which part of the app spoke.
 function shortLogger(name) {
     if (!name) return '';
     const parts = name.split('.');
@@ -2087,79 +2847,113 @@ async function loadLogs() {
         const data = await apiGet(`/logs?limit=300&level=${encodeURIComponent(level)}`);
         const logs = (data && data.logs) || [];
         if (!logs.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128220;</div><p>Inga loggar på den här nivån ännu — händelser dyker upp när priser kontrolleras eller produkter läggs till.</p></div>';
+            container.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-state-icon">&#128220;</div><p>Inga loggar på den här nivån ännu — händelser dyker upp när priser kontrolleras eller produkter läggs till.</p></div></div>';
             return;
         }
-        let html = '<table><thead><tr><th>Tid</th><th>Nivå</th><th>Källa</th><th>Meddelande</th></tr></thead><tbody>';
+        let html = '<div class="card">';
         for (const r of logs) {
             const cls = LOG_LEVEL_BADGE[r.level] || 'badge-muted';
-            html += `<tr>
-                <td class="best-link" style="white-space:nowrap">${escapeHtml(formatLogTime(r.ts))}</td>
-                <td><span class="badge ${cls}">${escapeHtml(r.level || '')}</span></td>
-                <td class="best-link" style="white-space:nowrap">${escapeHtml(shortLogger(r.logger))}</td>
-                <td style="word-break:break-word">${escapeHtml(r.message || '')}</td>
-            </tr>`;
+            html += `<div class="log-row">
+                <span class="log-time">${escapeHtml(formatLogTime(r.ts))}</span>
+                <span class="log-level ${cls}">${escapeHtml(r.level || '')}</span>
+                <span class="log-source">${escapeHtml(shortLogger(r.logger))}</span>
+                <span class="log-msg">${escapeHtml(r.message || '')}</span>
+            </div>`;
         }
-        html += '</tbody></table>';
-        container.innerHTML = html;
+        container.innerHTML = html + '</div>';
     } catch (e) {
-        container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda loggar.</p></div>';
+        container.innerHTML = '<div class="card"><div class="empty-state"><p>Kunde inte ladda loggar.</p></div></div>';
     }
 }
 
-// The last /watches payload, kept so the edit dialog prefills from what the row already
-// showed instead of refetching a single watch (there is no GET /watches/{id}).
-let watchesCache = [];
+// --- Bevakningar ---
+//
+// Each row shows the DISTANCE to its target as a bar. Without it a watch is a write-only
+// register: you can see that you set one, but not whether it is close.
+
+function watchTarget(w) {
+    if (w.unit_price_target_sek != null) {
+        return { value: w.unit_price_target_sek, label: unitKr(w.unit_price_target_sek, w.unit), unit: true };
+    }
+    if (w.target_price_sek != null) {
+        return { value: w.target_price_sek, label: kr(w.target_price_sek), unit: false };
+    }
+    return null;
+}
+
+function watchCurrent(w) {
+    if (w.unit_price_target_sek != null) {
+        return w.current_lowest_unit_price_sek != null
+            ? { value: w.current_lowest_unit_price_sek, label: unitKr(w.current_lowest_unit_price_sek, w.unit) }
+            : null;
+    }
+    return w.current_lowest_price_sek != null
+        ? { value: w.current_lowest_price_sek, label: kr(w.current_lowest_price_sek) }
+        : null;
+}
+
+function watchRowHtml(w) {
+    const target = watchTarget(w);
+    const current = watchCurrent(w);
+    const met = !!(target && current && current.value <= target.value);
+    const kind = w.unit_price_target_sek != null ? 'mål i jfr-pris'
+        : (w.target_price_sek != null ? 'absolut målpris' : 'inget mål');
+    const meta = [kind, w.alert_on_any_offer ? 'larmar även vid erbjudande' : null]
+        .filter(Boolean).join(' · ');
+
+    let progress = '<div class="w-progress"><div class="w-progress-head">'
+        + `<span>inget mål satt</span><span></span></div></div>`;
+    if (target) {
+        const gap = current ? (met ? 'under målet' : formatSek(current.value - target.value) + ' kr kvar') : 'inget pris än';
+        // How close, as a proportion of what is being asked for. Full and green the moment
+        // the target is met — the bar is a state, not an animation.
+        const share = current ? clamp01(target.value / current.value) : 0;
+        progress = '<div class="w-progress"><div class="w-progress-head">'
+            + `<span>mål ${escapeHtml(target.label)}</span><span>${escapeHtml(gap)}</span></div>`
+            + `<div class="bar-track"><div class="bar-fill${met ? ' is-low' : ''}" style="width:${(share * 100).toFixed(1)}%"></div></div></div>`;
+    }
+    return `<div class="w-row${met ? ' is-met' : ''}">
+        <div class="w-main">
+            <div class="w-name">${escapeHtml(w.product_name || w.product_id)}</div>
+            <div class="w-meta">${escapeHtml(meta)}</div>
+        </div>
+        <div class="w-right">
+            ${progress}
+            <div class="w-now">
+                <div class="w-now-value${met ? ' is-met' : ''}">${escapeHtml(current ? current.label : DASH)}</div>
+                <div class="w-store">${escapeHtml(w.current_lowest_store || 'inget pris än')}</div>
+            </div>
+            ${IS_ADMIN ? `<div class="w-actions">
+                <button class="action-btn" data-watch-action="edit" data-id="${escapeHtml(w.watch_id)}">Redigera</button>
+                <button class="action-btn" data-watch-action="delete" data-id="${escapeHtml(w.watch_id)}">Ta bort</button>
+            </div>` : ''}
+        </div>
+    </div>`;
+}
 
 async function loadWatches() {
     try {
         const watches = await apiGet('/watches');
         watchesCache = watches;
+        setNavCount('nav-count-bevakningar', watches.length);
         const container = document.getElementById('watches-table-container');
+        const basis = document.getElementById('watches-basis');
         if (!watches.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div>';
+            container.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-state-icon">&#128064;</div><p>Inga prisbevakningar än.</p></div></div>';
+            basis.textContent = 'Ingen bevakning ännu — en bevakning larmar när ett jfr-pris når ditt mål.';
             return;
         }
-        // Both actions here are writes, so a reader gets no Åtgärder column at all rather
-        // than an empty one.
-        // The offer-alert flag hides on the phone (col-secondary) — it lives in the edit
-        // dialog; target vs current price is what the list is for.
-        let html = '<table><thead><tr><th>Produkt</th><th>Mål</th><th>Just nu</th><th class="col-secondary">Larma vid erbjudande</th>'
-            + (IS_ADMIN ? '<th>Åtgärder</th>' : '') + '</tr></thead><tbody>';
-        for (const w of watches) {
-            // Show the target in whichever currency the watch actually uses —
-            // jfr-pris targets are the norm, absolute kr the legacy.
-            const target = w.unit_price_target_sek != null
-                ? w.unit_price_target_sek + ' ' + unitPriceHeading(w.unit)
-                : (w.target_price_sek != null ? w.target_price_sek + ' kr' : '-');
-            // "How close is it?" — without this the watch is a write-only register.
-            let now = '-';
-            if (w.current_lowest_price_sek != null) {
-                const met = (w.target_price_sek != null && w.current_lowest_price_sek <= w.target_price_sek)
-                    || (w.unit_price_target_sek != null && w.current_lowest_unit_price_sek != null
-                        && w.current_lowest_unit_price_sek <= w.unit_price_target_sek);
-                const nowPrice = w.current_lowest_unit_price_sek != null
-                    ? w.current_lowest_unit_price_sek.toFixed(2) + ' ' + unitPriceHeading(w.unit)
-                    : w.current_lowest_price_sek + ' kr';
-                now = '<span class="' + (met ? 'price-good' : '') + '">' + escapeHtml(nowPrice)
-                    + (met ? ' — under målet!' : '') + '</span>'
-                    + '<div class="best-link">' + escapeHtml(w.current_lowest_store || '') + '</div>';
-            }
-            html += `<tr>
-                <td>${escapeHtml(w.product_name || w.product_id)}</td>
-                <td>${escapeHtml(target)}</td>
-                <td>${now}</td>
-                <td class="col-secondary">${w.alert_on_any_offer ? 'Ja' : 'Nej'}</td>
-                ${IS_ADMIN ? `<td>
-                    <button class="action-btn" onclick="openEditWatch('${w.watch_id}')">Redigera</button>
-                    <button class="action-btn" onclick="deleteWatch('${w.watch_id}')">Ta bort</button>
-                </td>` : ''}
-            </tr>`;
-        }
-        html += '</tbody></table>';
-        container.innerHTML = html;
+        const met = watches.filter(w => {
+            const t = watchTarget(w), c = watchCurrent(w);
+            return t && c && c.value <= t.value;
+        }).length;
+        const emails = Array.from(new Set(watches.map(w => w.email_address).filter(Boolean)));
+        basis.textContent = `${numberWord(met, true)} av ${numberWord(watches.length)} är under sitt mål just nu`
+            + (emails.length ? ' · larm går till ' + emails.join(', ') : '');
+        container.innerHTML = '<div class="card list-flat">' + watches.map(watchRowHtml).join('') + '</div>';
     } catch (e) {
-        document.getElementById('watches-table-container').innerHTML = '<div class="empty-state"><p>Kunde inte ladda bevakningar.</p></div>';
+        document.getElementById('watches-table-container').innerHTML =
+            '<div class="card"><div class="empty-state"><p>Kunde inte ladda bevakningar.</p></div></div>';
     }
 }
 
@@ -3337,6 +4131,9 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
+// --- Wiring. Everything is delegated from a container: no inline onclick carrying an
+// interpolated id or product name (which breaks for names containing quotes). ---
+
 // Filters re-render from memory, so they fire on every keystroke — no debounce to tune and
 // no request to wait for. 'input' on the text box, 'change' on the selects.
 for (const [id, key] of PRODUCT_FILTER_CONTROLS) {
@@ -3345,6 +4142,35 @@ for (const [id, key] of PRODUCT_FILTER_CONTROLS) {
         setProductFilter(key, e.target.value);
     });
 }
+
+// The chips: omfång, status and sort. Pressing an active chip releases it — a filter you
+// cannot switch off is a trap.
+document.getElementById('product-chips').addEventListener('click', (e) => {
+    const chip = e.target.closest('button[data-chip]');
+    if (!chip) return;
+    const kind = chip.getAttribute('data-chip');
+    const value = chip.getAttribute('data-value') || '';
+    if (kind === 'all') {
+        productFilters.status = '';
+        saveProductFilters();
+        setScope('');
+        renderProducts();
+    } else if (kind === 'scope') {
+        setScope(scope === value ? '' : value);
+        renderProducts();
+    } else if (kind === 'status') {
+        setProductFilter('status', productFilters.status === value ? '' : value);
+    } else if (kind === 'sort') {
+        setProductFilter('sort', productFilters.sort === 'aisle' ? 'name' : 'aisle');
+    }
+});
+
+// One state, two controls: the header segment and the chip row are the same switch.
+document.getElementById('scope-switch').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-scope]');
+    if (!btn) return;
+    setScope(btn.getAttribute('data-scope') || '');
+});
 
 // The facet fold starts closed on a phone and MUST reopen when the viewport goes wide:
 // desktop CSS hides the summary (nothing left to click), and a closed <details>' content
@@ -3366,15 +4192,12 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// Delegated product action handlers — avoids embedding product names in
-// inline onclick attributes (which breaks for names containing quotes).
+// The product ROW opens Länkar — the panel this list exists to lead into. A row action wins
+// over the row itself, and the ÅTGÄRDER cell is deliberately NOT part of the row target:
+// empty space beside two buttons that silently opens a panel is an invisible third button.
 document.getElementById('products-table-container').addEventListener('click', (e) => {
-    // A row action wins over the row itself; the row is the fallback and opens Länkar. The
-    // ÅTGÄRDER cell is deliberately NOT part of that fallback: the empty space beside two
-    // buttons is where a user expects only buttons to do something, so a whole-row target
-    // there behaves as an invisible third button.
     const btn = e.target.closest('button[data-action]')
-        || (e.target.closest('td.row-actions') ? null : e.target.closest('tr[data-action]'));
+        || (e.target.closest('.p-actions') ? null : e.target.closest('.p-row[data-action]'));
     if (!btn) return;
     const id = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
@@ -3389,7 +4212,7 @@ document.getElementById('products-table-container').addEventListener('click', (e
 });
 
 // Entry-unit helper buttons, delegated per dialog.
-for (const pkgPrefix of ['link', 'edit']) {
+for (const pkgPrefix of ['qa', 'link', 'edit']) {
     document.getElementById(pkgPrefix + '-pkg-entry-units').addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-entry-unit]');
         if (!btn) return;
@@ -3397,29 +4220,45 @@ for (const pkgPrefix of ['link', 'edit']) {
     });
 }
 
-// Price-history mode toggle — delegated, like every other handler in this file. No inline
-// onclick (the pattern removed in f6ec6c4). Re-renders from the cached rows; no refetch.
+// Price-history mode toggle. Re-renders from the cached rows; no refetch.
 document.getElementById('price-history-modes').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-history-mode]');
     if (!btn) return;
     setHistoryMode(btn.getAttribute('data-history-mode'));
 });
 
-// The deal row's product name opens the same history modal the Produkter page uses — on
-// Erbjudanden the question behind the click is "är det här priset faktiskt bra historiskt?",
-// so the name leads to the graph, not the links panel. Only the name is a target: the rest
-// of the row stays quiet, because the store cell is already a link OUT to the butik.
+// On Att köpa the question behind a click on the product name is "is this price actually
+// good historically?", so the name leads to the graph. Only the name is a target: the store
+// name in the verdict sentence is already a link OUT to the butik.
 document.getElementById('deals-table-container').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-deal-action]');
     if (!btn) return;
+    const action = btn.getAttribute('data-deal-action');
+    if (action === 'gaps') { location.hash = '#/luckor'; return; }
     const id = btn.getAttribute('data-id');
+    // allDeals, NOT allProducts: Att köpa is the start page and may render before the
+    // product list has ever loaded. The deals wire carries name and unit already.
     const deal = (allDeals || []).find(d => d.product_id === id);
     showPriceHistory(id, deal ? deal.product_name : '', deal ? deal.unit : null);
 });
 
-// Links-panel actions and column sorting — delegated, like the product table. No inline
-// onclick carrying an interpolated id (the pattern removed in f6ec6c4 for quote-safety);
-// the store-printed column has no data-sort attribute, so it cannot be sorted on.
+// The butiksfördelning IS the store filter — clicking a pill filters the list to that
+// round, clicking it again releases it, and so does "Visa alla butiker".
+document.getElementById('basket-strip').addEventListener('click', (e) => {
+    const pill = e.target.closest('button[data-store]');
+    if (pill) { setStoreFilter(pill.getAttribute('data-store')); return; }
+    const link = e.target.closest('button[data-basket]');
+    if (!link) return;
+    if (link.getAttribute('data-basket') === 'clear') {
+        storeFilter = null;
+        renderDeals();
+    } else {
+        location.hash = '#/luckor';
+    }
+});
+
+// Links-panel actions and column sorting. The store-printed column has no data-sort
+// attribute, so it cannot be sorted on (D-05).
 document.getElementById('product-links-table').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-sort]');
     if (th) {
@@ -3437,49 +4276,96 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
     }
 });
 
-// Statistics table sorting and the links from Täckning into the product list's facets.
-// Sorting re-renders from the cached payload — no refetch, same as the links panel.
+// Statistics table sorting — re-renders from the cached payload, no refetch.
 document.getElementById('stats-container').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-stats-sort]');
-    if (th) {
-        const column = th.getAttribute('data-stats-sort');
-        statsSort = {
-            column: column,
-            direction: (statsSort.column === column && statsSort.direction === 'asc') ? 'desc' : 'asc'
-        };
-        renderStatistics();
+    if (!th) return;
+    const column = th.getAttribute('data-stats-sort');
+    statsSort = {
+        column: column,
+        direction: (statsSort.column === column && statsSort.direction === 'asc') ? 'desc' : 'asc'
+    };
+    renderStatistics();
+});
+
+// Fel & luckor is a to-do list, so every row carries the action that closes it: the amount
+// is typed and saved in place, a broken link is re-checked from here, and a silent error
+// opens the link it is about.
+document.getElementById('luckor-container').addEventListener('click', (e) => {
+    const box = e.target.closest('[data-issue-filter]');
+    if (box) {
+        // A count is a way IN to the list it counts: set the facet and go, instead of making
+        // the reader re-derive the filter that produced the number.
+        clearProductFilters();
+        setProductFilter('status', box.getAttribute('data-issue-filter'));
+        location.hash = '#/produkter';
         return;
     }
-    // A health count is a way IN to the list it counts: set the facet and go, instead of
-    // making the reader re-derive the filter that produced the number.
-    const box = e.target.closest('[data-stats-filter]');
-    if (box) {
-        clearProductFilters();
-        setProductFilter('status', box.getAttribute('data-stats-filter'));
-        applyFiltersToControls();
-        location.hash = '#/produkter';
+    const btn = e.target.closest('button[data-issue-action]');
+    if (!btn) return;
+    const action = btn.getAttribute('data-issue-action');
+    if (action === 'open-link') {
+        openIssueLink(btn.getAttribute('data-product'), btn.getAttribute('data-store'), false);
+    } else if (action === 'fix-amount') {
+        openIssueLink(btn.getAttribute('data-product'), btn.getAttribute('data-store'), true);
+    } else if (action === 'check') {
+        checkLinkNow(btn.getAttribute('data-link'));
+    } else if (action === 'save-amount') {
+        saveGapAmount(btn.getAttribute('data-link'), btn.getAttribute('data-unit'));
     }
 });
 
-// --- Hash router: the sidebar's pages ---
+// Enter in a gap field saves it: the whole point of the inline field is that fixing six of
+// them should not require six trips to the mouse.
+document.getElementById('luckor-container').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const input = e.target.closest('input[data-gap-input]');
+    if (!input) return;
+    e.preventDefault();
+    const id = input.getAttribute('data-gap-input');
+    const save = document.querySelector(`button[data-issue-action="save-amount"][data-link="${id}"]`);
+    if (save) saveGapAmount(id, save.getAttribute('data-unit'));
+});
+
+document.getElementById('watches-table-container').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-watch-action]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-id');
+    if (btn.getAttribute('data-watch-action') === 'edit') {
+        openEditWatch(id);
+    } else {
+        deleteWatch(id);
+    }
+});
+
+// --- Hash router: the sidebar's six pages ---
 //
-// One served page, one visible at a time. All data still loads up front (the sets are small),
-// so switching pages is instant and deep links (#/produkter) land right. Unknown or
-// missing hash falls back to Erbjudanden (the start page) rather than a blank screen.
+// One served page, one visible at a time. The data loads up front (the sets are small), so
+// switching pages is instant and deep links land right. An unknown or missing hash falls
+// back to Att köpa — the page that answers the question the app exists for.
 
 const PAGES = {
+    kopa: 'Att köpa',
     produkter: 'Produkter',
-    erbjudanden: 'Aktuella erbjudanden',
-    statistik: 'Statistik',
-    bevakningar: 'Prisbevakningar',
+    utveckling: 'Prisutveckling',
+    bevakningar: 'Bevakningar',
+    luckor: 'Fel & luckor',
     loggar: 'Loggar'
 };
+// The pre-3a names, kept working: a bookmark is a promise, and renaming a page is not a
+// reason to break one.
+const PAGE_ALIASES = { erbjudanden: 'kopa', statistik: 'utveckling' };
+// The scope switch filters exactly these two pages, so it is hidden on the rest — a control
+// that changes nothing is worse than no control.
+const SCOPE_PAGES = ['kopa', 'produkter'];
+// The three that earn a permanent tab on the phone; the other three live behind "Mer".
+const TAB_PAGES = ['kopa', 'produkter', 'utveckling'];
 
 function currentPage() {
-    // Erbjudanden is the START page: the freshest, most actionable view — the long
-    // product list is one click away instead of burying it.
     const key = (location.hash || '').replace(/^#\/?/, '');
-    return PAGES[key] ? key : 'erbjudanden';
+    if (PAGES[key]) return key;
+    if (PAGE_ALIASES[key]) return PAGE_ALIASES[key];
+    return 'kopa';
 }
 
 function renderPage() {
@@ -3492,22 +4378,54 @@ function renderPage() {
     }
     const crumb = document.getElementById('breadcrumb-current');
     if (crumb) crumb.textContent = PAGES[page];
-    // Loggar and Statistik are loaded lazily — only when shown, and re-fetched on each visit
-    // so they are fresh without polling. Statistik walks every price point server-side, which
-    // is cheap but pointless to do for someone who never opens the page.
+    const mobileTitle = document.getElementById('mobile-page-title');
+    if (mobileTitle) mobileTitle.textContent = PAGES[page];
+    document.getElementById('scope-switch').style.display =
+        SCOPE_PAGES.includes(page) ? '' : 'none';
+    for (const btn of document.querySelectorAll('#mobile-tabs button')) {
+        const target = btn.getAttribute('data-page');
+        btn.classList.toggle('active',
+            target ? target === page : !TAB_PAGES.includes(page));
+    }
+    document.getElementById('mobile-sheet').classList.remove('open');
+    // Loggar is fetched only when shown, and re-fetched on each visit so it is fresh
+    // without polling. The other pages render from data that is already in memory.
     if (page === 'loggar') loadLogs();
-    if (page === 'statistik') loadStatistics();
 }
+
+document.getElementById('mobile-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.getAttribute('data-more')) {
+        document.getElementById('mobile-sheet').classList.toggle('open');
+        return;
+    }
+    location.hash = '#/' + btn.getAttribute('data-page');
+});
+
+document.getElementById('mobile-sheet').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-page]');
+    if (btn) {
+        location.hash = '#/' + btn.getAttribute('data-page');
+        return;
+    }
+    // A tap on the backdrop closes it — the sheet is a menu, not a modal to escape from.
+    if (e.target.id === 'mobile-sheet') e.target.classList.remove('open');
+});
 
 window.addEventListener('hashchange', renderPage);
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
-    renderPage();
     restoreProductFilters();
+    renderPage();
     await loadStores();
     loadProducts();
     loadDeals();
     loadWatches();
     loadStats();
+    // /stats is loaded up front, not lazily as Statistik once was: Att köpa's span bars,
+    // the silent-error link and the sidebar's Fel & luckor badge all read from it, and the
+    // start page must not render without them.
+    loadStatistics();
 });

@@ -2910,8 +2910,9 @@ async def price_tracker_dashboard(principal: Principal = Depends(get_principal))
     extra_js = parts[2] if len(parts) > 2 else ""
 
     base_css = _get_admin_nav_css()
-    sidebar = _get_admin_sidebar_html()
+    sidebar = _get_admin_sidebar_html(principal)
     header = _get_admin_header_html(principal)
+    mobile_chrome = _get_mobile_chrome_html(principal)
     # The role travels as a body class, not as an injected JS literal: the CSS hides the
     # static write controls off it, and the JS reads it back (IS_ADMIN) to decide which
     # row actions to build. One source, and nothing to escape.
@@ -2933,6 +2934,7 @@ async def price_tracker_dashboard(principal: Principal = Depends(get_principal))
         {sidebar}
         <main class="admin-main">
             {header}
+            {mobile_chrome}
             <div class="admin-content">
                 {content}
             </div>
@@ -2947,35 +2949,89 @@ async def price_tracker_dashboard(principal: Principal = Depends(get_principal))
 
 
 def _get_admin_nav_css() -> str:
-    """Return shared CSS for admin navigation."""
+    """The design system: tokens, shell, sidebar, header and the shared row/card language.
+
+    Page-specific CSS lives in the template's second fragment. What is here is what the
+    server-rendered shell needs (sidebar + header) plus the primitives every page builds
+    from — so a colour exists in exactly one place. The palette is the 3a handoff's, and
+    it is closed: nothing outside these tokens may be introduced.
+    """
     return """
         :root {
             --nav-width: 220px;
             --header-height: 56px;
             --primary: #2563eb;
             --primary-dark: #1d4ed8;
-            --bg: #f8fafc;
+            /* Page background is the muted slate the cards sit on — cards define
+               themselves with a 1px border, never a shadow. */
+            --bg: #eef1f5;
             --bg-nav: #1e293b;
             --bg-card: #fff;
-            --border: #e2e8f0;
-            --text: #1e293b;
+            /* Two different edges, deliberately: cards/list rows use --border, controls
+               (inputs, selects, secondary buttons, segments) the darker --border-control.
+               A control that shares the card's edge stops reading as a control. */
+            --border: #dbe2ea;
+            --border-control: #cbd5e1;
+            --row-line: #f1f5f9;
+            --row-line-weak: #f8fafc;
+            --text: #0f172a;
+            --text-secondary: #334155;
             --text-muted: #64748b;
+            --text-faint: #94a3b8;
             --text-nav: #94a3b8;
             --text-nav-active: #fff;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --error: #ef4444;
+            /* Positive is the DEEP green (text-legible on white); the light one is for
+               bars and dots only, where it is a shape rather than a word. */
+            --success: #047857;
+            --success-bar: #10b981;
+            --success-chip-bg: #d1fae5;
+            --success-chip-fg: #065f46;
+            --success-row: #f6fdf9;
+            --warning: #92400e;
+            --warning-bg: #fffbeb;
+            --warning-border: #fde68a;
+            --warning-chip-bg: #fef3c7;
+            --warning-link: #b45309;
+            --error: #b91c1c;
+            --error-strong: #991b1b;
+            --error-bg: #fef2f2;
+            --error-border: #fca5a5;
+            --error-line: #fee2e2;
+            --error-chip-bg: #fee2e2;
+            --neutral-chip-bg: #eef1f5;
+            --neutral-chip-fg: #475569;
+            --hover: #fbfcfe;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
+            font-size: 14px;
             min-height: 100vh;
         }
+        /* Every number that is compared with another number is set in tabular figures —
+           a column of prices that jitters horizontally cannot be scanned. */
+        .tnum, .stat-value, .unit-price, .num { font-variant-numeric: tabular-nums; }
+        a { color: var(--primary); text-decoration: none; }
+        a:hover { color: var(--primary-dark); }
+        input, select, button, textarea { font-family: inherit; }
+        /* One visible focus ring for everything interactive — keyboard users get the same
+           page, not a diminished one. */
+        a:focus-visible, button:focus-visible, input:focus-visible,
+        select:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+
         .admin-layout { display: flex; min-height: 100vh; }
+
+        /* --- Sidebar: two groups with live counters, and a foot that answers "does the
+           scheduler still run?" without opening a page. --- */
         .admin-sidebar {
             width: var(--nav-width);
+            flex: 0 0 var(--nav-width);
             background: var(--bg-nav);
             color: var(--text-nav);
             position: fixed;
@@ -2996,14 +3052,27 @@ def _get_admin_nav_css() -> str:
             align-items: center;
             gap: 8px;
         }
-        .sidebar-logo span { font-size: 18px; }
-        .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+        .sidebar-logo:hover { color: #fff; }
+        .sidebar-logo .logo-mark { font-size: 18px; }
+        /* Indented to line up with the wordmark, not with the emoji. */
+        .sidebar-sub {
+            margin-left: 26px;
+            margin-top: 2px;
+            font-size: 11.5px;
+            color: #64748b;
+            /* Clipped, not wrapped: a long address broken mid-word reads as a rendering
+               fault. The full value stays in the title attribute. */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-nav { flex: 1; overflow-y: auto; padding: 0 0 8px; }
         .nav-section {
-            padding: 8px 16px 4px;
-            font-size: 10px;
-            font-weight: 600;
+            padding: 14px 16px 4px;
+            font-size: 10.5px;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.09em;
             color: #64748b;
         }
         .nav-item {
@@ -3014,7 +3083,8 @@ def _get_admin_nav_css() -> str:
             color: var(--text-nav);
             text-decoration: none;
             font-size: 13px;
-            transition: all 0.15s;
+            /* Transparent on the inactive item too, so the label does not shift 3px
+               sideways the moment a page is selected. */
             border-left: 3px solid transparent;
         }
         .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
@@ -3024,14 +3094,55 @@ def _get_admin_nav_css() -> str:
             border-left-color: var(--primary);
         }
         .nav-icon { font-size: 16px; width: 20px; text-align: center; }
-        .sidebar-footer {
-            padding: 12px 16px;
-            border-top: 1px solid rgba(255,255,255,0.1);
+        .nav-count {
+            margin-left: auto;
             font-size: 11px;
+            font-weight: 700;
+            padding: 1px 7px;
+            border-radius: 9px;
+            background: transparent;
             color: #64748b;
         }
+        .nav-item.active .nav-count { background: var(--primary); color: #fff; }
+        /* An empty counter renders nothing at all — a 0 in a pill still draws the eye. */
+        .nav-count:empty { display: none; }
+        /* Fel & luckor is the one counter that carries a severity: amber while it is only
+           gaps to close, red the moment a SILENT error is among them (the check said "ok"
+           and the number is still wrong). Set by the JS, both states here. */
+        .nav-count.count-gap,
+        .nav-item.active .nav-count.count-gap { background: #78350f; color: #fde68a; }
+        .nav-count.count-error,
+        .nav-item.active .nav-count.count-error { background: #991b1b; color: #fee2e2; }
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 12px 16px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 11.5px;
+            line-height: 1.7;
+            color: #64748b;
+        }
+        .sched-state {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-weight: 600;
+            color: #34d399;
+        }
+        .sched-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success-bar);
+            flex: 0 0 auto;
+        }
+        .sched-state.is-paused { color: #fcd34d; }
+        .sched-state.is-paused .sched-dot { background: #f59e0b; }
+        .sched-state.is-blocked, .sched-state.is-off { color: #fca5a5; }
+        .sched-state.is-blocked .sched-dot, .sched-state.is-off .sched-dot { background: #ef4444; }
+
         .admin-main {
             flex: 1;
+            min-width: 0;
             margin-left: var(--nav-width);
             display: flex;
             flex-direction: column;
@@ -3040,7 +3151,7 @@ def _get_admin_nav_css() -> str:
         .admin-header {
             height: var(--header-height);
             background: var(--bg-card);
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid #e2e8f0;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -3050,23 +3161,31 @@ def _get_admin_nav_css() -> str:
             z-index: 50;
         }
         .breadcrumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-        .breadcrumbs a { color: var(--text-muted); text-decoration: none; }
-        .breadcrumbs a:hover { color: var(--primary); }
-        .breadcrumbs .separator { color: var(--border); }
-        .breadcrumbs .current { color: var(--text); font-weight: 500; }
-        .header-actions { display: flex; align-items: center; gap: 12px; }
-        .user-menu {
+        .breadcrumbs .separator { color: var(--border-control); }
+        .breadcrumbs .current { color: var(--text); font-weight: 600; }
+        .header-actions { display: flex; align-items: center; gap: 10px; }
+        /* --- Segmented control (the Allt/Livsmedel/Apotek scope). One frame, dividers
+           BETWEEN the segments only. --- */
+        .segmented {
             display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 12px;
-            background: var(--bg);
-            border-radius: 6px;
-            font-size: 13px;
+            border: 1px solid var(--border-control);
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
         }
+        .segmented button {
+            padding: 7px 13px;
+            font-size: 13px;
+            border: none;
+            background: #fff;
+            color: var(--neutral-chip-fg);
+            cursor: pointer;
+        }
+        .segmented button + button { border-left: 1px solid #e2e8f0; }
+        .segmented button.active { background: var(--primary); color: #fff; font-weight: 600; }
         .user-avatar {
-            width: 28px;
-            height: 28px;
+            width: 30px;
+            height: 30px;
             border-radius: 50%;
             background: var(--primary);
             color: #fff;
@@ -3075,12 +3194,13 @@ def _get_admin_nav_css() -> str:
             justify-content: center;
             font-weight: 600;
             font-size: 12px;
+            flex: 0 0 auto;
         }
         .role-badge {
             padding: 2px 8px;
             border-radius: 10px;
-            background: #e5e7eb;
-            color: #374151;
+            background: var(--neutral-chip-bg);
+            color: var(--neutral-chip-fg);
             font-size: 11px;
             font-weight: 600;
             white-space: nowrap;
@@ -3090,96 +3210,207 @@ def _get_admin_nav_css() -> str:
            about not offering a button that cannot work. The JS-built row actions make the
            same decision from IS_ADMIN (see the script fragment). */
         body.role-reader .admin-only { display: none !important; }
-        .admin-content { flex: 1; padding: 24px; }
-        .page-title { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+
+        .admin-content {
+            flex: 1;
+            padding: 22px 24px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        /* --- Page heading: the question the page answers, then what it was computed
+           from. Every page has both; a number without its basis is a claim. --- */
+        .page-head {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .page-title { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+        .page-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; max-width: 76ch; }
+        .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
         .card {
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 16px;
+            border-radius: 12px;
+            overflow: hidden;
         }
+        .card-pad { padding: 18px; }
         .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 16px;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--row-line);
         }
-        .card-title { font-size: 14px; font-weight: 600; }
+        .card-title { font-size: 15px; font-weight: 600; }
+        .card-title .card-title-note {
+            font-weight: 400;
+            color: var(--text-faint);
+            font-size: 13px;
+        }
+
+        /* --- Buttons --- */
         .btn {
-            padding: 8px 16px;
-            border-radius: 6px;
+            padding: 8px 14px;
+            border-radius: 8px;
             font-size: 13px;
             font-weight: 500;
             cursor: pointer;
-            border: 1px solid var(--border);
+            border: 1px solid var(--border-control);
             background: var(--bg-card);
-            color: var(--text);
-            transition: all 0.15s;
+            color: var(--text-secondary);
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 6px;
         }
-        .btn:hover { background: var(--bg); border-color: var(--text-muted); }
-        .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-        .btn-primary:hover { background: var(--primary-dark); }
-        .btn-sm { padding: 5px 10px; font-size: 12px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
-        th {
-            background: var(--bg);
+        .btn:hover { background: var(--bg); color: var(--text); }
+        .btn-primary {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
             font-weight: 600;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            color: var(--text-muted);
         }
-        tr:hover { background: var(--bg); }
+        .btn-primary:hover { background: var(--primary-dark); color: #fff; }
+        .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 6px; border-color: #e2e8f0; }
+        .action-btn {
+            padding: 6px 10px;
+            font-size: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid #e2e8f0;
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .action-btn:hover { background: var(--bg); }
+
+        /* --- Tables. Headings are small and muted, NOT uppercase: the figures carry the
+           contrast, the headings only say what they are. --- */
+        table { width: 100%; border-collapse: collapse; }
+        th, td {
+            padding: 12px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--row-line-weak);
+        }
+        th {
+            font-weight: 500;
+            font-size: 11.5px;
+            color: var(--text-faint);
+            border-bottom: 1px solid var(--row-line);
+            white-space: nowrap;
+        }
+        .num-col { text-align: right; font-variant-numeric: tabular-nums; }
+
+        /* --- Chips and badges --- */
         .badge {
             display: inline-block;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 500;
+            /* Never breaks mid-label: a two-line "en butik" chip reads as a layout fault. */
+            white-space: nowrap;
+            padding: 3px 9px;
+            border-radius: 6px;
+            font-size: 11.5px;
+            font-weight: 600;
         }
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-error { background: #fee2e2; color: #991b1b; }
+        .badge-success { background: var(--success-chip-bg); color: var(--success-chip-fg); }
+        .badge-warning { background: var(--warning-chip-bg); color: var(--warning); }
+        .badge-error { background: var(--error-chip-bg); color: var(--error-strong); }
         .badge-info { background: #dbeafe; color: #1e40af; }
-        .badge-muted { background: #e5e7eb; color: #374151; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .status-dot.ok { background: var(--success); }
-        .status-dot.warning { background: var(--warning); }
-        .status-dot.error { background: var(--error); }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
+        .badge-muted { background: var(--neutral-chip-bg); color: var(--neutral-chip-fg); }
+        /* Filter chip: a pill you press. The dark fill is "everything", the blue one a
+           store filter — two different kinds of active, deliberately different colours. */
+        .chip {
+            padding: 5px 11px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            border: 1px solid var(--border-control);
+            background: #fff;
+            color: var(--neutral-chip-fg);
+            cursor: pointer;
+            white-space: nowrap;
         }
+        .chip:hover { border-color: var(--text-faint); }
+        .chip.active {
+            background: var(--bg-nav);
+            border-color: var(--bg-nav);
+            color: #fff;
+            font-weight: 600;
+        }
+        .chip.chip-warn {
+            background: var(--warning-bg);
+            border-color: var(--warning-border);
+            color: var(--warning);
+        }
+        .chip.chip-warn.active {
+            background: var(--warning);
+            border-color: var(--warning);
+            color: #fff;
+        }
+        .chip-row { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+
+        /* --- The bar language: one track, one fill, used by the price span, the watch
+           progress and the store comparison. Same shape everywhere on purpose. --- */
+        .bar-track {
+            height: 8px;
+            border-radius: 4px;
+            background: var(--bg);
+            position: relative;
+            overflow: hidden;
+        }
+        .bar-fill { height: 100%; border-radius: 4px; background: var(--primary); }
+        .bar-fill.is-low { background: var(--success-bar); }
+
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .status-dot.ok { background: var(--success-bar); }
+        .status-dot.warning { background: #f59e0b; }
+        .status-dot.error { background: #ef4444; }
+
+        /* --- Key figures --- */
+        .stat-grid { display: grid; gap: 14px; }
+        .stat-grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .stat-grid-4 { grid-template-columns: repeat(4, 1fr); }
         .stat-box {
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 16px;
         }
-        .stat-value { font-size: 24px; font-weight: 600; color: var(--primary); }
-        .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        .stat-box.is-warning { background: var(--warning-bg); border-color: var(--warning-border); }
+        .stat-label { font-size: 12.5px; color: var(--text-muted); }
+        .stat-box.is-warning .stat-label { color: #78350f; }
+        .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; }
+        .stat-box.is-warning .stat-value { color: var(--warning); }
+        .stat-note { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+        a.stat-box, .stat-box.clickable { cursor: pointer; color: inherit; display: block; }
+        a.stat-box:hover, .stat-box.clickable:hover { border-color: var(--primary); }
+
         .loading {
             color: var(--text-muted);
             font-style: italic;
             text-align: center;
             padding: 20px;
         }
-        .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
-        .empty-state-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+        .empty-state {
+            text-align: center;
+            padding: 32px 20px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .empty-state-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+
         .shared-toast {
             position: fixed;
             bottom: 20px;
             right: 20px;
             padding: 12px 20px;
-            border-radius: 6px;
+            border-radius: 8px;
             color: white;
             font-size: 14px;
             font-weight: 500;
@@ -3192,83 +3423,163 @@ def _get_admin_nav_css() -> str:
         .shared-toast.error { background: var(--error); display: block; }
         .shared-toast.warning { background: var(--warning); display: block; }
         .shared-toast.info { background: var(--primary); display: block; }
-        a.stat-box { text-decoration: none; display: block; color: inherit; }
-        a.stat-box:hover { border-color: var(--primary); }
-        /* Mobile: the app doubles as the shopping list IN the store, so the phone is a
-           first-class surface. The fixed sidebar becomes a horizontal top bar, content
-           gets the full width, and wide tables scroll inside their card (see the
-           template CSS) instead of stretching the page. */
+
+        /* --- Mobile shell. The phone is a first-class surface: the app doubles as the
+           shopping list IN the store. The sidebar collapses to a dark title bar and a
+           four-tab bottom menu; the breadcrumb header goes away entirely (the page's own
+           header says where you are). --- */
+        .mobile-topbar, .mobile-tabs, .mobile-sheet { display: none; }
         @media (max-width: 768px) {
-            .admin-layout { flex-direction: column; }
-            .admin-sidebar {
-                position: static;
-                width: 100%;
-                flex-direction: row;
-                align-items: center;
-            }
-            .sidebar-header { padding: 10px 12px; border-bottom: none; }
-            .sidebar-nav {
+            .admin-sidebar { display: none; }
+            .admin-main { margin-left: 0; padding-bottom: 66px; }
+            .admin-header { display: none; }
+            .admin-content { padding: 12px; gap: 10px; }
+            .mobile-topbar {
                 display: flex;
-                padding: 0;
-                overflow-y: visible;
-                overflow-x: auto;
+                align-items: center;
+                justify-content: space-between;
+                background: var(--bg-nav);
+                color: #fff;
+                padding: 12px 14px;
+                position: sticky;
+                top: 0;
+                z-index: 90;
             }
-            .nav-item {
-                border-left: none;
-                border-bottom: 3px solid transparent;
-                padding: 12px 10px;
-                white-space: nowrap;
+            .mobile-topbar .mt-title {
+                font-weight: 600;
+                font-size: 14px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
             }
-            .nav-item.active {
-                border-left-color: transparent;
-                border-bottom-color: var(--primary);
+            .mobile-topbar .mt-title .logo-mark { font-size: 17px; }
+            .mobile-topbar .user-avatar { width: 26px; height: 26px; font-size: 11px; }
+            .mobile-tabs {
+                display: flex;
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: var(--bg-nav);
+                z-index: 95;
             }
-            .sidebar-footer { display: none; }
-            .admin-main { margin-left: 0; }
-            .admin-header { padding: 0 12px; }
-            .user-menu span { display: none; }  /* avatar suffices on a phone */
-            .admin-content { padding: 12px; }
-            .card { padding: 12px; }
-            .card-header { flex-wrap: wrap; gap: 8px; }
-            .header-actions { flex-wrap: wrap; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
-            th, td { padding: 8px; }
+            .mobile-tabs button {
+                flex: 1;
+                padding: 9px 0;
+                text-align: center;
+                font-size: 11px;
+                border: none;
+                background: none;
+                color: var(--text-nav);
+                cursor: pointer;
+                min-height: 46px;
+            }
+            .mobile-tabs button .mt-icon { font-size: 16px; display: block; }
+            .mobile-tabs button.active {
+                color: #fff;
+                font-weight: 600;
+                box-shadow: inset 0 2px 0 var(--primary);
+            }
+            /* "Mer" holds the three pages that do not earn a permanent tab. Without it
+               Bevakningar and Fel & luckor would be reachable only by deep link. */
+            .mobile-sheet {
+                display: none;
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                top: 0;
+                background: rgba(15,23,42,0.35);
+                z-index: 96;
+                align-items: flex-end;
+            }
+            .mobile-sheet.open { display: flex; }
+            .mobile-sheet-inner {
+                width: 100%;
+                background: #fff;
+                border-radius: 12px 12px 0 0;
+                padding: 8px 0 calc(66px + 8px);
+            }
+            .mobile-sheet-inner button {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                width: 100%;
+                padding: 14px 18px;
+                border: none;
+                background: none;
+                font-size: 15px;
+                color: var(--text);
+                text-align: left;
+                cursor: pointer;
+            }
+            .page-head { align-items: flex-start; gap: 10px; }
+            .page-title { font-size: 19px; letter-spacing: -0.01em; }
+            .page-sub { font-size: 12.5px; }
+            .card { border-radius: 10px; }
+            .card-pad { padding: 12px; }
+            .card-header { padding: 12px 14px; }
+            .stat-grid-3, .stat-grid-4 { grid-template-columns: repeat(2, 1fr); }
+            .stat-value { font-size: 22px; }
+            /* iOS Safari auto-zooms any focused field under 16px — the page jumps on
+               every keystroke in the search box. 16px is not a preference here. */
+            .search-input, .form-input, .gap-input { font-size: 16px; }
+            /* Fingertip targets. */
+            .action-btn, .btn-sm { padding: 9px 12px; }
+            th, td { padding: 8px 6px; }
+            th { font-size: 11px; }
         }
     """
 
 
-def _get_admin_sidebar_html() -> str:
-    """Sidebar with one nav item per page.
+def _get_admin_sidebar_html(principal: Principal) -> str:
+    """Two nav groups, live counters, and a foot that answers "is it still running?".
 
-    The items are hash links, not routes: the app is one served page and the frontend's
-    renderPage() toggles which section is visible (and which item is .active) — so the
-    `active` class is owned by JS, never hardcoded here.
+    The grouping is the app's own division of labour: VECKAN is what you act on this week
+    (what to buy, what you are waiting for, where prices are going), UNDERHÅLL is what
+    keeps the data honest. The counters and the scheduler line are filled by the JS —
+    `active` is likewise owned by renderPage(), never hardcoded here, because the app is
+    ONE served page with a hash router.
     """
-    footer = f"Price Tracker v{_APP_VERSION}" if _APP_VERSION else "Price Tracker"
+    import html as html_module
+
+    safe_email = html_module.escape(principal.email)
+    version = f"v{_APP_VERSION}" if _APP_VERSION else "Price Tracker"
     return f"""
     <aside class="admin-sidebar">
         <div class="sidebar-header">
-            <a href="/" class="sidebar-logo">
-                <span>&#128181;</span>
+            <a href="#/kopa" class="sidebar-logo">
+                <span class="logo-mark">&#128181;</span>
                 Price Tracker
             </a>
+            <div class="sidebar-sub" id="user-email" title="{safe_email}">{safe_email}</div>
         </div>
         <nav class="sidebar-nav">
-            <a href="#/erbjudanden" class="nav-item" data-page="erbjudanden">
+            <div class="nav-section">Veckan</div>
+            <a href="#/kopa" class="nav-item" data-page="kopa">
                 <span class="nav-icon">&#127991;&#65039;</span>
-                Erbjudanden
-            </a>
-            <a href="#/produkter" class="nav-item" data-page="produkter">
-                <span class="nav-icon">&#128230;</span>
-                Produkter
-            </a>
-            <a href="#/statistik" class="nav-item" data-page="statistik">
-                <span class="nav-icon">&#128200;</span>
-                Statistik
+                Att köpa
+                <span class="nav-count" id="nav-count-kopa"></span>
             </a>
             <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
                 <span class="nav-icon">&#128276;</span>
                 Bevakningar
+                <span class="nav-count" id="nav-count-bevakningar"></span>
+            </a>
+            <a href="#/utveckling" class="nav-item" data-page="utveckling">
+                <span class="nav-icon">&#128200;</span>
+                Prisutveckling
+            </a>
+            <div class="nav-section">Underhåll</div>
+            <a href="#/produkter" class="nav-item" data-page="produkter">
+                <span class="nav-icon">&#128230;</span>
+                Produkter
+                <span class="nav-count" id="nav-count-produkter"></span>
+            </a>
+            <a href="#/luckor" class="nav-item" data-page="luckor">
+                <span class="nav-icon">&#9888;&#65039;</span>
+                Fel &amp; luckor
+                <span class="nav-count count-gap" id="nav-count-luckor"></span>
             </a>
             <a href="#/loggar" class="nav-item" data-page="loggar">
                 <span class="nav-icon">&#128220;</span>
@@ -3276,36 +3587,81 @@ def _get_admin_sidebar_html() -> str:
             </a>
         </nav>
         <div class="sidebar-footer">
-            {footer}
+            <div class="sched-state" id="sched-state">
+                <span class="sched-dot"></span><span id="sched-state-text">Schemaläggare</span>
+            </div>
+            <div id="sched-when"></div>
+            {version}
         </div>
     </aside>
     """
 
 
 def _get_admin_header_html(principal: Principal) -> str:
-    """Generate header HTML with user info.
+    """Breadcrumb, the scope switch, and who you are.
 
-    A reader gets a badge next to their address. Without it, a page whose write buttons
-    are simply absent reads as a broken deploy rather than as a permission level.
+    The scope switch (Allt / Livsmedel / Apotek) is `store_type` on the server and shows
+    only on the two pages it filters — the JS hides it elsewhere rather than offering a
+    control that changes nothing. A reader keeps the role badge: a page whose write
+    buttons are simply absent reads as a broken deploy rather than as a permission level.
     """
-    import html as html_module
-
-    safe_email = html_module.escape(principal.email)
-    user_initial = safe_email[0].upper() if safe_email else "?"
     role_badge = "" if principal.is_admin else '<span class="role-badge">Läsbehörighet</span>'
     return f"""
     <header class="admin-header">
         <div class="breadcrumbs">
-            <a href="/">Price Tracker</a>
+            <a href="#/kopa">Price Tracker</a>
             <span class="separator">/</span>
-            <span class="current" id="breadcrumb-current">Aktuella erbjudanden</span>
+            <span class="current" id="breadcrumb-current">Att köpa</span>
         </div>
         <div class="header-actions">
-            <div class="user-menu">
-                <div class="user-avatar">{user_initial}</div>
-                <span id="user-email">{safe_email}</span>
-                {role_badge}
+            <div class="segmented" id="scope-switch">
+                <button type="button" data-scope="">Allt</button>
+                <button type="button" data-scope="grocery">Livsmedel</button>
+                <button type="button" data-scope="pharmacy">Apotek</button>
             </div>
+            {role_badge}
+            <span class="user-avatar">{_initial(principal.email)}</span>
         </div>
     </header>
+    """
+
+
+def _initial(email: str) -> str:
+    """The avatar's single letter — the address itself lives in the sidebar."""
+    import html as html_module
+
+    safe = html_module.escape(email)
+    return safe[0].upper() if safe else "?"
+
+
+def _get_mobile_chrome_html(principal: Principal) -> str:
+    """The phone's own frame: a dark title bar and a four-tab bottom menu.
+
+    Rendered always and shown only under 768px (CSS) — the alternative, building it in JS
+    on a resize, means the first paint on a phone is the desktop shell. The fourth tab is
+    "Mer": Bevakningar, Fel & luckor and Loggar do not earn a permanent tab, but they must
+    not become deep-link-only either.
+    """
+    return f"""
+    <div class="mobile-topbar">
+        <span class="mt-title"><span class="logo-mark">&#128181;</span>
+            <span id="mobile-page-title">Att köpa</span></span>
+        <span class="user-avatar">{_initial(principal.email)}</span>
+    </div>
+    <nav class="mobile-tabs" id="mobile-tabs">
+        <button type="button" data-page="kopa">
+            <span class="mt-icon">&#127991;&#65039;</span>Att köpa</button>
+        <button type="button" data-page="produkter">
+            <span class="mt-icon">&#128230;</span>Produkter</button>
+        <button type="button" data-page="utveckling">
+            <span class="mt-icon">&#128200;</span>Utveckling</button>
+        <button type="button" data-more="1"><span class="mt-icon">&#8801;</span>Mer</button>
+    </nav>
+    <div class="mobile-sheet" id="mobile-sheet">
+        <div class="mobile-sheet-inner">
+            <button type="button" data-page="bevakningar">&#128276; Bevakningar</button>
+            <button type="button" data-page="luckor">&#9888;&#65039; Fel &amp; luckor</button>
+            <button type="button" data-page="loggar">&#128220; Loggar</button>
+        </div>
+    </div>
     """

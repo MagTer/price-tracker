@@ -1,5 +1,6 @@
 """Tests for FastAPI admin endpoints and auth."""
 
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -372,18 +373,41 @@ class TestAdminDashboard:
         """The footer version comes from the same source of truth as the release tag
         (pyproject.toml / installed metadata), so what you see is what prod runs."""
         r = client.get("/")
-        assert "Price Tracker v" in r.text
+        assert re.search(r"v\d+\.\d+\.\d+", r.text)
 
     def test_sidebar_has_one_nav_item_per_page(self, client):
         """The sections are hash-routed pages picked from the left menu — a long
-        product list must never push the deals out of sight."""
+        product list must never push the buy list out of sight.
+
+        Two groups since the 3a rebuild: VECKAN is what you act on this week, UNDERHÅLL is
+        what keeps the data honest.
+        """
         r = client.get("/")
-        pages = ("produkter", "erbjudanden", "statistik", "bevakningar", "loggar")
+        pages = ("kopa", "bevakningar", "utveckling", "produkter", "luckor", "loggar")
         for page in pages:
             assert f'data-page="{page}"' in r.text, f"nav/page missing for {page}"
             assert f'href="#/{page}"' in r.text
         # The page sections themselves exist for the router to toggle.
         assert r.text.count('class="app-page"') == len(pages)
+        assert ">Veckan<" in r.text
+        assert ">Underhåll<" in r.text
+
+    def test_nav_counters_replace_the_global_stat_row(self, client):
+        """The four numbers that used to sit above every page are the sidebar's counters
+        now — a figure you never act on should not cost a band of vertical space on every
+        screen. Fel & luckor's counter carries a severity: red when a SILENT error stands
+        (we are showing a wrong number right now), amber when it is only gaps to close."""
+        r = client.get("/")
+        for counter in (
+            "nav-count-kopa",
+            "nav-count-bevakningar",
+            "nav-count-produkter",
+            "nav-count-luckor",
+        ):
+            assert f'id="{counter}"' in r.text
+        assert 'class="stats-grid"' not in r.text
+        assert ".nav-count.count-error" in r.text
+        assert ".nav-count.count-gap" in r.text
 
     def test_schedule_is_store_level_and_hidden_from_add_flows(self, client):
         """The check schedule is a STORE property since v0.13.0: the add flows (quick-add,
@@ -418,17 +442,31 @@ class TestAdminDashboard:
         assert 'id="edit-frequency"' in r.text
         assert "/frequency'" in r.text  # the JS actually calls the endpoint
 
-    def test_deals_table_is_a_decision_not_a_listing(self, client):
-        """The deals view must carry the platform's OWN comparison (jfr-pris + cheapest
-        alternative), not just the store's discount framing. The column folds away on the
-        phone (col-secondary) but the verdict re-enters inline under the product name —
-        deal-verdict-inline is that guarantee."""
+    def test_deals_view_is_a_decision_not_a_listing(self, client):
+        """Att köpa must carry the platform's OWN comparison, not the store's framing.
+
+        The margin is `savings_per_unit_sek / best_alt_unit_price_sek` — a PERCENTAGE,
+        because kronor per unit cannot be compared between rows — and it lives inside the
+        verdict sentence rather than in a column of its own, where it competed with the
+        span bar for being the row's single score. `discount_percent` must never be the
+        ranking: 30 % off a bad price is still a bad price.
+        """
         r = client.get("/")
-        assert '<th class="col-secondary">Jämförelse</th>' in r.text
-        assert "deal-verdict-inline" in r.text
-        assert "dealComparisonCell" in r.text
-        assert "Billigast" in r.text
-        assert "Ej billigast" in r.text
+        assert "dealMarginPct" in r.text
+        assert "saving / d.best_alt_unit_price_sek" in r.text
+        assert "dealVerdictHtml" in r.text
+        assert "billigare per" in r.text
+        assert "dyrare per" in r.text
+        # The span bar is the row's OTHER question — right moment, not right store.
+        assert "Prisläge i eget spann" in r.text
+        assert "inget spann än" in r.text
+
+    def test_the_buy_list_is_ranked_on_margin_not_on_recency(self, client):
+        """Recency says when WE looked; it is our schedule's business, not a reason to put
+        one campaign above another. It survives as a line of metadata."""
+        r = client.get("/")
+        assert "function rankDeals" in r.text
+        assert "dealMarginPct(b) || 0) - (dealMarginPct(a) || 0" in r.text
 
     def test_store_names_link_to_the_store_page(self, client):
         """Store names in the deals and links views are ways IN to the store's page —
@@ -445,10 +483,14 @@ class TestAdminDashboard:
         assert "new Set(links.map(s => s.store_name)).size" in r.text
 
     def test_freshness_line_exists(self, client):
-        """The weekly rhythm made visible: when prices were last refreshed + next round."""
+        """The weekly rhythm made visible: is the scheduler running, when did it last look,
+        when is the next round. It lives in the sidebar foot — visible on every page instead
+        of only on the one it happened to be attached to."""
         r = client.get("/")
-        assert 'id="deals-freshness"' in r.text
-        assert "Priserna kontrollerades senast" in r.text
+        assert 'id="sched-state"' in r.text
+        assert 'id="sched-when"' in r.text
+        assert "Schemaläggare aktiv" in r.text
+        assert "'Senast '" in r.text and "'nästa '" in r.text
 
     def test_page_is_mobile_ready(self, client):
         """The app doubles as the in-store shopping list: viewport meta, a responsive
@@ -458,28 +500,56 @@ class TestAdminDashboard:
         assert "@media (max-width: 768px)" in r.text
         assert "overflow-x: auto" in r.text
 
-    def test_stat_boxes_link_to_their_pages(self, client):
+    def test_faults_and_gaps_separates_silent_errors_from_gaps(self, client):
+        """The page's whole reason to exist. A gap announces itself; a SILENT error does
+        not — the check says "ok", the price is plausible, and nothing else in the UI would
+        ever mention it. So the silent errors sit at the top and in red, and the amber gaps
+        below. And nothing here may be dismissible: no flag is persisted, so a dismiss
+        button would only hide an error that is still running."""
         r = client.get("/")
-        assert '<a class="stat-box" href="#/erbjudanden">' in r.text
-        assert '<a class="stat-box" href="#/produkter">' in r.text
-        assert '<a class="stat-box" href="#/bevakningar">' in r.text
+        assert "Tysta fel" in r.text
+        assert "Extraktionen har fallit ner en pinne" in r.text
+        assert "Jämförpriset går inte ihop" in r.text
+        assert "Länkar utan mängd" in r.text
+        assert "Trasiga länkar" in r.text
+        # The consequence text is derived from the expected source, never invented per row.
+        assert "TIER_IMPACT" in r.text
+        # A wall is the store's state, not ours — without this line an ICA block reads as a
+        # breakdown and invites deleting perfectly good links.
+        assert "Blockerade hämtningar räknas inte som fel här" in r.text
+        assert 'data-issue-action="save-amount"' in r.text
+        assert 'data-issue-action="dismiss"' not in r.text
+        assert "Kvittera" not in r.text
 
     def test_jfr_pris_is_the_display_term(self, client):
         """Stores print 'jfr-pris' on the shelf label — the UI uses the shelf's word.
         (Value labels like 'kr/st' stay; this is about the HEADINGS.)"""
         r = client.get("/")
-        assert "Lägsta jfr-pris" in r.text
+        assert "jfr-pris" in r.text
         assert "Lägsta kr/enhet" not in r.text
 
-    def test_deals_is_the_start_page(self, client):
-        """Erbjudanden first in the menu and the default page: the freshest, most
-        actionable view opens on load; the long product list is one click away."""
+    def test_buy_list_is_the_start_page(self, client):
+        """Att köpa first in the menu and the default page: the question the app exists to
+        answer opens on load; the long product list is one click away. The pre-3a hashes
+        still resolve — a bookmark is a promise."""
         r = client.get("/")
-        # Menu order: Erbjudanden above Produkter.
-        assert r.text.index('href="#/erbjudanden"') < r.text.index('href="#/produkter"')
+        # Menu order: Att köpa above Produkter.
+        assert r.text.index('href="#/kopa"') < r.text.index('href="#/produkter"')
         # The server-rendered breadcrumb matches the client router's fallback.
-        assert 'id="breadcrumb-current">Aktuella erbjudanden' in r.text
-        assert ": 'erbjudanden'" in r.text  # currentPage() fallback
+        assert 'id="breadcrumb-current">Att köpa' in r.text
+        assert "return 'kopa';" in r.text  # currentPage() fallback
+        assert "erbjudanden: 'kopa'" in r.text
+        assert "statistik: 'utveckling'" in r.text
+
+    def test_numbers_are_swedish_and_absence_is_never_zero(self, client):
+        """Money always two decimals with a comma, percentages with a real minus sign, and
+        a missing value as an em dash — never a 0, which would be a confident claim about
+        something we did not observe."""
+        r = client.get("/")
+        assert "new Intl.NumberFormat('sv-SE'" in r.text
+        assert "minimumFractionDigits: 2" in r.text
+        assert "const DASH = '\\u2014'" in r.text
+        assert "'\\u2212'" in r.text  # U+2212 MINUS SIGN, not a hyphen
 
 
 class TestStoresEndpoints:

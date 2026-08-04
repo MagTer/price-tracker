@@ -397,7 +397,11 @@ def test_product_filter_controls_exist_in_the_markup() -> None:
     assert table is not None, "PRODUCT_FILTER_CONTROLS not found in admin.html"
 
     ids = re.findall(r"\['([\w-]+)',\s*'(\w+)'\]", table.group(1))
-    assert len(ids) == 6, f"Expected 6 filter controls, parsed {len(ids)} — has the shape changed?"
+    # Four <input>/<select> facets since the 3a rebuild: search, kategori, butik, täckning.
+    # Status and sort order moved into the chip row (#product-chips), which is delegated and
+    # therefore cannot throw at load — they live in the same filter state without being
+    # bound by id here.
+    assert len(ids) == 4, f"Expected 4 filter controls, parsed {len(ids)} — has the shape changed?"
 
     for element_id, _key in ids + [("edit-product-category", "category")]:
         assert f'id="{element_id}"' in html, (
