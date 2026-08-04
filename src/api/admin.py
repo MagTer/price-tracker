@@ -21,6 +21,7 @@ from sqlalchemy.orm import joinedload
 
 from api.auth import Principal, get_principal, require_admin_for_writes, require_auth
 from api.schemas import (
+    BladAnalyzeRequest,
     DealResponse,
     PricePointResponse,
     PriceWatchCreate,
@@ -33,6 +34,13 @@ from api.schemas import (
     QuickAddCreate,
     QuickAddPreview,
     StoreResponse,
+)
+from domain.blad import (
+    fetch_offline_offer,
+    match_candidates,
+    offer_unit_price,
+    parse_offer_code,
+    parse_offline_offer,
 )
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.deals import current_deals
@@ -1846,6 +1854,103 @@ async def get_current_deals(
     except Exception as e:
         LOGGER.exception("Failed to get current deals")
         raise HTTPException(status_code=500, detail="Failed to retrieve deals") from e
+
+
+@router.post("/blad/analyze")
+async def analyze_blad_offer(
+    payload: BladAnalyzeRequest,
+    session: AsyncSession = Depends(get_db),
+    admin_email: str = Depends(require_auth),
+) -> dict[str, Any]:
+    """Analyze a pasted Willys butiksblad offer against the tracked catalogue.
+
+    Discovery is deliberately manual (the listing API sits behind Akamai's JS sensor —
+    see domain/blad.py); the analysis is automatic: fetch the sessionless per-offer API,
+    read the store's own numbers, and rank tracked products by name overlap with each
+    one's current cheapest kr/unit beside it. Admin-only via the router's write gate —
+    this POST spends a ledger slot against willys.se.
+
+    Security:
+        Requires IAP header auth; non-admins are refused by the router-level write gate.
+    """
+    code = parse_offer_code(payload.url)
+    if not code:
+        raise HTTPException(status_code=400, detail="Ingen erbjudandekod i länken")
+
+    store = (
+        await session.execute(select(Store).where(Store.slug == "willys"))
+    ).scalar_one_or_none()
+    if store is None:
+        raise HTTPException(status_code=400, detail="Willys finns inte som butik")
+    _guard_store_not_blocked(store)
+
+    store_id = os.environ.get("WILLYS_OFFLINE_STORE_ID", "2211")
+    try:
+        data = await fetch_offline_offer(store_id, code)
+    except StoreBlockedError:
+        # Same contract as the quick-add preview's API tier: trip the shared breaker and
+        # answer with the 503 + Retry-After the next click would get.
+        await _record_store_outcome(
+            store, blocked=True, success=False, source="blad-analyze", log_attempt=True
+        )
+        _guard_store_not_blocked(store)
+        raise HTTPException(status_code=502, detail="Butiken blockerar oss just nu") from None
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Erbjudandet kunde inte hämtas — bladet kan ha bytts, eller är koden fel",
+        )
+    # The store answered — real load, real WAF exposure, and this call never passes
+    # perform_price_check, so it records its own attempt (the quick-add-preview rule).
+    await _record_store_outcome(
+        store, blocked=False, success=True, source="blad-analyze", log_attempt=True
+    )
+
+    offer = parse_offline_offer(code, data)
+    if offer is None:
+        raise HTTPException(status_code=404, detail="Erbjudandet bär inget tolkbart kampanjpris")
+
+    unit_price, unit_kind = offer_unit_price(offer)
+    candidates = await match_candidates(session, offer)
+
+    # The validator spirit, inline: when the store prints a jämförpris AND the package
+    # parses, the two must agree — a disagreement means the offer is not what it looks
+    # like, and the reader should know before acting on it.
+    crosscheck_warning = None
+    if (
+        offer.unit_price_sek is not None
+        and offer.offer_price_sek is not None
+        and offer.package_amount
+        and offer.package_amount > 0
+        and offer.unit_price_unit == offer.package_unit
+    ):
+        computed = offer.offer_price_sek / offer.package_amount
+        deviation = abs(computed - offer.unit_price_sek)
+        if deviation > Decimal("0.10") and deviation / offer.unit_price_sek > Decimal("0.015"):
+            crosscheck_warning = (
+                f"Butikens jfr-pris {offer.unit_price_sek} kr stämmer inte med "
+                f"{offer.offer_price_sek} kr / {offer.package_amount} — kontrollera villkoren"
+            )
+
+    return {
+        "code": offer.code,
+        "name": offer.name,
+        "brands": offer.brands,
+        "ordinarie_price_sek": (
+            float(offer.ordinarie_price_sek) if offer.ordinarie_price_sek is not None else None
+        ),
+        "offer_price_sek": (
+            float(offer.offer_price_sek) if offer.offer_price_sek is not None else None
+        ),
+        "package_text": offer.package_text,
+        "unit_price_sek": float(unit_price) if unit_price is not None else None,
+        "unit_price_unit": unit_kind,
+        "excludes_deposit": offer.excludes_deposit,
+        "conditions": offer.conditions,
+        "valid_until": offer.valid_until,
+        "crosscheck_warning": crosscheck_warning,
+        "candidates": candidates,
+    }
 
 
 @router.get("/watches")

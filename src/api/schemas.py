@@ -73,6 +73,12 @@ class ProductStoreUpdate(BaseModel):
     store_label: str | None = None
 
 
+class BladAnalyzeRequest(BaseModel):
+    """One pasted butiksblad offer URL (or bare offer code) — nothing is persisted."""
+
+    url: str
+
+
 class QuickAddPreview(BaseModel):
     """Schema for previewing a quick-add: one pasted product URL, nothing else.
 

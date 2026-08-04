@@ -102,6 +102,25 @@
         <div class="loading">Laddar erbjudanden…</div>
     </div>
 </div>
+<!-- Butiksbladets offline-erbjudanden täcker in-store-only-sortiment och kan aldrig bli
+     trackade länkar (veckoscopade, butiksscopade, ingen produktsida) — men analysen av ett
+     inklistrat erbjudande är automatisk. Admin-only: knappen spenderar en ledger-slot mot
+     willys.se. -->
+<div class="card admin-only">
+    <div class="card-header">
+        <div>
+            <div class="card-title">Kolla bladerbjudande</div>
+            <div class="best-link">Klistra in en erbjudandelänk från Willys butiksblad —
+                jämförs per enhet mot dina produkter</div>
+        </div>
+    </div>
+    <div class="blad-form">
+        <input type="url" id="blad-url" class="search-input"
+               placeholder="https://www.willys.se/erbjudanden/offline-…">
+        <button class="btn btn-primary" id="blad-analyze-btn" onclick="analyzeBlad()">Analysera</button>
+    </div>
+    <div id="blad-result"></div>
+</div>
 </section>
 
 <!-- Statistik: cross-product questions the per-product history modal structurally cannot ask.
@@ -630,10 +649,17 @@
 #deals-table-container,
 #watches-table-container,
 #product-links-table,
+#blad-result,
 #stats-container {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
+.blad-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.blad-form input { flex: 1; }
 .search-input {
     padding: 8px 12px;
     border: 1px solid var(--border);
@@ -1690,6 +1716,65 @@ function rankDeals(deals) {
 // round trip — the deals wire already carries both. NOT allProducts: Erbjudanden can be
 // the first page shown, before the product list has ever loaded.
 let allDeals = [];
+
+// Bladerbjudande-analys: manuell upptäckt (listnings-API:t sitter bakom Akamais JS-sensor),
+// automatisk bedömning. Svaret är butikens egna siffror plus kandidatmatchningar mot de
+// trackade produkterna — RANKAT FÖRSLAG, aldrig tyst dom: läsaren avgör om "Läsk 15-pack"
+// är samma vara som sin trackade tvilling.
+const UNIT_SHORT = { liter: 'l', kg: 'kg', st: 'st' };
+
+async function analyzeBlad() {
+    const input = document.getElementById('blad-url');
+    const result = document.getElementById('blad-result');
+    const url = input.value.trim();
+    if (!url) { result.innerHTML = '<div class="empty-state"><p>Klistra in en erbjudandelänk först.</p></div>'; return; }
+    const btn = document.getElementById('blad-analyze-btn');
+    btn.disabled = true;
+    result.innerHTML = '<div class="loading">Hämtar erbjudandet…</div>';
+    try {
+        const d = await apiPost('/blad/analyze', { url });
+        const unit = UNIT_SHORT[d.unit_price_unit] || d.unit_price_unit || '';
+        const pant = d.excludes_deposit ? ' +pant' : '';
+        let html = `<div class="deal-group-title">${escapeHtml(d.name)}`
+            + (d.brands.length ? ` <span class="best-link">${escapeHtml(d.brands.join(', '))}</span>` : '')
+            + '</div><p>';
+        if (d.offer_price_sek != null) {
+            html += `<strong>${escapeHtml(d.offer_price_sek.toFixed(2))} kr</strong>`;
+            if (d.package_text) html += ` för ${escapeHtml(d.package_text)}`;
+            if (d.ordinarie_price_sek != null) html += ` (ordinarie ${escapeHtml(d.ordinarie_price_sek.toFixed(2))} kr)`;
+            if (d.unit_price_sek != null) html += ` — <strong>${escapeHtml(d.unit_price_sek.toFixed(2))} kr/${escapeHtml(unit)}${pant}</strong>`;
+        }
+        html += '</p>';
+        const meta = d.conditions.slice();
+        if (d.valid_until) meta.push('t.o.m. ' + escapeHtml(d.valid_until));
+        if (meta.length) html += `<p class="best-link">${meta.map(escapeHtml).join(' · ')}</p>`;
+        if (d.crosscheck_warning) html += `<p><span class="badge badge-warning">${escapeHtml(d.crosscheck_warning)}</span></p>`;
+        if (!d.candidates.length) {
+            html += '<div class="empty-state"><p>Ingen trackad produkt liknar erbjudandet — ingen jämförelse att göra.</p></div>';
+        } else {
+            html += `<table><thead><tr><th>Liknande trackad produkt</th><th>Billigast idag</th><th>Mot bladet</th></tr></thead><tbody>`;
+            for (const c of d.candidates) {
+                const cUnit = UNIT_SHORT[c.unit] || c.unit || '';
+                const current = c.current_unit_price_sek != null
+                    ? `${escapeHtml(c.current_unit_price_sek.toFixed(2))} kr/${escapeHtml(cUnit)} (${escapeHtml(c.store_name)})`
+                    : '&#8212;';
+                let verdict = '<span class="best-link">olika enhet &#8212; kan inte jämföras</span>';
+                if (c.unit_price_diff_sek != null) {
+                    verdict = c.unit_price_diff_sek < 0
+                        ? `<span class="badge badge-success">bladet ${escapeHtml(Math.abs(c.unit_price_diff_sek).toFixed(2))} kr/${escapeHtml(cUnit)} billigare</span>`
+                        : `<span class="badge badge-warning">bladet ${escapeHtml(c.unit_price_diff_sek.toFixed(2))} kr/${escapeHtml(cUnit)} dyrare</span>`;
+                }
+                html += `<tr><td>${escapeHtml(c.product_name)}</td><td>${current}</td><td>${verdict}</td></tr>`;
+            }
+            html += '</tbody></table>';
+        }
+        result.innerHTML = html;
+    } catch (e) {
+        result.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message || 'Kunde inte analysera erbjudandet.')}</p></div>`;
+    } finally {
+        btn.disabled = false;
+    }
+}
 
 async function loadDeals() {
     try {
