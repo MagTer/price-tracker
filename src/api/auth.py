@@ -18,6 +18,7 @@ rewrites 401-403 into the oauth2-proxy sign-in response body while KEEPING the
 "Found" on it (the body of a redirect the browser never follows).
 """
 
+import hmac
 import os
 from dataclasses import dataclass
 
@@ -46,8 +47,25 @@ def _configured_admin_email() -> str:
     return os.getenv("ALLOWED_ENTRA_EMAIL", "")
 
 
+def _configured_ingress_secret() -> str:
+    """Optional defense in depth against direct container access.
+
+    The email header is trusted VERBATIM, and the only thing standing between "can
+    open a TCP connection to the app port" and "is admin" is the assumption that
+    every request transited the ingress — an assumption a neighbour container on the
+    same docker network does not have to honor (mcp_server/auth.py documents that
+    reachability). When INGRESS_SHARED_SECRET is set, every request must also carry
+    it in X-Ingress-Auth, which only the Traefik ingress is configured to inject —
+    so a spoofed email header without the secret is refused before it names anyone.
+    Unset = current behavior, so enabling it is an explicit two-sided move (env here,
+    customRequestHeaders in the home-server repo's Traefik config).
+    """
+    return os.getenv("INGRESS_SHARED_SECRET", "")
+
+
 def get_principal(
     x_auth_request_email: str | None = Header(None, alias="X-Auth-Request-Email"),
+    x_ingress_auth: str | None = Header(None, alias="X-Ingress-Auth"),
 ) -> Principal:
     """Resolve the caller from the upstream IAP header.
 
@@ -55,8 +73,9 @@ def get_principal(
         The caller's Principal (admin if the email matches ALLOWED_ENTRA_EMAIL).
 
     Raises:
-        HTTPException 403: no admin configured (fail closed), or no header at all —
-            the latter means the request did not come through the ingress.
+        HTTPException 403: no admin configured (fail closed), no header at all —
+            the latter means the request did not come through the ingress — or a
+            configured ingress secret that the request does not carry.
     """
     admin_email = _configured_admin_email()
     if not admin_email:
@@ -65,6 +84,16 @@ def get_principal(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="ALLOWED_ENTRA_EMAIL not configured",
+        )
+
+    ingress_secret = _configured_ingress_secret()
+    if ingress_secret and not hmac.compare_digest(x_ingress_auth or "", ingress_secret):
+        # Constant-time, and BEFORE the email is even read: a request without the
+        # ingress-injected secret did not come through the ingress, so its email
+        # header is an unverified claim.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing or invalid ingress credential",
         )
 
     if not x_auth_request_email:

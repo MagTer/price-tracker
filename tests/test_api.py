@@ -272,6 +272,47 @@ class TestAuth:
         assert "role-admin" in r.text
 
 
+class TestIngressSecret:
+    """Optional defense in depth: the email header is trusted verbatim, so anything
+    that can open a TCP connection to the app port (a neighbour container on the
+    docker network) can claim to be the admin. With INGRESS_SHARED_SECRET set, every
+    request must also carry the secret the Traefik ingress injects — refused BEFORE
+    the email is read. Unset = exactly the old behavior, so enabling it is an
+    explicit two-sided move (env here, customRequestHeaders in home-server)."""
+
+    def test_unset_secret_changes_nothing(self, unmocked_client):
+        r = unmocked_client.get("/", headers={"X-Auth-Request-Email": ADMIN_EMAIL})
+        assert r.status_code == 200
+
+    def test_request_without_the_secret_is_refused(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_ENTRA_EMAIL", ADMIN_EMAIL)
+        monkeypatch.setenv("INGRESS_SHARED_SECRET", "s3cret")
+        client = TestClient(create_app())
+        r = client.get("/", headers={"X-Auth-Request-Email": ADMIN_EMAIL})
+        assert r.status_code == 403
+
+    def test_wrong_secret_is_refused(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_ENTRA_EMAIL", ADMIN_EMAIL)
+        monkeypatch.setenv("INGRESS_SHARED_SECRET", "s3cret")
+        client = TestClient(create_app())
+        r = client.get(
+            "/",
+            headers={"X-Auth-Request-Email": ADMIN_EMAIL, "X-Ingress-Auth": "wrong"},
+        )
+        assert r.status_code == 403
+
+    def test_correct_secret_passes(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_ENTRA_EMAIL", ADMIN_EMAIL)
+        monkeypatch.setenv("INGRESS_SHARED_SECRET", "s3cret")
+        client = TestClient(create_app())
+        r = client.get(
+            "/",
+            headers={"X-Auth-Request-Email": ADMIN_EMAIL, "X-Ingress-Auth": "s3cret"},
+        )
+        assert r.status_code == 200
+        assert "role-admin" in r.text
+
+
 class TestReadOnlyRole:
     """Everyone the Entra gate let in may read; only ALLOWED_ENTRA_EMAIL may write.
 
