@@ -908,7 +908,7 @@ class TestWeeklySummary:
 
     @pytest.mark.asyncio
     async def test_empty_monday_is_not_stamped_as_sent(self) -> None:
-        """"Nothing to send" at noon is often a WALL, not a fact: an ICA challenge on
+        """ "Nothing to send" at noon is often a WALL, not a fact: an ICA challenge on
         Monday morning defers every ICA link past 12:00, so the deals arrive later the
         same day. The empty branch must leave the dedup date unstamped and let the
         5-minute loop send as soon as there is something to say — stamping skipped the
