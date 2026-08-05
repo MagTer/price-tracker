@@ -2339,3 +2339,64 @@ class TestBladAnalyzeEndpoint:
         # Preconditions first, so a parser change cannot silently void the assertion.
         assert body["unit_price_sek"] == pytest.approx(12.08)
         assert body["crosscheck_warning"], body
+
+
+class TestBladCandidatesCarryNotableLinks:
+    """The bridge's wire contract: a candidate row must say WHERE a manual note may
+    honestly land, or the portal's "Notera på …" button has nothing to target. Pinned at
+    the HTTP layer because the button reads this payload, not the domain object."""
+
+    def test_notable_links_ride_the_candidate(self, client, mock_session):
+        product = _product(name="Läsk Cola Zero 33cl", unit="liter")
+        product.brand = "Coca-Cola"
+        willys = _store(name="Willys", slug="willys")
+        link = _ps(product, willys, package_size="20-pack", package_quantity="6.6")
+        point = _pp(link, price="137.45")
+
+        store_row = MagicMock()
+        store_row.scalar_one_or_none.return_value = willys
+        candidates_row = MagicMock()
+        candidates_row.all.return_value = [(product, link, willys, point)]
+        mock_session.execute.side_effect = [store_row, candidates_row]
+
+        data = {
+            "priceNoUnit": "99,90",
+            "priceUnit": "kr/st",
+            "displayVolume": "15p/33cl",
+            "online": False,
+            "manufacturer": "COCA-COLA",
+            "potentialPromotions": [
+                {
+                    "price": 59.8,
+                    "comparePrice": "12:08 kr/l",
+                    "code": "2500310468",
+                    "weightVolume": "15p/33cl",
+                    "qualifyingCount": 1,
+                    "cartLabel": "59,80/st",
+                    "rewardLabel": "59,80/st",
+                    "brands": ["COCA-COLA"],
+                    "name": "Läsk 15-pack",
+                }
+            ],
+        }
+
+        with (
+            patch("api.admin.get_block_registry", return_value=MagicMock(
+                blocked_until=MagicMock(return_value=None),
+                record_success=MagicMock(),
+            )),
+            patch("api.admin.get_check_log", return_value=MagicMock(record=AsyncMock())),
+            patch("api.admin.fetch_offline_offer", AsyncMock(return_value=data)),
+        ):
+            body = client.post(
+                "/blad/analyze",
+                json={"url": "https://www.willys.se/erbjudanden/offline-Lask-2500310468"},
+            ).json()
+
+        assert body["candidates"], body
+        links = body["candidates"][0]["notable_links"]
+        assert len(links) == 1
+        assert links[0]["product_store_id"] == str(link.id)
+        assert links[0]["store_name"] == "Willys"
+        assert links[0]["package_size"] == "20-pack"
+        assert links[0]["price_sek"] == pytest.approx(137.45)

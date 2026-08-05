@@ -229,3 +229,75 @@ class TestMatchCandidates:
 
         assert len(candidates) == 1
         assert candidates[0]["unit_price_diff_sek"] is None  # kr/l against kr/st is nonsense
+
+
+@pytest.mark.integration
+class TestNotableLinks:
+    """Where a manual note may honestly land: the product's links AT THE OFFER'S OWN
+    STORE. The price was observed at Willys, so writing it onto an ICA link would forge
+    the observation — and a manual point is indistinguishable from a fetched one once
+    written (no path deletes a single point)."""
+
+    async def _product_with_links(self, session, name: str, slugs: list[str]) -> Product:
+        product = Product(
+            tenant_id=DEFAULT_TENANT_ID,
+            name=name,
+            brand="Coca-Cola",
+            category=None,
+            unit="liter",
+        )
+        session.add(product)
+        await session.flush()
+        for slug in slugs:
+            store = (
+                await session.execute(select(Store).where(Store.slug == slug))
+            ).scalar_one()
+            link = ProductStore(
+                product_id=product.id,
+                store_id=store.id,
+                store_url=f"https://example.test/{uuid.uuid4()}",
+                package_size=f"{slug}-pack",
+                package_quantity=Decimal("6.6"),
+                is_active=True,
+            )
+            session.add(link)
+            await session.flush()
+            session.add(
+                PricePoint(
+                    product_store_id=link.id,
+                    price_sek=Decimal("137.45"),
+                    checked_at=datetime.now(UTC).replace(tzinfo=None),
+                )
+            )
+        await session.flush()
+        return product
+
+    @pytest.mark.asyncio
+    async def test_only_the_offers_own_store_is_notable(self, db_session) -> None:
+        await self._product_with_links(db_session, "Läsk Cola Zero 33cl", ["willys", "ica"])
+
+        offer = parse_offline_offer("2500310468", _payload())
+        assert offer is not None
+        candidates = await match_candidates(db_session, offer)
+
+        assert len(candidates) == 1
+        links = candidates[0]["notable_links"]
+        assert [link["package_size"] for link in links] == ["willys-pack"]
+        assert links[0]["store_name"] == "Willys"
+        # The link's current price rides along so the note can prefill ordinarie.
+        assert links[0]["price_sek"] == pytest.approx(137.45)
+
+    @pytest.mark.asyncio
+    async def test_a_product_tracked_elsewhere_only_has_no_notable_link(
+        self, db_session
+    ) -> None:
+        """An honest empty list: the portal says "ingen Willys-länk att notera på"
+        rather than offering a target that would misattribute the observation."""
+        await self._product_with_links(db_session, "Läsk Cola Zero 33cl", ["ica"])
+
+        offer = parse_offline_offer("2500310468", _payload())
+        assert offer is not None
+        candidates = await match_candidates(db_session, offer)
+
+        assert len(candidates) == 1
+        assert candidates[0]["notable_links"] == []

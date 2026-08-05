@@ -31,25 +31,96 @@
     <div id="deals-table-container">
         <div class="loading">Laddar erbjudanden…</div>
     </div>
-    <!-- Butiksbladets offline-erbjudanden täcker in-store-only-sortiment och kan aldrig bli
-         trackade länkar (veckoscopade, butiksscopade, ingen produktsida) — men analysen av ett
-         inklistrat erbjudande är automatisk. Admin-only: knappen spenderar en ledger-slot mot
-         willys.se. It sits at the FOOT of the page: it is a lookup, not part of the ranking. -->
+    <!-- OFFLINE OFFERS — the two halves of one job: prices the tracker cannot fetch itself.
+         Willys prints a butiksblad, ICA Björksätra advertises förbokning on Facebook; both
+         sources are behind a login or a bot sensor, so DISCOVERY is human by decision
+         (v0.46.0). What differs is what happens next: a blad offer is a LOOKUP (store-scoped,
+         week-scoped, "olika sorter" — it belongs to no link and is never persisted), while a
+         price you decide IS your tracked product is an ordinary observation that belongs in
+         the history, the floor and Monday's buy list (v0.49.0).
+
+         They lived apart until v0.52.0 — the note hidden inside the link dialog's collapsed
+         <details>, three clicks from anywhere — which meant the analysis answered on screen
+         and the answer then had to be carried by hand. Now they are two tabs of one card,
+         and each blad candidate offers a button straight into the note with the numbers
+         prefilled. Nothing is saved without that click: deciding "this offer IS my product"
+         stays the human's, which is the whole doctrine.
+
+         Admin-only: the analyse button spends a ledger slot against willys.se. At the FOOT
+         of the page — a lookup, not part of the ranking. -->
     <div class="card admin-only">
         <div class="card-header">
             <div>
-                <div class="card-title">Kolla bladerbjudande</div>
-                <div class="page-sub">Klistra in en erbjudandelänk från Willys butiksblad —
-                    jämförs per enhet mot dina produkter</div>
+                <div class="card-title">Erbjudanden utanför nätet</div>
+                <div class="page-sub">Priser i butiksblad, på Facebook och i butik som
+                    trackern inte kan hämta själv — kolla dem här, och spara det du litar på</div>
             </div>
         </div>
         <div class="card-pad">
-            <div class="blad-form">
-                <input type="url" id="blad-url" class="search-input"
-                       placeholder="https://www.willys.se/erbjudanden/offline-…">
-                <button class="btn btn-primary" id="blad-analyze-btn" onclick="analyzeBlad()">Analysera</button>
+            <div class="segmented offline-tabs" id="offline-tabs">
+                <button type="button" data-offline-tab="blad" class="active">Willys butiksblad</button>
+                <button type="button" data-offline-tab="manual">Notera pris själv</button>
             </div>
-            <div id="blad-result"></div>
+
+            <div class="offline-pane" id="offline-pane-blad">
+                <p class="form-hint">Klistra in länken till ETT erbjudande ur bladet —
+                    öppna bladet på willys.se, klicka på erbjudandet och kopiera adressen.
+                    Listsidan och iPaper-bladet går inte att läsa (butikens listning kräver
+                    en riktig webbläsarsession).</p>
+                <div class="blad-form">
+                    <input type="url" id="blad-url" class="search-input"
+                           placeholder="https://www.willys.se/erbjudanden/offline-…">
+                    <button class="btn btn-primary" id="blad-analyze-btn"
+                            onclick="analyzeBlad()">Analysera</button>
+                </div>
+                <div id="blad-result"></div>
+            </div>
+
+            <div class="offline-pane" id="offline-pane-manual" hidden>
+                <p class="form-hint">Ett pris du sett men vi inte kan hämta. Rör inte
+                    "Senast kollad" och räknas inte som en kontroll — men blir produktens
+                    lägstanotering om det är lägre, och kan hamna i måndagens köplista.</p>
+                <div id="manual-panel-fields"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();saveManualPricePanel();}">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Produkt</label>
+                            <select id="panel-manual-product" class="form-input"
+                                    onchange="panelManualProductChanged()"></select>
+                        </div>
+                        <div class="form-group">
+                            <label>Länk (butik och förpackning)</label>
+                            <select id="panel-manual-link" class="form-input"></select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Pris du betalar (kr)</label>
+                            <input type="number" step="0.01" min="0" id="panel-manual-price"
+                                   class="form-input" placeholder="t.ex. 109">
+                        </div>
+                        <div class="form-group">
+                            <label>Ordinarie pris (kr)</label>
+                            <input type="number" step="0.01" min="0" id="panel-manual-regular"
+                                   class="form-input"
+                                   placeholder="tomt = inget erbjudande, bara ett noterat pris">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Datum</label>
+                            <input type="date" id="panel-manual-date" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Villkor</label>
+                            <input type="text" id="panel-manual-note" class="form-input"
+                                   maxlength="255" placeholder="t.ex. Förbokning via Facebook">
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary"
+                            onclick="saveManualPricePanel()">Notera pris</button>
+                </div>
+            </div>
         </div>
     </div>
 </section>
@@ -532,7 +603,7 @@
                  submit the packaging form) — a plain button that posts on its own, with
                  Enter bound to it so the keyboard does the expected thing. -->
             <details class="manual-price">
-                <summary>Notera pris manuellt</summary>
+                <summary>&#128181; Notera pris manuellt &#8212; ett pris du sett i butiken</summary>
                 <div id="manual-price-fields"
                      onkeydown="if(event.key==='Enter'){event.preventDefault();saveManualPrice();}">
                     <p class="form-hint">Ett pris du sett men vi inte kan hämta — t.ex. en
@@ -708,6 +779,21 @@
     margin-bottom: 12px;
 }
 .blad-form input { flex: 1; min-width: 0; }
+
+/* Offline offers: two tabs of one card. The tab strip reuses the header's .segmented
+   look so it reads as the same kind of control the scope switch is. */
+.offline-tabs { margin-bottom: 14px; }
+.offline-pane .form-hint { margin: 0 0 12px; }
+/* Two fields per row on desktop, one per row on the phone — the note is typed in the
+   aisle as often as at the desk. 240px is chosen so a pair no longer fits inside the
+   card at the 768px breakpoint's narrow end: at 200px they technically fit and the
+   placeholders truncate mid-word instead. */
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.form-row > .form-group { flex: 1; min-width: 240px; }
+/* The bridge button in a candidate row: an action, not a badge — it must not read as
+   part of the verdict beside it. */
+.blad-note-btn { margin-top: 6px; white-space: nowrap; }
+.blad-note-links { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 
 /* Hash-routed pages: exactly one .app-page is visible; the sidebar picks it. */
 .app-page { display: none; flex-direction: column; gap: 16px; }
@@ -2498,16 +2584,41 @@ async function loadDeals() {
 // är samma vara som sin trackade tvilling.
 const UNIT_SHORT = { liter: 'l', kg: 'kg', st: 'st' };
 
+// The two URLs a reader reaches for first, and neither can work — say WHY rather than
+// letting the generic "ingen erbjudandekod" carry a lesson it does not teach. The blad
+// listing sits behind Akamai's JS sensor (spiked 2026-08-03, a real-browser problem);
+// the iPaper viewer is a third-party image rendering of the paper blad with no offer
+// codes in it at all.
+function bladUrlHint(url) {
+    const u = url.toLowerCase();
+    if (u.includes('ipaper.io') || u.includes('viewer.ipaper')) {
+        return 'Det där är bladet som bildvisning (iPaper) — den innehåller inga '
+            + 'erbjudandekoder. Öppna samma erbjudande på willys.se och kopiera DEN länken.';
+    }
+    if (/willys\.se\/erbjudanden\/?($|[?#])/.test(u) || u.includes('/erbjudanden/butik')) {
+        return 'Det där är listsidan med alla erbjudanden — den kan vi inte läsa (butikens '
+            + 'listning kräver en riktig webbläsarsession). Klicka på ETT erbjudande i bladet '
+            + 'och klistra in dess länk i stället.';
+    }
+    return null;
+}
+
 async function analyzeBlad() {
     const input = document.getElementById('blad-url');
     const result = document.getElementById('blad-result');
     const url = input.value.trim();
     if (!url) { result.innerHTML = '<div class="empty-state"><p>Klistra in en erbjudandelänk först.</p></div>'; return; }
+    const hint = bladUrlHint(url);
+    if (hint) {
+        result.innerHTML = `<div class="empty-state"><p>${escapeHtml(hint)}</p></div>`;
+        return;
+    }
     const btn = document.getElementById('blad-analyze-btn');
     btn.disabled = true;
     result.innerHTML = '<div class="loading">Hämtar erbjudandet…</div>';
     try {
         const d = await apiPost('/blad/analyze', { url });
+        lastBladOffer = d;
         const unit = UNIT_SHORT[d.unit_price_unit] || d.unit_price_unit || '';
         const pant = d.excludes_deposit ? ' +pant' : '';
         let html = `<div class="card-title">${escapeHtml(d.name)}`
@@ -2539,16 +2650,162 @@ async function analyzeBlad() {
                         ? `<span class="badge badge-success">bladet ${escapeHtml(formatSek(Math.abs(c.unit_price_diff_sek)))} kr/${escapeHtml(cUnit)} billigare</span>`
                         : `<span class="badge badge-warning">bladet ${escapeHtml(formatSek(c.unit_price_diff_sek))} kr/${escapeHtml(cUnit)} dyrare</span>`;
                 }
-                html += `<tr><td>${escapeHtml(c.product_name)}</td><td>${current}</td><td>${verdict}</td></tr>`;
+                html += `<tr><td>${escapeHtml(c.product_name)}${bladNoteCell(c)}</td><td>${current}</td><td>${verdict}</td></tr>`;
             }
             html += '</tbody></table>';
         }
         result.innerHTML = html;
     } catch (e) {
-        result.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message || 'Kunde inte analysera erbjudandet.')}</p></div>`;
+        result.innerHTML = `<div class="empty-state"><p>${escapeHtml(bladErrorText(e))}</p></div>`;
     } finally {
         btn.disabled = false;
     }
+}
+
+// --- Notera pris själv (the offline card's second tab) ---
+//
+// The same POST the link dialog's collapsed <details> has always made — one saveManualPrice
+// below serves both — but reachable in one click from the page where the buy decision is
+// made, and with its own product/link pickers so a Facebook förbokning needs no detour
+// through Produkter → rad → Redigera → skrolla.
+
+let lastBladOffer = null;       // the analysed offer, so the bridge can prefill from it
+let panelManualLinks = [];      // links of the product currently picked in the panel
+
+function showOfflineTab(name) {
+    document.querySelectorAll('#offline-tabs button').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.offlineTab === name);
+    });
+    document.getElementById('offline-pane-blad').hidden = name !== 'blad';
+    document.getElementById('offline-pane-manual').hidden = name !== 'manual';
+    if (name === 'manual') fillPanelManualProducts();
+}
+
+// allProducts is ALWAYS the full list (loadProducts never assigns a filtered result to it),
+// so this select can never be narrowed by whatever facet the Produkter page happens to hold.
+function fillPanelManualProducts(selectedProductId) {
+    const select = document.getElementById('panel-manual-product');
+    const keep = selectedProductId || select.value;
+    const rows = (allProducts || []).slice().sort(function (a, b) {
+        return a.name.localeCompare(b.name, 'sv');
+    });
+    select.innerHTML = rows.length
+        ? rows.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
+        : '<option value="">Inga produkter ännu</option>';
+    if (keep && rows.some(p => p.id === keep)) select.value = keep;
+    return panelManualProductChanged();
+}
+
+async function panelManualProductChanged(selectedLinkId) {
+    const productId = document.getElementById('panel-manual-product').value;
+    const linkSelect = document.getElementById('panel-manual-link');
+    if (!productId) {
+        panelManualLinks = [];
+        linkSelect.innerHTML = '<option value="">—</option>';
+        return;
+    }
+    linkSelect.innerHTML = '<option value="">Laddar…</option>';
+    try {
+        panelManualLinks = await apiGet('/products/' + productId + '/links');
+    } catch (e) {
+        panelManualLinks = [];
+        linkSelect.innerHTML = '<option value="">Kunde inte ladda länkarna</option>';
+        return;
+    }
+    linkSelect.innerHTML = panelManualLinks.length
+        ? panelManualLinks.map(function (link) {
+            const label = [link.store_name, link.package_size].filter(Boolean).join(' — ');
+            return `<option value="${escapeHtml(link.product_store_id)}">${escapeHtml(label)}</option>`;
+        }).join('')
+        : '<option value="">Produkten har inga länkar</option>';
+    if (selectedLinkId && panelManualLinks.some(l => l.product_store_id === selectedLinkId)) {
+        linkSelect.value = selectedLinkId;
+    }
+    // Ordinarie prefills from the chosen link's current price — the number a campaign is
+    // measured against, and the one the reader would otherwise go and look up. Only when
+    // the field is still empty: a value the bridge just filled in must win.
+    const regular = document.getElementById('panel-manual-regular');
+    if (!regular.value) {
+        const link = panelManualLinks.find(l => l.product_store_id === linkSelect.value);
+        regular.value = link && link.price_sek != null ? link.price_sek : '';
+    }
+}
+
+// From a blad candidate straight into the note, with the store's own numbers carried over.
+// It fills the form and switches tab — it does NOT save: deciding that this offer IS this
+// product is the human's call, exactly as it was when the only path was the link dialog.
+async function noteBladOfferOnLink(productStoreId) {
+    const offer = lastBladOffer;
+    showOfflineTab('manual');
+    const candidate = ((offer && offer.candidates) || []).find(function (c) {
+        return (c.notable_links || []).some(l => l.product_store_id === productStoreId);
+    });
+    if (candidate) {
+        await fillPanelManualProducts(candidate.product_id);
+        await panelManualProductChanged(productStoreId);
+        document.getElementById('panel-manual-link').value = productStoreId;
+    }
+    if (offer) {
+        document.getElementById('panel-manual-price').value =
+            offer.offer_price_sek != null ? offer.offer_price_sek : '';
+        // The blad's own ordinarie when it printed one; otherwise leave what the link
+        // prefilled — an invented ordinarie would manufacture a campaign.
+        if (offer.ordinarie_price_sek != null) {
+            document.getElementById('panel-manual-regular').value = offer.ordinarie_price_sek;
+        }
+        const terms = (offer.conditions || []).slice();
+        if (offer.valid_until) terms.push('t.o.m. ' + offer.valid_until);
+        document.getElementById('panel-manual-note').value =
+            ('Willys blad' + (terms.length ? ': ' + terms.join(' · ') : '')).slice(0, 255);
+    }
+    document.getElementById('panel-manual-date').value = new Date().toLocaleDateString('sv-SE');
+    document.getElementById('panel-manual-price').focus();
+}
+
+async function saveManualPricePanel() {
+    const linkId = document.getElementById('panel-manual-link').value;
+    if (!linkId) {
+        showToast('Välj vilken länk priset gäller', 'error');
+        return;
+    }
+    const saved = await postManualPrice(linkId, {
+        price: document.getElementById('panel-manual-price').value,
+        regular: document.getElementById('panel-manual-regular').value,
+        date: document.getElementById('panel-manual-date').value,
+        note: document.getElementById('panel-manual-note').value
+    });
+    if (!saved) return;
+    document.getElementById('panel-manual-price').value = '';
+    document.getElementById('panel-manual-note').value = '';
+}
+
+// FastAPI 4xx bodies are {"detail": "..."} and apiError passes the raw text through, so
+// the reader met a JSON blob where a sentence belonged.
+function bladErrorText(err) {
+    const raw = (err && err.message) || '';
+    try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.detail === 'string') return parsed.detail;
+    } catch (ignored) { /* not JSON — use the text as-is */ }
+    return raw || 'Kunde inte analysera erbjudandet.';
+}
+
+// The bridge into the note. Only the offer's OWN store's links are offered: the price was
+// observed at Willys, and writing it onto an ICA link would forge the observation — a
+// manual point is indistinguishable from a fetched one once written, and no path deletes
+// a single point. No such link = say so, never guess a target.
+function bladNoteCell(candidate) {
+    const links = candidate.notable_links || [];
+    if (!links.length) {
+        return '<div class="best-link">ingen Willys-länk att notera på</div>';
+    }
+    const buttons = links.map(function (link) {
+        const label = [link.store_name, link.package_size].filter(Boolean).join(' ');
+        return '<button type="button" class="btn btn-sm blad-note-btn" '
+            + `data-blad-note="${escapeHtml(link.product_store_id)}">`
+            + `Notera på ${escapeHtml(label)}</button>`;
+    }).join('');
+    return `<div class="blad-note-links">${buttons}</div>`;
 }
 
 // --- Prisutveckling ---
@@ -4147,36 +4404,56 @@ function showEditPackagingModal(productStoreId) {
 
 // Record a price a human saw. Validated twice on purpose — the server refuses an inverted
 // pair too (v0.32.1), but a typo should be answered in the dialog rather than by a 400.
-async function saveManualPrice() {
-    const id = document.getElementById('edit-pkg-link-id').value;
-    const price = parseFloat(document.getElementById('manual-price').value);
+// THE manual-price write, for both entry points (the link dialog's collapsed section and
+// the offline card's "Notera pris själv" tab). One function so the two can never disagree
+// about validation or about what has to be refreshed afterwards — the Gotcha-4 shape, in
+// JS. Returns true on a saved point.
+async function postManualPrice(linkId, fields) {
+    const price = parseFloat(fields.price);
     if (!isFinite(price) || price <= 0) {
         showToast('Ange priset du betalar', 'error');
-        return;
+        return false;
     }
-    const regularRaw = document.getElementById('manual-regular').value;
-    const regular = regularRaw === '' ? null : parseFloat(regularRaw);
+    const regular = (fields.regular === '' || fields.regular == null)
+        ? null
+        : parseFloat(fields.regular);
+    // Validated here as well as on the server: an inverted pair re-prices the link at the
+    // HIGHER number everywhere (effective = coalesce(offer, price)), so the reader gets the
+    // reason immediately rather than a 400 from the other side of the wire.
     if (regular != null && !(regular > price)) {
         showToast('Ordinarie priset måste vara högre än priset du betalar', 'error');
-        return;
+        return false;
     }
     try {
-        await apiPost('/product-stores/' + id + '/prices', {
+        await apiPost('/product-stores/' + linkId + '/prices', {
             price_sek: price,
             regular_price_sek: regular,
-            observed_on: document.getElementById('manual-date').value || null,
-            note: document.getElementById('manual-note').value || null
+            observed_on: fields.date || null,
+            note: fields.note || null
         });
         showToast('Priset noterat');
-        closeModal('modal-edit-packaging');
-        await reloadProductLinks();
+        if (productLinksFor) await reloadProductLinks();
         loadProducts();
         // The note can create a deal, move a product's floor and change every counter that
-        // reads /stats — the same refresh a "Kolla nu" earns.
+        // reads /stats — the same refresh a "Kolla nu" earns. loadDeals too: the offline
+        // card sits ON Att köpa, so the row it just created must appear without a reload.
+        loadDeals();
         loadStats();
+        return true;
     } catch (err) {
         showToast(err.message || 'Kunde inte notera priset', 'error');
+        return false;
     }
+}
+
+async function saveManualPrice() {
+    const saved = await postManualPrice(document.getElementById('edit-pkg-link-id').value, {
+        price: document.getElementById('manual-price').value,
+        regular: document.getElementById('manual-regular').value,
+        date: document.getElementById('manual-date').value,
+        note: document.getElementById('manual-note').value
+    });
+    if (saved) closeModal('modal-edit-packaging');
 }
 
 function editScheduleModeChanged() {
@@ -4536,6 +4813,21 @@ document.getElementById('deals-table-container').addEventListener('click', (e) =
     showPriceHistory(id, deal ? deal.product_name : '', deal ? deal.unit : null);
 });
 
+// The offline card: tab strip, and the bridge button inside a rendered candidate row.
+document.getElementById('offline-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-offline-tab]');
+    if (btn) showOfflineTab(btn.dataset.offlineTab);
+});
+document.getElementById('blad-result').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-blad-note]');
+    if (btn) noteBladOfferOnLink(btn.getAttribute('data-blad-note'));
+});
+// Enter in the URL field analyses. Without it, paste + Enter was a silent no-op — the
+// field is not in a <form>, so the browser had nothing to submit.
+document.getElementById('blad-url').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); analyzeBlad(); }
+});
+
 // The butiksfördelning IS the store filter — clicking a pill filters the list to that
 // round, clicking it again releases it, and so does "Visa alla butiker".
 document.getElementById('basket-strip').addEventListener('click', (e) => {
@@ -4718,6 +5010,9 @@ window.addEventListener('hashchange', renderPage);
 document.addEventListener('DOMContentLoaded', async () => {
     restoreProductFilters();
     renderPage();
+    // Today, in the browser's own day: the person typing stands in the same timezone,
+    // and the server converts the civil date at Swedish midday.
+    document.getElementById('panel-manual-date').value = new Date().toLocaleDateString('sv-SE');
     await loadStores();
     loadProducts();
     loadWatches();

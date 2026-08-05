@@ -246,7 +246,7 @@ def _tokens(*texts: str | None) -> set[str]:
 
 
 async def match_candidates(
-    session: AsyncSession, offer: BladOffer, limit: int = 5
+    session: AsyncSession, offer: BladOffer, limit: int = 5, store_slug: str = "willys"
 ) -> list[dict[str, Any]]:
     """Tracked products ranked by name/brand token overlap with the offer.
 
@@ -254,6 +254,13 @@ async def match_candidates(
     price — what you would pay), and a ``unit_price_diff_sek`` ONLY when the offer's
     unit and the product's unit agree. Zero-overlap products are not returned: an empty
     candidate list is honest, a foreign product with a number next to it is not.
+
+    ``notable_links`` is the product's active links AT THE OFFER'S OWN STORE — what the
+    portal offers a "notera på denna länk" button for. Only that store's links, because
+    the price was observed THERE: writing a Willys blad price onto an ICA link would
+    forge the observation, and a manual price point is indistinguishable from a real one
+    once written (there is no delete-one-point path). An empty list is a real answer —
+    the product is not tracked at that store, so there is nothing honest to record on.
     """
     offer_tokens = _tokens(offer.name, offer.package_text, *offer.brands)
     if not offer_tokens:
@@ -280,12 +287,24 @@ async def match_candidates(
             latest_by_link[link.id] = (product, link, store, point)
 
     best_by_product: dict[Any, dict[str, Any]] = {}
+    notable_by_product: dict[Any, list[dict[str, Any]]] = {}
     for product, link, store, point in latest_by_link.values():
         effective = point.offer_price_sek if point.offer_price_sek is not None else point.price_sek
         unit_price = None
         if effective is not None and link.package_quantity and link.package_quantity > 0:
             unit_price = (effective / link.package_quantity).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        if store.slug == store_slug:
+            notable_by_product.setdefault(product.id, []).append(
+                {
+                    "product_store_id": str(link.id),
+                    "store_name": link_store_name(link, store),
+                    "package_size": link.package_size,
+                    # The link's own current price — the ordinarie a manual note prefills
+                    # against, so the reader does not have to go and look it up.
+                    "price_sek": float(point.price_sek) if point.price_sek is not None else None,
+                }
             )
         current = best_by_product.get(product.id)
         if current is None or (
@@ -322,6 +341,12 @@ async def match_candidates(
                     else None
                 ),
                 "match_score": len(overlap),
+                # Where a manual note may honestly land: this product's links at the
+                # offer's OWN store, sorted so the same list renders the same way twice.
+                "notable_links": sorted(
+                    notable_by_product.get(product.id, []),
+                    key=lambda link: (link["store_name"], link["package_size"] or ""),
+                ),
             }
         )
     candidates.sort(key=lambda c: (-c["match_score"], c["product_name"].lower()))
