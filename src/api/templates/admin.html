@@ -683,7 +683,9 @@
 </div>
 
 <!-- Toast container -->
-<div class="shared-toast" id="toast"></div>
+<!-- aria-live: the toast is the app's only feedback for many actions, and a
+     textContent swap in a plain div is silent to a screen reader. -->
+<div class="shared-toast" id="toast" role="status" aria-live="polite"></div>
 
 <!-- SECTION_SEPARATOR -->
 /* Page-specific styles. The tokens, the shell and the shared primitives (card, chip, btn,
@@ -2468,15 +2470,23 @@ function setStoreFilter(store) {
     renderDeals();
 }
 
+// Request-sequence token: clicking Allt → Livsmedel → Allt fires three requests, and
+// whichever RESOLVES last used to win — the active chip could sit on Allt over
+// Livsmedel rows. Only the newest request may commit its result.
+let dealsSeq = 0;
 async function loadDeals() {
+    const seq = ++dealsSeq;
     try {
         const url = scope ? `/deals?store_type=${encodeURIComponent(scope)}` : '/deals';
-        allDeals = await apiGet(url);
+        const rows = await apiGet(url);
+        if (seq !== dealsSeq) return;
+        allDeals = rows;
         // A store filter left over from a wider scope would silently empty the list.
         if (storeFilter && !allDeals.some(d => d.store_name === storeFilter)) storeFilter = null;
         setNavCount('nav-count-kopa', buyableDeals().length);
         renderDeals();
     } catch (e) {
+        if (seq !== dealsSeq) return;
         document.getElementById('deals-table-container').innerHTML =
             '<div class="card"><div class="empty-state"><p>Kunde inte ladda erbjudanden.</p></div></div>';
     }
@@ -2718,11 +2728,18 @@ function renderStatistics() {
     el.textContent = parts.join(' · ');
 }
 
+// Same request-sequence guard as loadDeals: a deep link to #/utveckling fires /stats
+// from both boot and the hashchange, and the period picker refires it per change —
+// only the newest request may set statsData.
+let statsSeq = 0;
 async function loadStatistics() {
+    const seq = ++statsSeq;
     const container = document.getElementById('stats-container');
     try {
         const weeks = document.getElementById('stats-period').value;
-        statsData = await apiGet('/stats?weeks=' + encodeURIComponent(weeks));
+        const data = await apiGet('/stats?weeks=' + encodeURIComponent(weeks));
+        if (seq !== statsSeq) return;
+        statsData = data;
         renderStatistics();
         // /stats carries two things no other endpoint does: the validator's findings and
         // the coverage counts. (Att köpa's span bars ride on the /deals rows themselves
@@ -2730,6 +2747,7 @@ async function loadStatistics() {
         renderLuckor();
         updateIssueBadges();
     } catch (e) {
+        if (seq !== statsSeq) return;
         container.innerHTML = '<div class="empty-state"><p>Kunde inte ladda statistik.</p></div>';
         // Fel & luckor reads the same payload — without this it hangs on "Laddar…"
         // forever while its sidebar badge quietly claims zero silent errors.
