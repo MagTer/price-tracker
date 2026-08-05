@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,13 @@ from domain.extractors.jsonld import JsonLdExtractor
 from domain.link_health import LinkHealth, broken_links
 from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
 from domain.parser import PriceParser, get_api_extractor, get_html_extractor
-from domain.pricing import CANONICAL_UNITS, normalize_amount, quantity_mismatch, unit_price_py
+from domain.pricing import (
+    CANONICAL_UNITS,
+    MAX_PACKAGE_QUANTITY,
+    normalize_amount,
+    quantity_mismatch,
+    unit_price_py,
+)
 from domain.quickadd import (
     PackageGuess,
     derive_unit,
@@ -574,6 +580,15 @@ async def create_product(
     Security:
         Requires IAP header auth (X-Auth-Request-Email).
     """
+    # The same gate quick-add applies (and PUT deliberately cannot repair): unit is
+    # immutable once set because every link's quantity is scaled in it, so a product
+    # created as "ml" or "gram" flags a unit conflict on every scrape forever and the
+    # only remedy is delete-and-recreate, losing all history.
+    if data.unit is not None and data.unit not in CANONICAL_UNITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unit måste vara en av: {', '.join(CANONICAL_UNITS)}",
+        )
     try:
         tenant_uuid = require_default_tenant(data.tenant_id)
 
@@ -2602,6 +2617,31 @@ async def export_data(
         raise HTTPException(status_code=500, detail="Failed to export data") from e
 
 
+# A real backup is tens of KB (prod: 38 KB) and file.read() buffers the whole upload —
+# the cap guards the container's memory, not any legitimate use.
+_IMPORT_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _import_quantity(raw: Any, store_url: str, warnings: list[str]) -> Decimal | None:
+    """A package amount from an import file, or None with a warning when untrustable.
+
+    Same bounds as the interactive endpoints (positive, within Numeric(12,4)) — dropped
+    rather than clamped, because a dropped amount lands the link in the "saknar mängd"
+    facet while a wrong one silently corrupts every kr/unit ranking it touches.
+    """
+    if not raw:
+        return None
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        warnings.append(f"Oläsbar mängd '{raw}' för '{store_url}' - importerad utan mängd")
+        return None
+    if value <= 0 or value > MAX_PACKAGE_QUANTITY:
+        warnings.append(f"Ogiltig mängd {raw} för '{store_url}' - importerad utan mängd")
+        return None
+    return value
+
+
 @router.post(
     "/import",
 )
@@ -2612,11 +2652,23 @@ async def import_data(
 ) -> dict[str, Any]:
     """Import price tracker data from JSON.
 
-    Imports products, store links, and watches from a previously exported JSON file.
+    Imports products, store links, watches and price history from a previously
+    exported JSON file.
+
+    The import is the ONE write path fed by a file rather than by an extractor or a
+    validated form, so it re-applies the same invariants those paths enforce: an
+    offer at or above ordinarie is dropped (v0.32.1 — a pre-fix backup would
+    otherwise restore the inversion), a package amount outside (0, MAX] is dropped
+    (a negative amount sorts FIRST in every cheapest-per-unit ranking), and an
+    existing product's `unit` is never overwritten (the same one-way door
+    ProductUpdate documents: re-scaling every link's quantity silently misscales
+    the product's whole kr/unit history). Each drop is a warning, never a guess.
 
     Args:
         file: JSON file upload.
-        mode: Import mode - "merge" (update existing, add new) or "replace" (delete all first).
+        mode: Import mode - "merge" (update existing, add new) or "replace"
+            (delete THIS TENANT'S WATCHES first, then merge — products and links
+            are shared and are always merged, never deleted).
         session: Database session.
 
     Returns:
@@ -2633,8 +2685,20 @@ async def import_data(
         # Get user's context
         tenant_id = DEFAULT_TENANT_ID
 
-        # Read and parse JSON
+        # Read and parse JSON — bounded: file.read() buffers the whole upload in memory,
+        # and a real backup is tens of KB (prod: 38 KB), so 20 MB is generous headroom
+        # rather than a limit anyone hits by accident.
+        if file.size is not None and file.size > _IMPORT_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Filen är för stor för en import (max 20 MB)",
+            )
         content = await file.read()
+        if len(content) > _IMPORT_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Filen är för stor för en import (max 20 MB)",
+            )
         try:
             data = json.loads(content.decode("utf-8"))
         except json.JSONDecodeError as e:
@@ -2696,11 +2760,29 @@ async def import_data(
             product_result = await session.execute(product_stmt)
             product = product_result.scalar_one_or_none()
 
+            unit = prod_data.get("unit")
+            if unit is not None and unit not in CANONICAL_UNITS:
+                # The same gate quick-add applies: a product created as "ml" or "gram"
+                # flags a unit conflict on every scrape forever, and unit is immutable
+                # once set (see ProductUpdate) — so the only repair would be delete
+                # and recreate, losing the history this import exists to restore.
+                warnings.append(f"Ogiltig enhet '{unit}' för '{name}' - importerad utan enhet")
+                unit = None
+
             if product:
                 # Update existing product. Package data is NOT a product attribute any more —
                 # an import entry carries it on each store link instead.
                 product.category = normalize_category(prod_data.get("category")) or product.category
-                product.unit = prod_data.get("unit") or product.unit
+                # unit is deliberately NOT overwritten: every link's quantity is scaled in
+                # this unit, so changing it silently misscales the product's whole kr/unit
+                # history — the exact one-way door PUT /products refuses with a 400.
+                if unit is not None and product.unit is not None and unit != product.unit:
+                    warnings.append(
+                        f"Enheten för '{name}' ({product.unit}) behölls - "
+                        f"filen säger '{unit}', men enheten skalar all historik"
+                    )
+                elif unit is not None and product.unit is None:
+                    product.unit = unit
                 products_updated += 1
             else:
                 # Create new product
@@ -2709,7 +2791,7 @@ async def import_data(
                     name=name,
                     brand=brand,
                     category=normalize_category(prod_data.get("category")),
-                    unit=prod_data.get("unit"),
+                    unit=unit,
                 )
                 session.add(product)
                 await session.flush()  # Get product ID
@@ -2740,13 +2822,17 @@ async def import_data(
                 existing_ps = ps_result.scalar_one_or_none()
 
                 if not existing_ps:
-                    link_package_qty = None
-                    if link_data.get("package_quantity"):
-                        link_package_qty = Decimal(str(link_data["package_quantity"]))
-
-                    scraped_qty = None
-                    if link_data.get("scraped_package_quantity"):
-                        scraped_qty = Decimal(str(link_data["scraped_package_quantity"]))
+                    # Outside (0, MAX] the amount is dropped, never guessed: a negative
+                    # amount gives a negative kr/unit that sorts FIRST in every
+                    # cheapest-per-unit ranking, and above Numeric(12,4) Postgres would
+                    # fail the whole import at flush. Dropped = the link lands in the
+                    # "saknar mängd" facet, which is the honest state.
+                    link_package_qty = _import_quantity(
+                        link_data.get("package_quantity"), store_url, warnings
+                    )
+                    scraped_qty = _import_quantity(
+                        link_data.get("scraped_package_quantity"), store_url, warnings
+                    )
 
                     # Create new link — the link owns the packaging.
                     ps = ProductStore(
@@ -2851,6 +2937,16 @@ async def import_data(
                     price_points_skipped += 1
                     continue
                 try:
+                    price_dec = Decimal(str(price_raw))
+                except (InvalidOperation, ValueError):
+                    warnings.append(f"Oläsbart pris '{price_raw}', hoppade över prispunkten")
+                    price_points_skipped += 1
+                    continue
+                if price_dec <= 0:
+                    warnings.append(f"Pris {price_raw} <= 0, hoppade över prispunkten")
+                    price_points_skipped += 1
+                    continue
+                try:
                     checked_at = datetime.fromisoformat(str(checked_at_raw))
                 except ValueError:
                     warnings.append(f"Unparsable checked_at '{checked_at_raw}', skipped")
@@ -2870,22 +2966,37 @@ async def import_data(
                     price_points_skipped += 1
                     continue
 
+                offer_dec = None
+                offer_type = row.get("offer_type")
+                offer_details = row.get("offer_details")
+                if row.get("offer_price_sek") is not None:
+                    try:
+                        offer_dec = Decimal(str(row["offer_price_sek"]))
+                    except (InvalidOperation, ValueError):
+                        offer_dec = None
+                # The v0.32.1 invariant, at the last write path that lacked it: a backup
+                # taken before the fix (or a hand-edited file) restores the inversion,
+                # and effective = coalesce(offer, price) re-prices the link at the HIGHER
+                # number in every ranking. Refused wholesale — price, type AND details.
+                if offer_dec is not None and (offer_dec <= 0 or offer_dec >= price_dec):
+                    warnings.append(
+                        f"Erbjudande {offer_dec} >= ordinarie {price_dec} for "
+                        f"'{row_url}' - importerat utan erbjudande"
+                    )
+                    offer_dec, offer_type, offer_details = None, None, None
+
                 session.add(
                     PricePoint(
                         product_store_id=link_id,
-                        price_sek=Decimal(str(price_raw)),
+                        price_sek=price_dec,
                         store_unit_price_sek=(
                             Decimal(str(row["store_unit_price_sek"]))
                             if row.get("store_unit_price_sek") is not None
                             else None
                         ),
-                        offer_price_sek=(
-                            Decimal(str(row["offer_price_sek"]))
-                            if row.get("offer_price_sek") is not None
-                            else None
-                        ),
-                        offer_type=row.get("offer_type"),
-                        offer_details=row.get("offer_details"),
+                        offer_price_sek=offer_dec,
+                        offer_type=offer_type,
+                        offer_details=offer_details,
                         in_stock=row.get("in_stock", True),
                         checked_at=checked_at,
                     )

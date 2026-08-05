@@ -362,3 +362,163 @@ class TestVersionCompatibility:
             files = {"file": ("x.json", json.dumps(payload).encode(), "application/json")}
             r = await c.post("/import", files=files)
         assert r.status_code == 400
+
+
+class TestImportInvariants:
+    """The import is the one write path fed by a FILE — it must re-apply the invariants
+    every other write path enforces, because a pre-v0.32.1 backup (or a hand-edited one)
+    would otherwise restore exactly the corruptions those paths refuse."""
+
+    def _payload(self, store_slug: str, url: str, name: str, **overrides) -> dict:
+        base = {
+            "version": "1.1",
+            "products": [
+                {
+                    "name": name,
+                    "brand": None,
+                    "category": None,
+                    "unit": "st",
+                    "store_links": [
+                        {
+                            "store_slug": store_slug,
+                            "store_url": url,
+                            "is_active": True,
+                            "package_size": "24-pack",
+                            "package_quantity": 24.0,
+                        }
+                    ],
+                    "watches": [],
+                }
+            ],
+            "price_history": [],
+        }
+        base["products"][0].update(overrides.pop("product", {}))
+        base.update(overrides)
+        return base
+
+    async def test_an_inverted_offer_is_imported_without_the_offer(
+        self, client, db_session
+    ) -> None:
+        """offer >= price is refused wholesale — price, type AND details — exactly as
+        the extractors and the manual endpoint refuse it (v0.32.1). Restored as-is it
+        would re-price the link at the HIGHER number in every ranking."""
+        store = (await db_session.execute(select(Store).where(Store.slug == "ica"))).scalar_one()
+        url = f"https://handlaprivatkund.ica.se/stores/1004247/products/{uuid.uuid4()}"
+        name = f"{_MARKER} Inverterad"
+        payload = self._payload(store.slug, url, name)
+        payload["price_history"] = [
+            {
+                "store_url": url,
+                "checked_at": _now().isoformat(),
+                "price_sek": 69.46,
+                "offer_price_sek": 130.00,
+                "offer_type": "kampanj",
+                "offer_details": "2 för 130 kr",
+            }
+        ]
+        product_id = None
+        try:
+            async with client as c:
+                files = {"file": ("x.json", json.dumps(payload).encode(), "application/json")}
+                r = await c.post("/import", files=files)
+            assert r.status_code == 200, r.text
+            summary = r.json()["summary"]
+            assert summary["price_points_created"] == 1
+            assert any("erbjudande" in w.lower() for w in summary["warnings"])
+
+            link = (
+                await db_session.execute(select(ProductStore).where(ProductStore.store_url == url))
+            ).scalar_one()
+            product_id = link.product_id
+            point = (
+                await db_session.execute(
+                    select(PricePoint).where(PricePoint.product_store_id == link.id)
+                )
+            ).scalar_one()
+            assert point.price_sek == Decimal("69.46")
+            assert point.offer_price_sek is None
+            assert point.offer_type is None
+            assert point.offer_details is None
+        finally:
+            if product_id is not None:
+                await _wipe(db_session, product_id)
+
+    async def test_a_negative_amount_is_imported_without_the_amount(
+        self, client, db_session
+    ) -> None:
+        """A negative amount gives a negative kr/unit, which sorts FIRST in every
+        cheapest-per-unit ranking — dropped with a warning, landing the link in the
+        'saknar mängd' facet instead."""
+        store = (await db_session.execute(select(Store).where(Store.slug == "ica"))).scalar_one()
+        url = f"https://handlaprivatkund.ica.se/stores/1004247/products/{uuid.uuid4()}"
+        name = f"{_MARKER} Negativ mängd"
+        payload = self._payload(store.slug, url, name)
+        payload["products"][0]["store_links"][0]["package_quantity"] = -24.0
+        product_id = None
+        try:
+            async with client as c:
+                files = {"file": ("x.json", json.dumps(payload).encode(), "application/json")}
+                r = await c.post("/import", files=files)
+            assert r.status_code == 200, r.text
+            assert any("mängd" in w for w in r.json()["summary"]["warnings"])
+
+            link = (
+                await db_session.execute(select(ProductStore).where(ProductStore.store_url == url))
+            ).scalar_one()
+            product_id = link.product_id
+            assert link.package_quantity is None
+        finally:
+            if product_id is not None:
+                await _wipe(db_session, product_id)
+
+    async def test_an_existing_products_unit_is_never_overwritten(self, client, db_session) -> None:
+        """The same one-way door PUT /products refuses: unit scales every link's
+        quantity, so an import that flips it silently misscales the product's whole
+        kr/unit history."""
+        product, link, _ = await _seed(db_session)
+        payload = self._payload(
+            "ica", link.store_url, product.name, product={"unit": "kg", "brand": product.brand}
+        )
+        try:
+            async with client as c:
+                files = {"file": ("x.json", json.dumps(payload).encode(), "application/json")}
+                r = await c.post("/import", files=files)
+            assert r.status_code == 200, r.text
+            assert any("enheten" in w.lower() for w in r.json()["summary"]["warnings"])
+
+            await db_session.refresh(product)
+            assert product.unit == "st"
+        finally:
+            await _wipe(db_session, product.id)
+
+    async def test_an_unknown_unit_is_imported_without_a_unit(self, client, db_session) -> None:
+        """ "ml" is not a canonical unit, and unit is immutable once set — imported as
+        None (repairable) rather than as a value that flags a conflict on every scrape
+        and can only be fixed by delete-and-recreate."""
+        store = (await db_session.execute(select(Store).where(Store.slug == "ica"))).scalar_one()
+        url = f"https://handlaprivatkund.ica.se/stores/1004247/products/{uuid.uuid4()}"
+        name = f"{_MARKER} Ml-enhet"
+        payload = self._payload(store.slug, url, name, product={"unit": "ml"})
+        product_id = None
+        try:
+            async with client as c:
+                files = {"file": ("x.json", json.dumps(payload).encode(), "application/json")}
+                r = await c.post("/import", files=files)
+            assert r.status_code == 200, r.text
+
+            restored = (
+                await db_session.execute(select(Product).where(Product.name == name))
+            ).scalar_one()
+            product_id = restored.id
+            assert restored.unit is None
+        finally:
+            if product_id is not None:
+                await _wipe(db_session, product_id)
+
+    async def test_an_oversized_file_is_refused(self, client) -> None:
+        """file.read() buffers the whole upload in memory — a cap, not an OOM."""
+        blob = b'{"version": "1.1", "padding": "' + b"x" * (21 * 1024 * 1024) + b'"}'
+        async with client as c:
+            files = {"file": ("big.json", blob, "application/json")}
+            r = await c.post("/import", files=files)
+        assert r.status_code == 413
