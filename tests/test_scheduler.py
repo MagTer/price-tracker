@@ -907,6 +907,43 @@ class TestWeeklySummary:
         mock_send.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_empty_monday_is_not_stamped_as_sent(self) -> None:
+        """"Nothing to send" at noon is often a WALL, not a fact: an ICA challenge on
+        Monday morning defers every ICA link past 12:00, so the deals arrive later the
+        same day. The empty branch must leave the dedup date unstamped and let the
+        5-minute loop send as soon as there is something to say — stamping skipped the
+        week's buy list exactly when the checks it waits for were delayed."""
+        email_service = MagicMock()
+        scheduler, session_factory, _ = _make_scheduler(email_service=email_service)
+        self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+
+        monday = datetime(2026, 2, 16, 15, 0, 0)
+        assert scheduler.notifier is not None
+        mock_send = AsyncMock(return_value=True)
+        deals_mock = AsyncMock(return_value=[])
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", deals_mock),
+            patch.object(scheduler.notifier, "send_weekly_summary", mock_send),
+        ):
+            mock_dt.now.return_value = monday
+            await scheduler._check_weekly_summary()  # nothing to say yet
+
+            mock_send.assert_not_called()
+            assert scheduler._last_summary_date is None
+
+            # The walled morning's checks land; the next cycle has news.
+            self._summary_session(session_factory, watches=[], link_rows_per_watch=[])
+            deals_mock.return_value = [self._buy_row()]
+            mock_dt.now.return_value = monday + timedelta(minutes=5)
+            await scheduler._check_weekly_summary()
+
+        mock_send.assert_called_once()
+        assert scheduler._last_summary_date == monday.date()
+        assert scheduler._stats["summaries_sent"] == 1
+
+    @pytest.mark.asyncio
     async def test_weekly_summary_failure_is_not_counted_as_sent(self) -> None:
         """send_weekly_summary reports failure as a RETURN VALUE (ResendEmailService
         never raises) — a False must not stamp the dedup date, not count in the stats,

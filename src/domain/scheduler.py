@@ -649,10 +649,16 @@ class PriceCheckScheduler:
                 logger.exception("Data-quality validation failed - sending summary without it")
 
             if not deals and not watched_products and quality is None:
+                # Deliberately NOT stamped as sent: "nothing to send" at 12:00 is
+                # often a wall, not a fact — an ICA challenge on Monday morning
+                # defers every ICA link past noon, and stamping here would skip the
+                # week's buy list the moment those checks would have landed. Left
+                # unstamped, the 5-minute loop re-evaluates for the rest of the
+                # local Monday and sends as soon as there is something to say.
                 logger.debug(
-                    "No deals, watched products or quality issues - skipping weekly summary"
+                    "No deals, watched products or quality issues yet - "
+                    "re-checking while Monday lasts"
                 )
-                self._last_summary_date = slot
                 return
 
             # The send reports failure as a return value, not an exception —
