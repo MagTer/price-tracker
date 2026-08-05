@@ -1186,7 +1186,9 @@ class TestBrokenLinkFlag:
         product, store = _product(), _store()
         ps = _ps(product, store, package_quantity="24")
         pp = _pp(ps, price="139.90", store_unit="5.83")
-        mock_session.execute.side_effect = [_rows([(pp, store, ps)])]
+        mock_session.execute.side_effect = [
+            _rows([(pp, ps, store)])
+        ]  # (point, link, store) — price_history_rows tuple order
 
         r = client.get(f"/products/{product.id}/prices")
         assert r.status_code == 200

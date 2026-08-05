@@ -274,6 +274,70 @@ async def _run_price_check(
     )
 
 
+async def price_history_rows(
+    session: AsyncSession, product_uuid: uuid.UUID, days: int
+) -> list[dict[str, str | float | bool | datetime | None]]:
+    """THE price-history query and row shape — one observation per LINK per row.
+
+    Both consumers resolve through this: ``PriceTrackerService.get_price_history`` (MCP,
+    which turns failures into an empty list) and ``GET /products/{id}/prices`` (the
+    portal's chart, which turns them into HTTP errors). They were two hand-written
+    copies of this query until v0.51.0 and drifted exactly as Gotcha 4 predicts —
+    the API copy lacked nothing the chart showed, but its truthiness test rendered a
+    legitimate 0.00 as null, and the service copy lacked ``offer_type``/``offer_details``
+    /``source`` so MCP could never show a campaign's condition.
+
+    Each row carries the COMPUTED kr/unit (D-03) derived from the link's
+    package_quantity — not anything a store printed; ``store_unit_price_sek`` is the
+    store's own claim, shown beside it and never sorted on (D-05). ``checked_at`` stays
+    a datetime; serialization belongs at the response boundary.
+    """
+    cutoff_date = _utc_now() - timedelta(days=days)
+
+    # ProductStore is already joined for the product filter — adding it to the select
+    # tuple costs no extra query, and it carries the quantity every computed unit price
+    # in these rows needs (never the ORM hybrid: MissingGreenlet, see pricing.py).
+    stmt = (
+        select(PricePoint, ProductStore, Store)
+        .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
+        .join(Store, ProductStore.store_id == Store.id)
+        .where(ProductStore.product_id == product_uuid)
+        .where(PricePoint.checked_at >= cutoff_date)
+        .order_by(PricePoint.checked_at.desc())
+    )
+    rows = (await session.execute(stmt)).all()
+
+    return [
+        {
+            "checked_at": price_point.checked_at,
+            "product_store_id": str(product_store.id),
+            # The LINK's display name — two ICA-butik links must not both say "ICA".
+            "store_name": link_store_name(product_store, store),
+            "store_slug": store.slug,
+            "package_size": product_store.package_size,
+            "package_quantity": as_float(product_store.package_quantity),
+            # price_sek is NOT NULL — no truthiness test: 0.00 is a price, not a null.
+            "price_sek": float(price_point.price_sek),
+            "offer_price_sek": as_float(price_point.offer_price_sek),
+            "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
+            "unit_price_sek": rounded_unit_price(
+                effective_price(price_point), product_store.package_quantity
+            ),
+            "offer_type": price_point.offer_type,
+            "offer_details": price_point.offer_details,
+            "in_stock": price_point.in_stock,
+            # THE reader of raw_data["source"] is domain.result.extraction_source, but it
+            # takes an extraction RESULT; here the stored dict is all there is.
+            "source": (
+                price_point.raw_data.get("source")
+                if isinstance(price_point.raw_data, dict)
+                else None
+            ),
+        }
+        for price_point, product_store, store in rows
+    ]
+
+
 class PriceTrackerService:
     """Service for managing price tracking operations.
 
@@ -293,14 +357,12 @@ class PriceTrackerService:
     ) -> list[dict[str, str | float | bool | datetime | None]]:
         """Get price history for a product across all of its links.
 
-        Each row is one price observation on one LINK, and carries the COMPUTED kr/unit
-        (D-03) derived from that link's package_quantity — not anything a store printed.
-        `store_unit_price_sek` is the store's own claim, shown beside it and never sorted on
-        (D-05).
-
-        NB: `unit_price_sek` and `in_stock` are NEW keys here. MCP's compare_stores has read
-        both off these rows since extraction and found neither, so its "Jämförspris" column has
-        printed N/A and its "Lager" column "Nej" for every row (RESEARCH.md Pitfall 4).
+        THE query and row shape live in :func:`price_history_rows`; this wrapper owns the
+        MCP-facing error contract (any failure -> empty list, never an exception). The
+        /products/{id}/prices route serves the SAME rows with its own session and its own
+        contract (HTTP 400/500) — they were two hand-written queries until v0.51.0 and had
+        already drifted apart twice (Gotcha 4): package data missing on the wire, and a
+        truthiness test that turned price 0.00 into null.
 
         Args:
             product_id: UUID string of the product.
@@ -312,43 +374,7 @@ class PriceTrackerService:
         async with self.session_factory() as session:
             try:
                 product_uuid = uuid.UUID(product_id)
-                cutoff_date = _utc_now() - timedelta(days=days)
-
-                # ProductStore is already joined for the product filter — adding it to the
-                # select tuple costs no extra query, and it carries the quantity every
-                # computed unit price in this method needs.
-                stmt = (
-                    select(PricePoint, ProductStore, Store)
-                    .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-                    .join(Store, ProductStore.store_id == Store.id)
-                    .where(ProductStore.product_id == product_uuid)
-                    .where(PricePoint.checked_at >= cutoff_date)
-                    .order_by(PricePoint.checked_at.desc())
-                )
-
-                result = await session.execute(stmt)
-                rows = result.all()
-
-                return [
-                    {
-                        "checked_at": price_point.checked_at,
-                        "product_store_id": str(product_store.id),
-                        # The LINK's display name — two ICA-butik links must not both say "ICA".
-                        "store_name": link_store_name(product_store, store),
-                        "store_slug": store.slug,
-                        "package_size": product_store.package_size,
-                        "package_quantity": as_float(product_store.package_quantity),
-                        "price_sek": float(price_point.price_sek),
-                        "offer_price_sek": as_float(price_point.offer_price_sek),
-                        "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
-                        "unit_price_sek": rounded_unit_price(
-                            effective_price(price_point), product_store.package_quantity
-                        ),
-                        "in_stock": price_point.in_stock,
-                    }
-                    for price_point, product_store, store in rows
-                ]
-
+                return await price_history_rows(session, product_uuid, days)
             except (SQLAlchemyError, ValueError):
                 logger.exception(f"Failed to get price history for product {product_id}")
                 return []

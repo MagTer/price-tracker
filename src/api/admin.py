@@ -76,7 +76,7 @@ from domain.schedule import (
     is_inherited,
     next_check_time_for_link,
 )
-from domain.service import PriceTrackerService, perform_price_check
+from domain.service import PriceTrackerService, perform_price_check, price_history_rows
 from domain.stats import build_statistics
 from domain.tenant import DEFAULT_TENANT_ID
 from domain.validation import data_quality
@@ -1748,56 +1748,17 @@ async def get_price_history(
         raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
 
     try:
-        from datetime import timedelta
-
-        cutoff_date = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
-
-        # ProductStore was already joined; adding it to the SELECT tuple puts the link's
-        # package_quantity in the row, so the unit price is computed from the link with no
-        # extra query and without touching the ORM hybrid's Python side (MissingGreenlet).
-        stmt = (
-            select(PricePoint, Store, ProductStore)
-            .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
-            .join(Store, ProductStore.store_id == Store.id)
-            .where(ProductStore.product_id == product_uuid)
-            .where(PricePoint.checked_at >= cutoff_date)
-            .order_by(PricePoint.checked_at.desc())
-        )
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        # Computing on read (D-04) is why correcting a link's quantity from 24 to 12
-        # retroactively fixes every historical unit price for free: no stale snapshot of a
-        # derived number exists to go wrong.
+        # THE query and row shape live in domain.service.price_history_rows — this route
+        # is a serializer with the HTTP error contract (the MCP path wraps the same rows
+        # with its return-empty contract). The two hand-written copies this replaces had
+        # drifted twice: package data missing on the wire, and a truthiness test that
+        # rendered a legitimate 0.00 as null (Gotcha 4).
+        rows = await price_history_rows(session, product_uuid, days)
         return [
             PricePointResponse(
-                checked_at=price_point.checked_at.isoformat(),
-                product_store_id=str(product_store.id),
-                store_name=link_store_name(product_store, store),
-                store_slug=store.slug,
-                package_size=product_store.package_size,
-                package_quantity=as_float(product_store.package_quantity),
-                # price_sek is NOT NULL — a truthiness test here turned a legitimate
-                # 0.00 into null in the chart while guarding against nothing.
-                price_sek=float(price_point.price_sek),
-                unit_price_sek=rounded_unit_price(
-                    effective_price(price_point), product_store.package_quantity
-                ),
-                store_unit_price_sek=as_float(price_point.store_unit_price_sek),
-                offer_price_sek=as_float(price_point.offer_price_sek),
-                offer_type=price_point.offer_type,
-                offer_details=price_point.offer_details,
-                in_stock=price_point.in_stock,
-                # THE reader of raw_data["source"] is domain.result.extraction_source, but it
-                # takes an extraction RESULT; here the stored dict is all there is.
-                source=(
-                    price_point.raw_data.get("source")
-                    if isinstance(price_point.raw_data, dict)
-                    else None
-                ),
+                **{**row, "checked_at": row["checked_at"].isoformat()}  # type: ignore[union-attr]
             )
-            for price_point, store, product_store in rows
+            for row in rows
         ]
     except HTTPException:
         raise

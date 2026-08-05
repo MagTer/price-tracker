@@ -370,8 +370,9 @@ class TestSiblingLinkCreation:
 
 
 class TestHistorySeriesAreDistinguishable:
-    """The price-history route must label two ICA-butik links differently (admin.py's own
-    query — CLAUDE.md Gotcha 4 — so this pins the route, not the service twin)."""
+    """The price-history route must label two ICA-butik links differently. Since v0.51.0
+    the route serves domain.service.price_history_rows (the Gotcha-4 twin is gone), so
+    this pins the one shared row shape end to end through the HTTP layer."""
 
     def test_two_butik_links_get_two_names(self, client, mock_session):
         from datetime import datetime
@@ -393,8 +394,8 @@ class TestHistorySeriesAreDistinguishable:
         # One query; tuple order is (PricePoint, Store, ProductStore).
         rows_result = MagicMock()
         rows_result.all.return_value = [
-            (pp(link_a), store, link_a),
-            (pp(link_b), store, link_b),
+            (pp(link_a), link_a, store),
+            (pp(link_b), link_b, store),
         ]
         mock_session.execute.return_value = rows_result
 
