@@ -310,6 +310,20 @@ class PriceNotifier:
                 f'<br><span style="color: #64748b; font-size: 0.85em;">'
                 f"{_sek(deal.unit_price_sek)} {html.escape(unit_label)}</span>"
             )
+        # The offer's CONDITION, in the price cell like the portal (v0.41.2): a
+        # "Välj & blanda! 2 för 99,00" price is only real if you buy two, and a buy
+        # list that hides that sends the reader to the shelf with a false verdict.
+        # A type beyond plain kampanj (stammispris, manuellt pris) is a condition too.
+        condition_bits: list[str] = []
+        if deal.offer_type not in ("kampanj", "erbjudande"):
+            condition_bits.append(deal.offer_type)
+        if deal.offer_details:
+            condition_bits.append(deal.offer_details)
+        if condition_bits:
+            price_cell += (
+                f'<br><span style="color: #b45309; font-size: 0.85em;">'
+                f"{html.escape(' · '.join(condition_bits))}</span>"
+            )
 
         verdict_cell = self._verdict_html(deal, unit_label)
         # The MOMENT, when it is a poor one. The scheduler filters these out of the weekly

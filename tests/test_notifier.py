@@ -27,6 +27,7 @@ def _deal(
     checked_at: datetime | None = None,
     discount_percent: float = 10.0,
     offer_type: str = "kampanj",
+    offer_details: str | None = None,
     timing: str = "good",
     seen_cheaper: float | None = 0.0,
     lowest_unit_price: float | None = None,
@@ -46,7 +47,7 @@ def _deal(
         offer_price_sek=offer_price,
         unit_price_sek=unit_price,
         offer_type=offer_type,
-        offer_details=None,
+        offer_details=offer_details,
         checked_at=checked_at if checked_at is not None else datetime(2026, 7, 27, 8, 0, 0),
         discount_percent=discount_percent,
         best_alt_unit_price_sek=best_alt_unit_price,
@@ -443,6 +444,37 @@ class TestPriceNotifier:
         assert "5,83 kr/st" in html
         assert "129,00 kr" in html
         assert "Lägsta pris" in html
+
+    def test_build_summary_html_shows_the_multi_buy_condition(self) -> None:
+        """The offer's condition rides in the price cell (the v0.41.2 rule): a
+        "Välj & blanda! 2 för 99,00" price is only real if you buy two, and a buy
+        list that hides it sends the reader to the shelf with a false verdict."""
+        mock_service = MockEmailService()
+        notifier = PriceNotifier(email_service=mock_service)
+
+        html = notifier._build_summary_html(
+            deals=[_deal(offer_details="Välj & blanda! 2 för 99,00")],
+            watched_products=[],
+        )
+
+        assert "Välj &amp; blanda! 2 för 99,00" in html
+
+    def test_build_summary_html_names_a_non_kampanj_offer_type(self) -> None:
+        """stammispris (member-only) and manuellt pris are conditions too — a plain
+        kampanj is the normal case and stays unnamed."""
+        mock_service = MockEmailService()
+        notifier = PriceNotifier(email_service=mock_service)
+
+        html = notifier._build_summary_html(
+            deals=[
+                _deal(product_name="Kaffe", offer_type="stammispris"),
+                _deal(product_name="Mjolk", offer_type="kampanj"),
+            ],
+            watched_products=[],
+        )
+
+        assert "stammispris" in html
+        assert "kampanj" not in html
 
     def test_watched_product_without_a_price_renders_a_dash_not_none(self) -> None:
         """A watch created before the first successful check has no price yet — the row
