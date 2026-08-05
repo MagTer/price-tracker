@@ -138,6 +138,26 @@ class TestProductTrend:
         assert row["observations"] == 0
 
     @pytest.mark.asyncio
+    async def test_an_inactive_link_is_not_the_cheapest_store(self, db_session) -> None:
+        """Same rule as deals.current_deals: an inactive link's frozen last price is
+        not a shelf anyone can buy from. Without the filter Prisutveckling could name
+        a deactivated butik as "billigast" while Att köpa refuses to — two pages
+        disagreeing about the same product."""
+        milk = await _product(db_session, "Mellanmjölk")
+        ica = await _store(db_session, "ica")
+        willys = await _store(db_session, "willys")
+        dead = await _link(db_session, milk, ica, "1")
+        dead.is_active = False
+        live = await _link(db_session, milk, willys, "1")
+        await _point(db_session, dead, "15.00")  # cheapest — but retired
+        await _point(db_session, live, "20.00")
+        await db_session.flush()
+
+        payload = await build_statistics(db_session)
+        row = _row(payload, "Mellanmjölk")
+        assert row["cheapest_store"] == "Willys"
+        assert row["current_unit_price"] == pytest.approx(20.00)
+
     async def test_a_link_without_an_amount_cannot_enter_the_comparison(self, db_session) -> None:
         """D-02: no quantity, no kr/unit — and the coverage panel is where that surfaces."""
         ica = await _store(db_session, "ica")

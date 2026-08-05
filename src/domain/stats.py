@@ -197,6 +197,14 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
             select(ProductStore, Store, Product)
             .join(Store, ProductStore.store_id == Store.id)
             .join(Product, ProductStore.product_id == Product.id)
+            # Same rule as deals.current_deals: an inactive link's frozen last price is
+            # not a shelf anyone can buy from. Without the filter, "billigast" in the
+            # product table and the matched-basket store ranking could name a butik whose
+            # page is deactivated — and Prisutveckling and Att köpa would disagree about
+            # which store is cheapest for the same product. The cost is that a retired
+            # link's history leaves this page too; the deals FLOOR still counts it,
+            # because "have I seen it cheaper" is about the past.
+            .where(ProductStore.is_active.is_(True))
         )
     ).all()
 
