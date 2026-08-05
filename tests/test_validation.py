@@ -89,6 +89,26 @@ def _point(
     )
 
 
+def test_expected_source_covers_every_structured_extractor() -> None:
+    """EXPECTED_SOURCE must track the extractor registries, or the NEXT store added
+    silently gets no tier-regression coverage — precisely the "checks green, campaigns
+    dark" failure validation.py exists for. Clas Ohlson is exempt BY DESIGN: its
+    extractor returns None when the page adds nothing beyond JSON-LD, so "jsonld" is
+    a normal answer there and judging it would be a standing false alarm.
+    """
+    from domain.parser import _API_EXTRACTORS, _HTML_EXTRACTORS
+
+    deliberately_absent = {"clasohlson"}
+    structured = (set(_API_EXTRACTORS) | set(_HTML_EXTRACTORS)) - deliberately_absent
+    assert structured == set(EXPECTED_SOURCE), (
+        "A store has a structured extractor but no EXPECTED_SOURCE entry (or vice versa) — "
+        "its ladder can degrade to JSON-LD with every check reporting ok and nothing "
+        f"alarming. Registries: {sorted(structured)}, EXPECTED_SOURCE: "
+        f"{sorted(EXPECTED_SOURCE)}. If the absence is deliberate (a Clas Ohlson-shaped "
+        "extractor), add it to deliberately_absent WITH the reasoning."
+    )
+
+
 @pytest.mark.integration
 class TestTierRegressions:
     @pytest.mark.asyncio

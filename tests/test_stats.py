@@ -285,3 +285,58 @@ class TestCoverage:
 
         assert coverage["products"] == 2
         assert coverage["products_priced"] == 1
+
+
+class TestStatsWire:
+    """The HTTP layer over build_statistics — untested until v0.51.0. The frontend's
+    whole Fel & luckor page and the sidebar severity badge read `data_quality` off this
+    payload, and that key is composed IN THE ROUTE (deliberately: validation ignores the
+    period filter), so no domain test can pin it."""
+
+    @pytest.fixture
+    def client(self, session_factory):
+        import httpx
+
+        from api.admin import get_db as admin_get_db
+        from api.app import create_app
+        from api.auth import Principal, get_principal
+
+        app = create_app()
+
+        async def override_auth() -> Principal:
+            return Principal(email="reader@example.com", is_admin=False)
+
+        async def override_get_db():
+            async with session_factory() as session:
+                yield session
+
+        app.dependency_overrides[get_principal] = override_auth
+        app.dependency_overrides[admin_get_db] = override_get_db
+        transport = httpx.ASGITransport(app=app)
+        return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+    @pytest.mark.asyncio
+    async def test_payload_carries_data_quality_and_is_reader_readable(
+        self, client, db_session
+    ) -> None:
+        async with client as c:
+            r = await c.get("/stats")
+
+        assert r.status_code == 200
+        payload = r.json()
+        # The keys every consumer reads — renderStatistics, renderLuckor, the badges.
+        assert set(payload) >= {"period", "products", "stores", "coverage", "data_quality"}
+        assert set(payload["data_quality"]) == {"tier_regressions", "unit_price_mismatches"}
+
+    @pytest.mark.asyncio
+    async def test_weeks_zero_means_since_start_and_positive_narrows(
+        self, client, db_session
+    ) -> None:
+        """The route translates weeks=0 -> None (since start); a positive value passes
+        through. Pinned via the period echo build_statistics returns."""
+        async with client as c:
+            all_time = (await c.get("/stats?weeks=0")).json()
+            narrowed = (await c.get("/stats?weeks=4")).json()
+
+        assert all_time["period"]["weeks"] is None or all_time["period"]["weeks"] == 0
+        assert narrowed["period"]["weeks"] == 4

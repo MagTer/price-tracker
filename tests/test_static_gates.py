@@ -327,9 +327,15 @@ def test_category_selects_use_the_injected_placeholder() -> None:
         "Expected exactly 3 <!--CATEGORY_OPTIONS--> placeholders (create / edit / quick-add). "
         "A category <select> lost its placeholder, so render_admin injects nothing into it."
     )
-    assert 'name="category"' not in html or 'type="text" name="category"' not in html, (
-        'A free-text <input name="category"> is back — category must be a <select> fed by the '
-        "canonical taxonomy, not an open string field."
+    # Tag check, not a literal-string check: the old assertion was
+    # `'name="category"' not in html or '<literal>' not in html`, whose left disjunct is
+    # permanently False (the <select> carries name="category") — so it reduced to one
+    # exact attribute ORDER never appearing, and an <input name="category" type="text">
+    # passed it clean. A gate that cannot fail is worse than no gate.
+    category_tags = re.findall(r"<(\w+)[^>]*\bname=\"category\"", html)
+    assert category_tags and set(category_tags) == {"select"}, (
+        f"A category field is not a <select> (found: {category_tags}) — category must be "
+        "a <select> fed by the canonical taxonomy, not an open string field."
     )
 
 
@@ -431,6 +437,26 @@ def test_every_getelementbyid_literal_resolves_to_markup() -> None:
 
     ids = sorted(set(re.findall(r"getElementById\('([\w-]+)'\)", js)))
     assert len(ids) >= 60, f"Parsed only {len(ids)} ids — has the extraction broken?"
+
+    # The regex above is blind to every NON-literal lookup — same failure mode, no
+    # coverage. These are the constructed ids the JS actually resolves today; a new
+    # dynamic lookup gets added HERE, or it ships ungated.
+    dynamic_ids = [
+        # getElementById(prefix + '-pkg-…') — the packaging chain, three dialog prefixes.
+        *[
+            f"{prefix}-pkg-{part}"
+            for prefix in ("qa", "link", "edit")
+            for part in ("amount", "label", "amount-label", "entry-units")
+        ],
+        # The scheduler footer: desktop ('') and mobile ('-m') suffixes.
+        *[f"sched-state{sfx}" for sfx in ("", "-m")],
+        *[f"sched-state-text{sfx}" for sfx in ("", "-m")],
+        *[f"sched-when{sfx}" for sfx in ("", "-m")],
+        # num('…') in the watch dialog — indirected through a local helper.
+        "edit-watch-unit-target",
+        "edit-watch-target",
+    ]
+    ids = sorted(set(ids) | set(dynamic_ids))
 
     missing = [i for i in ids if f'id="{i}"' not in html and f'id="{i}"' not in shell]
     assert not missing, (

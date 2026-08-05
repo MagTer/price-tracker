@@ -21,8 +21,18 @@ CHECKED_AT = datetime(2026, 7, 14, 6, 0)
 
 @pytest.fixture
 def mock_session():
-    """Mock async DB session."""
-    return AsyncMock()
+    """Mock async DB session, shaped like the real one.
+
+    Session.add/add_all/expunge are SYNCHRONOUS on SQLAlchemy's AsyncSession — on a bare
+    AsyncMock they return un-awaited coroutines (the RuntimeWarning noise every run
+    carried), and production code that mistakenly wrote `await session.add(...)` would
+    pass the whole suite.
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    return session
 
 
 @pytest.fixture
@@ -1902,6 +1912,49 @@ class TestSchedulerEndpoints:
         data = r.json()
         assert "running" in data
 
+    def test_scheduler_status_wire_shape_matches_what_the_ui_reads(self, client, mock_session):
+        """Pin the exact keys renderSchedulerFooter branches on. The frontend has a FIXED
+        bug riding on this shape (parseUtc on a naive-UTC paused_until — a bare timestamp
+        parsed as LOCAL read the pause 2h in the past), and blocked_stores' three fields
+        render straight into the status tooltip — a renamed key fails silently there.
+        """
+        from datetime import datetime as _dt
+        from datetime import timedelta
+
+        from domain.scheduler import PriceCheckScheduler
+        from infra.store_block import StoreBlockRegistry
+
+        registry = StoreBlockRegistry()
+        registry.record_block("store-1", store_name="ICA")
+        scheduler = PriceCheckScheduler(
+            session_factory=MagicMock(),
+            fetcher=MagicMock(),
+            block_registry=registry,
+        )
+        scheduler.pause_for(timedelta(minutes=30))
+        client.app.state.scheduler = scheduler
+
+        last = _dt(2026, 8, 3, 7, 30, 0)
+        nxt = _dt(2026, 8, 10, 6, 15, 0)
+        bounds = MagicMock()
+        bounds.first.return_value = (last, nxt)
+        mock_session.execute.return_value = bounds
+
+        data = client.get("/scheduler/status").json()
+
+        assert data["running"] is False
+        # Naive-UTC isoformat — NO offset suffix: parseUtc exists because of exactly that.
+        assert "+" not in data["paused_until"] and not data["paused_until"].endswith("Z")
+        _dt.fromisoformat(data["paused_until"])
+        blocked = data["blocked_stores"]
+        assert blocked and set(blocked[0]) == {"store", "blocked_until", "consecutive_blocks"}
+        assert blocked[0]["store"] == "ICA"
+        assert blocked[0]["consecutive_blocks"] == 1
+        _dt.fromisoformat(blocked[0]["blocked_until"])
+        assert data["last_check_at"] == last.isoformat()
+        assert data["next_check_at"] == nxt.isoformat()
+        assert isinstance(data["stats"], dict)
+
 
 class TestValidation:
     def test_create_product_rejects_foreign_tenant(self, client):
@@ -2129,3 +2182,160 @@ class TestInteractiveFetchesRespectTheCircuitBreaker:
         # The breaker holds the whole store now — scheduler AND the next click stand down.
         assert registry.blocked_until(store.id) is not None
         fetcher.fetch.assert_not_awaited()
+
+
+class TestBladAnalyzeEndpoint:
+    """The HTTP wiring over domain/blad.py — untested until v0.51.0 despite being an
+    admin POST that spends a real ledger slot against willys.se, trips the SHARED
+    circuit breaker, and carries an inline copy of the validator judgement
+    (crosscheck_warning) with hand-tuned thresholds. The pure functions are pinned in
+    test_blad.py; these pin the status codes, the breaker interplay and the
+    check_attempts accounting."""
+
+    URL = "https://www.willys.se/erbjudanden/offline-Lask-15-pack-2500310468"
+
+    def _offer_data(self, **overrides) -> dict:
+        data = {
+            "priceNoUnit": "99,90",
+            "priceUnit": "kr/st",
+            "displayVolume": "15p/33cl",
+            "online": False,
+            "manufacturer": "COCA-COLA",
+            "potentialPromotions": [
+                {
+                    "price": 59.8,
+                    "comparePrice": "12:08 kr/l +pant",
+                    "code": "2500310468",
+                    "weightVolume": "15p/33cl",
+                    "qualifyingCount": 1,
+                    "cartLabel": "59,80/st  +pant",
+                    "rewardLabel": "59,80/st  +pant",
+                    "brands": ["COCA-COLA"],
+                    "name": "Läsk 15-pack",
+                }
+            ],
+        }
+        data.update(overrides)
+        return data
+
+    def _registry(self):
+        from infra.store_block import StoreBlockRegistry
+
+        return StoreBlockRegistry()
+
+    def _willys_row(self, mock_session):
+        store = _store(name="Willys", slug="willys")
+        row = MagicMock()
+        row.scalar_one_or_none.return_value = store
+        candidates_row = MagicMock()
+        candidates_row.all.return_value = []
+        mock_session.execute.side_effect = [row, candidates_row]
+        return store
+
+    def test_url_without_a_code_is_400(self, client, mock_session):
+        r = client.post("/blad/analyze", json={"url": "https://www.willys.se/erbjudanden"})
+        assert r.status_code == 400
+        mock_session.execute.assert_not_called()
+
+    def test_missing_willys_store_is_400(self, client, mock_session):
+        row = MagicMock()
+        row.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = row
+        r = client.post("/blad/analyze", json={"url": self.URL})
+        assert r.status_code == 400
+
+    def test_refused_while_the_breaker_is_open(self, client, mock_session):
+        """No request may leave the process against a store that is walling us."""
+        store = self._willys_row(mock_session)
+        registry = self._registry()
+        registry.record_block(store.id, store_name=store.name, source="scheduler")
+        fetch = AsyncMock()
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.fetch_offline_offer", fetch),
+        ):
+            r = client.post("/blad/analyze", json={"url": self.URL})
+
+        assert r.status_code == 503
+        assert "Retry-After" in r.headers
+        fetch.assert_not_awaited()
+
+    def test_a_wall_trips_the_shared_breaker_and_records_the_attempt(self, client, mock_session):
+        """StoreBlockedError from the offer API = the breaker learns it, check_attempts
+        records it (real load, real WAF exposure — the quick-add-preview rule), and the
+        caller gets a machine-readable refusal."""
+        from domain.result import StoreBlockedError
+
+        store = self._willys_row(mock_session)
+        registry = self._registry()
+        check_log = MagicMock()
+        check_log.record = AsyncMock()
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_check_log", return_value=check_log),
+            patch(
+                "api.admin.fetch_offline_offer",
+                AsyncMock(side_effect=StoreBlockedError("HTTP 403")),
+            ),
+        ):
+            r = client.post("/blad/analyze", json={"url": self.URL})
+
+        assert r.status_code == 503  # the freshly-tripped breaker answers first
+        assert registry.blocked_until(store.id) is not None
+        assert check_log.record.await_args.kwargs["outcome"] == "blocked"
+        assert check_log.record.await_args.kwargs["source"] == "blad-analyze"
+
+    def test_missing_offer_is_404(self, client, mock_session):
+        self._willys_row(mock_session)
+        registry = self._registry()
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.fetch_offline_offer", AsyncMock(return_value=None)),
+        ):
+            r = client.post("/blad/analyze", json={"url": self.URL})
+        assert r.status_code == 404
+
+    def test_success_returns_the_stores_numbers_and_records_ok(self, client, mock_session):
+        store = self._willys_row(mock_session)
+        registry = self._registry()
+        check_log = MagicMock()
+        check_log.record = AsyncMock()
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_check_log", return_value=check_log),
+            patch("api.admin.fetch_offline_offer", AsyncMock(return_value=self._offer_data())),
+        ):
+            r = client.post("/blad/analyze", json={"url": self.URL})
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["code"] == "2500310468"
+        assert body["offer_price_sek"] == pytest.approx(59.80)
+        assert body["ordinarie_price_sek"] == pytest.approx(99.90)
+        assert body["candidates"] == []
+        assert check_log.record.await_args.kwargs["outcome"] == "ok"
+        assert registry.blocked_until(store.id) is None
+
+    def test_crosscheck_warns_when_the_printed_jamforpris_disagrees(self, client, mock_session):
+        """The inline validator judgement: printed jämförpris vs offer/package, only when
+        the units agree. 59,80 kr for 15 st = 3,99 kr/st against a printed 12,08 kr/st
+        is far past both thresholds (0,10 kr AND 1,5 %)."""
+        self._willys_row(mock_session)
+        registry = self._registry()
+        data = self._offer_data(displayVolume="15st")
+        data["potentialPromotions"][0]["comparePrice"] = "12:08 kr/st"
+        data["potentialPromotions"][0]["weightVolume"] = "15st"
+
+        with (
+            patch("api.admin.get_block_registry", return_value=registry),
+            patch("api.admin.get_check_log", return_value=MagicMock(record=AsyncMock())),
+            patch("api.admin.fetch_offline_offer", AsyncMock(return_value=data)),
+        ):
+            body = client.post("/blad/analyze", json={"url": self.URL}).json()
+
+        # Preconditions first, so a parser change cannot silently void the assertion.
+        assert body["unit_price_sek"] == pytest.approx(12.08)
+        assert body["crosscheck_warning"], body
