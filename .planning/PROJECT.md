@@ -58,7 +58,7 @@ After extraction, the agent platform's `priser` skill keeps working end-to-end �
 
 **Source repo:** `/home/magnus/dev/ai-agent-platform`
 **Target repo:** `/home/magnus/dev/price-tracker` (this repo)
-**Extraction brief:** [EXTRACTION.md](../EXTRACTION.md) — load-bearing source of truth; contains verified LOC counts, file paths, locked decisions, and the full phased plan
+**Extraction brief:** [EXTRACTION.md](../EXTRACTION.md) — HISTORICAL document (the port closed 2026-07-26); where it conflicts with CLAUDE.md, CLAUDE.md wins. Kept for the verified LOC counts, original file paths and the phased plan's rationale
 **Estimated scope:** ~3,400 LOC of working code being relocated; ~7–10 days of focused work
 **Goal type:** Mechanical port + integration boundary swap (chat-tool → MCP server). Improvements come after extraction completes.
 

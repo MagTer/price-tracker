@@ -17,17 +17,34 @@ Chains that price per physical butik (ICA) are handled with a per-link
 **butiksetikett** ("ICA Maxi Sandviken"), so two butiker of one chain stay
 distinguishable everywhere a store name is shown (v0.6.0).
 
+The portal is six hash-routed pages in one served document (the "3a" redesign,
+v0.47.0): **Att köpa** (offers judged on two axes — cheapest way to buy the
+product per unit, and whether THIS is a good moment against the product's own
+observed floor), **Bevakningar**, **Prisutveckling** (per-product trends and a
+matched-basket store comparison, `domain/stats.py`), **Produkter** (facetted
+client-side list), **Fel & luckor** (the validator's silent errors —
+tier regressions and jämförpris contradictions — above the ordinary gaps), and
+**Loggar**. A Monday email is the buy list as text, grouped per butik; manual
+price notes (`POST /product-stores/{id}/prices`) record offers that never touch
+a scrapeable page (Facebook förbokning, butiksblad), and a pasted Willys
+butiksblad offer URL can be analyzed against the tracked catalogue
+(`/blad/analyze`). Outbound fetching self-defends against store WAFs: a shared
+per-store politeness ledger with jitter, a shared escalating circuit breaker,
+Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
+
 ## Architecture at a glance
 
 - **FastAPI** app: server-rendered admin portal + JSON API at the root (`/`).
-- **PostgreSQL** via async SQLAlchemy 2.0 + Alembic (5 tables:
-  `stores`, `products`, `product_stores`, `price_points`, `watches`).
+- **PostgreSQL** via async SQLAlchemy 2.0 + Alembic (6 tables:
+  `stores`, `products`, `product_stores`, `price_points`, `watches`,
+  `check_attempts` — the last records what the stores REFUSED to answer, v0.35.0).
 - **Price extraction chain** (per check, first hit wins):
   1. Store API (Willys public REST) where available.
   2. **Store page-state** where the page carries more than its JSON-LD does
-     (Rusta's and Lyko's `window.CURRENT_PAGE` hydration JSON, Clas Ohlson's
-     BEM price markup — all three hide the ordinarie at a rea from JSON-LD,
-     which carries only the current price).
+     (Rusta's and Lyko's `window.CURRENT_PAGE` hydration JSON, ICA's
+     `window.__QUERY_INITIAL_STATE__`, Clas Ohlson's BEM price markup — all
+     four hide the campaign and/or the ordinarie from JSON-LD, which carries
+     only the current per-unit price).
   3. **JSON-LD** (`schema.org` Product/Offer parsed from raw HTML) — exact
      prices, no LLM cost.
   4. **LLM cascade** via OpenRouter as fallback. Extractions below
@@ -78,6 +95,15 @@ distinguishable everywhere a store name is shown (v0.6.0).
 | `PRICE_PARSER_MIN_CONFIDENCE` | no | `0.6` | Acceptance floor; LLM extractions below this are discarded. |
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
+| `SUMMARY_EMAIL` | no | falls back to `ALLOWED_ENTRA_EMAIL` | Recipient of the Monday buy-list email. Set it when the admin UPN is not a deliverable address. |
+| `INGRESS_SHARED_SECRET` | no | `""` (off) | Defense in depth: when set, every request must carry the same value in `X-Ingress-Auth` (inject it in your reverse proxy). Closes the direct-container-access hole in header trust. Enable on both sides at once. |
+| `WILLYS_OFFLINE_STORE_ID` | no | `2211` | Willys butik id for `/blad/analyze` (butiksblad offers are store-scoped). |
+| `QUICKADD_RATE_LIMIT_DELAY` | no | `5` | Seconds between interactive fetches to one store (quick-add preview, manual re-check). |
+| `QUICKADD_RATE_LIMIT_JITTER` | no | `3` | Random extra seconds on top of the interactive floor. |
+| `QUICKADD_MAX_WAIT` | no | `10` | Cap on how long an interactive fetch waits for a ledger slot. |
+| `SCHEDULER_ADD_PAUSE_MINUTES` | no | `60` | How long background checks stay paused after each product add. |
+| `SCHEDULER_STORE_BLOCK_COOLDOWN_MINUTES` | no | `5` | Circuit-breaker base cooldown after a bot wall (doubles per consecutive block). |
+| `STORE_BLOCK_MAX_COOLDOWN_MINUTES` | no | `240` | Ceiling for the escalating cooldown. |
 | `QUICKADD_STORE_LABELS` | no | the original operator's butiker | JSON object of ICA butik id → display name, e.g. `{"1003396": "ICA Maxi Sandviken"}`. Used by quick-add's butiksetikett suggestion. |
 | `QUICKADD_SIBLING_GROUPS` | no | the original operator's butiker | JSON array of butik-id groups, e.g. `[["1003396", "1004503"]]`. Quick-add offers to create sister-butik links within a group. Malformed JSON in either variable logs a warning and falls back to the defaults. |
 
@@ -151,7 +177,7 @@ Two tiers:
 | fast (mocks) | `poetry run pytest -m "not integration"` | no |
 | integration | `poetry run pytest -m integration` | yes |
 
-`poetry run pytest` runs both. The integration tier (`tests/test_migration.py`) drops and
+`poetry run pytest` runs both. The integration tier (several files carry the `integration` marker — migrations, export/import, deals, stats, validation and more) drops and
 recreates a dedicated throwaway database called **`price_tracker_test`** — never the dev database,
 whatever `DATABASE_URL` says — applies `alembic upgrade head` to it, and proves the schema claims
 the mocks structurally cannot (a duplicate `store_url` is rejected; two links at one store both
@@ -159,9 +185,14 @@ persist; the kr/unit `ORDER BY` sinks a link with no amount to the bottom). **Wh
 reachable those tests SKIP, they do not fail**, so `pytest` stays green on a laptop or a CI job
 with no database. Point them elsewhere with `TEST_DATABASE_URL` if you want.
 
-## Schema reset (Phase 04.1) — required once, by the operator
+## Schema reset (Phase 04.1) — historical
 
-**Read this before the next deploy. Skipping it fails SILENTLY.**
+**This one-time operator step was completed in July 2026** (CLAUDE.md records the
+04.1 deploy as done). It is kept because the trap it describes — Alembic never
+checksums migration bodies, so a rewritten-in-place revision silently no-ops on a
+stamped database — is worth remembering, and because a second instance restoring a
+pre-04.1 backup hits the same ground. Since v0.6.0 the migration chain is ordinary
+and additive again; shipped revisions are never rewritten.
 
 Phase 04.1 moved the package data from `products` to `product_stores` and rewrote
 `alembic/versions/0001_initial.py` **in place** (D-14) rather than stacking a `0002` — the database

@@ -148,14 +148,14 @@ Several of these were quietly **built** while the table still called them deferr
 
 | Category | Item | Status | Note |
 |----------|------|--------|------|
-| Reliability | REL-01 retry/backoff | **DONE** | Bounded retry on transient failures in `infra/fetcher.py`; scheduler +1h backoff on exception, +24h on a failed weekday check |
+| Reliability | REL-01 retry/backoff | **DONE** | Bounded retry on transient failures in `infra/fetcher.py`; scheduler +1h backoff on exception; a failed weekday check retries next MORNING (v0.39.0 `next_morning_retry` — superseded the old +24h clock drift) |
 | Reliability | REL-04 rate limiting | **DONE** | `infra/rate_limiter.py` — one shared per-store ledger with jitter, used by scheduler AND interactive fetches |
 | Reliability | REL-05 fallback threshold | **DONE** | `PRICE_PARSER_MIN_CONFIDENCE` acceptance floor (D-23) |
 | Reliability | REL-02/03 (raw_response, soft-delete) | v2 backlog | `raw_data` column exists and is populated; soft-delete never needed at single-user scale |
 | Extraction Quality | EXT-01 structured extractors | **DONE** | `WillysApiExtractor` (store REST API) + `JsonLdExtractor` (schema.org), ahead of the LLM cascade (D-22) |
 | Extraction Quality | EXT-02 dedup | v2 backlog | — |
 | Notifications | NOTF-01 (Telegram/push) | v2 backlog | Email via Resend covers the need today |
-| Analytics | ANAL-01 (price trends/volatility) | v2 backlog | Price history + per-link chart shipped; statistical analysis not attempted |
+| Analytics | ANAL-01 (price trends/volatility) | **DONE** (v0.36.0) | `domain/stats.py` + the Prisutveckling page: per-product trends, matched-basket store comparison, offer quality — read-only by construction |
 | i18n | I18N-01 (externalize sv-SE strings) | **won't do** | One language track, decided 2026-07-14: Swedish for users, English for developers. Externalizing is pointless for a single-user Swedish app |
 | Edge proxy / portal | EDGE-01 (Traefik + oauth2-proxy) | **DONE / out of repo** | Live in prod since 2026-07-09; owned by the home-server repo, never this one |
 
