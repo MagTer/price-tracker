@@ -1617,6 +1617,12 @@ async def record_manual_price(
             day = date.fromisoformat(data.observed_on)
         except ValueError as e:
             raise HTTPException(status_code=400, detail="Ogiltigt datum (ÅÅÅÅ-MM-DD)") from e
+        # Never in the future: a point dated 2027 is permanently the link's latest — it
+        # outranks every real check, sits in the buy list and the Monday email EVERY week
+        # (checked_at >= now-7d is always true), and there is no way to delete a single
+        # price point. Judged as a Swedish civil day, like the date itself.
+        if day > datetime.now(UTC).astimezone(STORE_TIMEZONE).date():
+            raise HTTPException(status_code=400, detail="Datumet kan inte ligga i framtiden")
         # A civil date, converted like every other civil rule in this app (domain/schedule):
         # midday Swedish, then back to the naive-UTC storage convention. Midday, not
         # midnight, so a date typed today lands AFTER the morning's scheduled check and
@@ -1646,9 +1652,11 @@ async def record_manual_price(
             price_sek=regular if regular is not None else paid,
             offer_price_sek=paid if regular is not None else None,
             # Surfaces in the deal row's metadata and the email, so the reader can see the
-            # number was typed rather than read off a page.
+            # number was typed rather than read off a page. Without an ordinarie there is
+            # no offer, so the note stays in raw_data only — offer_details beside a plain
+            # price would describe an offer that does not exist.
             offer_type="manuellt pris" if regular is not None else None,
-            offer_details=note,
+            offer_details=note if regular is not None else None,
             in_stock=True,
             raw_data={"source": "manual", "note": note},
             checked_at=observed_at,

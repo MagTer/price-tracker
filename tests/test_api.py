@@ -1560,6 +1560,35 @@ class TestManualPriceNotation:
         assert r.status_code == 400
         mock_session.add.assert_not_called()
 
+    def test_a_future_date_is_refused(self, client, mock_session):
+        """A point dated in the future is permanently the link's LATEST: it outranks
+        every real check, and its checked_at >= now-7d forever, so it sits in the buy
+        list and the Monday email every week — and no path deletes a single point."""
+        ps = self._link(mock_session)
+
+        r = client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 109, "observed_on": "2031-01-01"},
+        )
+
+        assert r.status_code == 400
+        assert "framtiden" in r.json()["detail"]
+        mock_session.add.assert_not_called()
+
+    def test_a_note_without_an_offer_is_no_offer_details(self, client, mock_session):
+        """offer_details beside a plain price would describe an offer that does not
+        exist — the note survives in raw_data, where the source marker lives."""
+        ps = self._link(mock_session)
+
+        client.post(
+            f"/product-stores/{ps.id}/prices",
+            json={"price_sek": 109, "note": "sett i butiken"},
+        )
+
+        added = mock_session.add.call_args.args[0]
+        assert added.offer_details is None
+        assert added.raw_data["note"] == "sett i butiken"
+
     def test_a_missing_link_is_404(self, client, mock_session):
         mock_session.execute.return_value = _scalar(None)
 
