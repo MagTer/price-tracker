@@ -203,19 +203,30 @@ class WillysApiExtractor:
 
         # Parse compare price. Formats seen: "33,29 kr", "33.29 kr",
         # "33,29 kr/kg", "12,50 kr/st" — grab the leading amount and drop any
-        # unit suffix so "/kg" etc. never reaches Decimal.
+        # unit suffix so "/kg" etc. never reaches Decimal. Group separators must be
+        # stripped BEFORE the decimal swap: "1 234,50" under a bare [\d.,]+ matched
+        # only the "1", a confident wrong number the validator then flagged.
         store_unit_price_sek: Decimal | None = None
+        comparison_unit: str | None = None
         compare_price_str = data.get("comparePrice", "")
         if compare_price_str:
-            match = re.search(r"[\d.,]+", str(compare_price_str))
+            text = str(compare_price_str)
+            match = re.search(r"\d[\d\s  ]*(?:[.,]\d{1,2})?", text)
             if match:
-                cleaned = match.group(0).replace(",", ".")
+                cleaned = re.sub(r"[\s  ]", "", match.group(0)).replace(",", ".")
                 try:
                     store_unit_price_sek = Decimal(cleaned)
                 except Exception:
                     logger.debug("Could not parse compare price: %s", compare_price_str)
             else:
                 logger.debug("Could not parse compare price: %s", compare_price_str)
+            # The measure the jämförpris is printed in ("kr/kg" → "/kg"), kept as
+            # evidence for the validator: without it a kr/kg jämförpris on a product
+            # compared per styck is an UN-CLEARABLE red flag on Fel & luckor — the
+            # string was in hand all along and was thrown away.
+            unit_match = re.search(r"/\s*(\w+)", text)
+            if unit_match:
+                comparison_unit = f"/{unit_match.group(1).lower()}"
 
         # Check for offers. `priceValue` is the ORDINARIE (pre-campaign) price, and THE
         # per-unit campaign price lives in potentialPromotions[].price.value. It is NOT
@@ -281,5 +292,9 @@ class WillysApiExtractor:
             pack_size=None,
             package_amount=None,
             package_unit=None,
-            raw_response={"source": "willys_api"},
+            raw_response=(
+                {"source": "willys_api", "comparison_unit": comparison_unit}
+                if comparison_unit
+                else {"source": "willys_api"}
+            ),
         )

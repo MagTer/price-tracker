@@ -68,6 +68,9 @@ _PRINTED_MEASURE_MARKERS: list[tuple[str, str]] = [
     ("/liter", "liter"),
     ("per.st", "st"),
     ("/st", "st"),
+    # Last on purpose: "/l" is a substring of "/liter", so the longer marker must get
+    # first shot; any "/l…" suffix a Swedish store prints is a litre measure.
+    ("/l", "liter"),
 ]
 
 

@@ -240,7 +240,9 @@ class TestParseResponse:
         assert result.store_unit_price_sek == Decimal("33.29")
 
     def test_parse_compare_price_with_per_kg_unit(self) -> None:
-        """Compare price "33,29 kr/kg" strips the unit suffix before Decimal."""
+        """Compare price "33,29 kr/kg" strips the unit suffix before Decimal — and KEEPS
+        the measure as raw evidence for the validator: without it a kr/kg jämförpris on
+        a per-styck product is an un-clearable red flag on Fel & luckor."""
         extractor = _make_extractor()
         data: dict[str, object] = {
             "priceValue": 49.90,
@@ -249,6 +251,20 @@ class TestParseResponse:
         }
         result = extractor._parse_response(data)
         assert result.store_unit_price_sek == Decimal("33.29")
+        assert result.raw_response["comparison_unit"] == "/kg"
+
+    def test_parse_compare_price_with_group_separator(self) -> None:
+        """"1 234,50 kr/kg": the bare [\\d.,]+ match stopped at the space and recorded
+        1.00 — a confident wrong number the validator then flagged. Separators are
+        stripped before the decimal swap."""
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 2469.00,
+            "comparePrice": "1 234,50 kr/kg",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert result.store_unit_price_sek == Decimal("1234.50")
 
     def test_parse_compare_price_with_per_st_unit(self) -> None:
         """Compare price "12,50 kr/st" strips the unit suffix before Decimal."""
