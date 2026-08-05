@@ -75,6 +75,45 @@ def unit_price_py(price: Decimal | None, qty: Decimal | None) -> Decimal | None:
     return price / qty
 
 
+class PricePointLike(Protocol):
+    """The two price columns effective_price reads — structural, same reason as LinkLike."""
+
+    price_sek: Decimal
+    offer_price_sek: Decimal | None
+
+
+def effective_price(price_point: PricePointLike | None) -> Decimal | None:
+    """The price actually paid: the offer when there is one, else the regular price.
+
+    THE definition — it was pasted into service.py, admin.py and deals.py before it
+    lived here, the same Gotcha-4 drift shape as everything else in this module.
+    """
+    if price_point is None:
+        return None
+    if price_point.offer_price_sek is not None:
+        return price_point.offer_price_sek
+    return price_point.price_sek
+
+
+def rounded_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
+    """kr/unit for a response/row dict — unit_price_py rounded at the presentation boundary.
+
+    None when the link has no amount yet (D-02): the row says "needs amount", it does not
+    lie with a zero. The quantity always comes from the LINK already in scope at the call
+    site — never the ORM hybrid, whose Python side lazy-loads PricePoint.product_store and
+    raises MissingGreenlet at request time on any point loaded without a joinedload.
+    """
+    value = unit_price_py(price, quantity)
+    if value is None:
+        return None
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def as_float(value: Decimal | None) -> float | None:
+    """Decimal -> float for a response dict, preserving None."""
+    return float(value) if value is not None else None
+
+
 def unit_price_expr(
     price_col: ColumnElement[Any], qty_col: ColumnElement[Any]
 ) -> ColumnElement[Any]:

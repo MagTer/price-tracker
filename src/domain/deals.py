@@ -51,14 +51,13 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
 from domain.link_health import broken_links
 from domain.models import PricePoint, Product, ProductStore, Store, link_store_name
-from domain.pricing import unit_price_py
+from domain.pricing import effective_price, rounded_unit_price
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,8 +89,6 @@ DEALS_WINDOW_DAYS = 7
 # An offer seen this long ago may already be over — consumers caveat it ("sett fredag"),
 # never hide it. The portal's DEAL_STALE_HOURS in admin.html mirrors this value.
 DEAL_STALE_HOURS = 48
-
-_CENT = Decimal("0.01")
 
 
 def classify_deal(unit_price_sek: float | None, best_alt_unit_price_sek: float | None) -> str:
@@ -199,21 +196,6 @@ class DealRow:
     floor_is_manual: bool = False
 
 
-def _rounded_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
-    """kr/unit via domain.pricing (THE definition), rounded at this response boundary."""
-    value = unit_price_py(price, quantity)
-    if value is None:
-        return None
-    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
-
-
-def _effective(price_point: PricePoint) -> Decimal | None:
-    """The price actually paid: the offer when there is one, else the regular price."""
-    if price_point.offer_price_sek is not None:
-        return price_point.offer_price_sek
-    return price_point.price_sek
-
-
 async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uuid.UUID, _Floor]:
     """The lowest kr/unit observed per product inside the window — the buy list's floor.
 
@@ -243,7 +225,7 @@ async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uu
     floors: dict[uuid.UUID, _Floor] = {}
     observations: dict[uuid.UUID, int] = {}
     for point, link, store in (await session.execute(stmt)).all():
-        value = _rounded_unit_price(_effective(point), link.package_quantity)
+        value = rounded_unit_price(effective_price(point), link.package_quantity)
         if value is None:
             continue
         observations[link.product_id] = observations.get(link.product_id, 0) + 1
@@ -354,7 +336,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
         for alt_ps, alt_store, alt_pp in alt_rows:
             if alt_ps.id in unhealthy or alt_pp.in_stock is False:
                 continue
-            alt_unit_price = _rounded_unit_price(_effective(alt_pp), alt_ps.package_quantity)
+            alt_unit_price = rounded_unit_price(effective_price(alt_pp), alt_ps.package_quantity)
             if alt_unit_price is None:
                 continue
             alternatives.setdefault(alt_ps.product_id, []).append(
@@ -381,7 +363,9 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
         alts = [a for a in alternatives.get(product.id, []) if a[0] != product_store.id]
         best_alt = min(alts, key=lambda a: a[1]) if alts else None
         best_alt_unit = best_alt[1] if best_alt else None
-        unit_price = _rounded_unit_price(_effective(price_point), product_store.package_quantity)
+        unit_price = rounded_unit_price(
+            effective_price(price_point), product_store.package_quantity
+        )
         floor = floors.get(product.id)
         floor_price = floor.unit_price_sek if floor else None
 

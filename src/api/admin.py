@@ -52,8 +52,11 @@ from domain.parser import PriceParser, get_api_extractor, get_html_extractor
 from domain.pricing import (
     CANONICAL_UNITS,
     MAX_PACKAGE_QUANTITY,
+    as_float,
+    effective_price,
     normalize_amount,
     quantity_mismatch,
+    rounded_unit_price,
     unit_price_py,
 )
 from domain.quickadd import (
@@ -208,37 +211,6 @@ def _read_app_version() -> str:
 _APP_VERSION = _read_app_version()
 
 
-def _effective_price(price_point: PricePoint | None) -> Decimal | None:
-    """The price actually paid: the offer when there is one, else the regular price."""
-    if price_point is None:
-        return None
-    if price_point.offer_price_sek is not None:
-        return price_point.offer_price_sek
-    return price_point.price_sek
-
-
-def _computed_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
-    """kr/unit for a response — the single definition (D-03), rounded at this boundary.
-
-    None when the link has no amount yet (D-02): the row says "needs amount", it does not lie
-    with a zero.
-
-    The quantity always comes from the LINK that is already in scope at the call site. The
-    ORM hybrid's Python side reads PricePoint.product_store, which lazy-loads in a non-greenlet
-    context and raises MissingGreenlet at request time on any price point loaded without a
-    joinedload — and a mocked test would never see it. So: never the hybrid here, always this.
-    """
-    value = unit_price_py(price, quantity)
-    if value is None:
-        return None
-    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
-
-
-def _as_float(value: Decimal | None) -> float | None:
-    """Decimal -> float for a response dict, preserving None."""
-    return float(value) if value is not None else None
-
-
 def _link_payload(
     ps: ProductStore,
     store: Store,
@@ -274,17 +246,17 @@ def _link_payload(
         "last_checked_at": ps.last_checked_at.isoformat() if ps.last_checked_at else None,
         # The package is the LINK's, not the product's.
         "package_size": ps.package_size,
-        "package_quantity": _as_float(ps.package_quantity),
-        "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
+        "package_quantity": as_float(ps.package_quantity),
+        "scraped_package_quantity": as_float(ps.scraped_package_quantity),
         "price_sek": (
             float(latest_price.price_sek) if latest_price and latest_price.price_sek else None
         ),
-        "offer_price_sek": (_as_float(latest_price.offer_price_sek) if latest_price else None),
+        "offer_price_sek": (as_float(latest_price.offer_price_sek) if latest_price else None),
         # COMPUTED from the link's own quantity (D-03) — the comparable number.
-        "unit_price_sek": _computed_unit_price(_effective_price(latest_price), ps.package_quantity),
+        "unit_price_sek": rounded_unit_price(effective_price(latest_price), ps.package_quantity),
         # What the STORE printed (D-05) — display only, never sorted on.
         "store_unit_price_sek": (
-            _as_float(latest_price.store_unit_price_sek) if latest_price else None
+            as_float(latest_price.store_unit_price_sek) if latest_price else None
         ),
         "in_stock": latest_price.in_stock if latest_price else None,
         # D-02's visible flag: a link may be saved without an amount, but it is never
@@ -320,8 +292,8 @@ def _sorted_links(
         for ps, store, pp in sorted(
             rows,
             key=lambda row: (
-                unit_price_py(_effective_price(row[2]), row[0].package_quantity) is None,
-                unit_price_py(_effective_price(row[2]), row[0].package_quantity) or Decimal(0),
+                unit_price_py(effective_price(row[2]), row[0].package_quantity) is None,
+                unit_price_py(effective_price(row[2]), row[0].package_quantity) or Decimal(0),
                 row[1].name,
                 str(row[0].id),
             ),
@@ -860,8 +832,8 @@ async def quick_add_preview(
             "category": category,
             "suggested_unit": suggested_unit,
             "package_size": guess.label,
-            "package_quantity": _as_float(package_quantity),
-            "price_sek": _as_float(price),
+            "package_quantity": as_float(package_quantity),
+            "price_sek": as_float(price),
             "in_stock": in_stock,
             "source": source,
             "existing_products": suggestions,
@@ -1140,11 +1112,11 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
         result = {
             "success": True,
             "price_sek": float(price_point.price_sek),
-            "unit_price_sek": _computed_unit_price(
-                _effective_price(price_point), product_store.package_quantity
+            "unit_price_sek": rounded_unit_price(
+                effective_price(price_point), product_store.package_quantity
             ),
-            "package_quantity": _as_float(product_store.package_quantity),
-            "offer_price_sek": _as_float(price_point.offer_price_sek),
+            "package_quantity": as_float(product_store.package_quantity),
+            "offer_price_sek": as_float(price_point.offer_price_sek),
             "in_stock": price_point.in_stock,
         }
         # perform_price_check does not commit — the caller owns the transaction.
@@ -1691,7 +1663,7 @@ async def record_manual_price(
             "checked_at": observed_at.isoformat(),
             "price_sek": float(point.price_sek),
             "offer_price_sek": float(paid) if regular is not None else None,
-            "unit_price_sek": _computed_unit_price(paid, product_store.package_quantity),
+            "unit_price_sek": rounded_unit_price(paid, product_store.package_quantity),
         }
     except HTTPException:
         raise
@@ -1805,15 +1777,15 @@ async def get_price_history(
                 store_name=link_store_name(product_store, store),
                 store_slug=store.slug,
                 package_size=product_store.package_size,
-                package_quantity=_as_float(product_store.package_quantity),
+                package_quantity=as_float(product_store.package_quantity),
                 # price_sek is NOT NULL — a truthiness test here turned a legitimate
                 # 0.00 into null in the chart while guarding against nothing.
                 price_sek=float(price_point.price_sek),
-                unit_price_sek=_computed_unit_price(
-                    _effective_price(price_point), product_store.package_quantity
+                unit_price_sek=rounded_unit_price(
+                    effective_price(price_point), product_store.package_quantity
                 ),
-                store_unit_price_sek=_as_float(price_point.store_unit_price_sek),
-                offer_price_sek=_as_float(price_point.offer_price_sek),
+                store_unit_price_sek=as_float(price_point.store_unit_price_sek),
+                offer_price_sek=as_float(price_point.offer_price_sek),
                 offer_type=price_point.offer_type,
                 offer_details=price_point.offer_details,
                 in_stock=price_point.in_stock,
@@ -1934,16 +1906,16 @@ async def trigger_price_check(
             "message": "Price check completed successfully",
             "price_sek": float(price_point.price_sek),
             # COMPUTED from the link's (possibly just-autofilled) quantity — the comparable one.
-            "unit_price_sek": _computed_unit_price(
-                _effective_price(price_point), product_store.package_quantity
+            "unit_price_sek": rounded_unit_price(
+                effective_price(price_point), product_store.package_quantity
             ),
             # What the store printed — display only, never sorted on (D-05).
-            "store_unit_price_sek": _as_float(price_point.store_unit_price_sek),
-            "package_quantity": _as_float(product_store.package_quantity),
+            "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
+            "package_quantity": as_float(product_store.package_quantity),
             # The page disagreed with the operator's typed amount; the stored value is
             # untouched (D-07) and the flag self-clears when either number is corrected.
             "quantity_mismatch": outcome.mismatch,
-            "offer_price_sek": _as_float(price_point.offer_price_sek),
+            "offer_price_sek": as_float(price_point.offer_price_sek),
             "offer_type": price_point.offer_type,
             "in_stock": price_point.in_stock,
             "confidence": outcome.extraction.confidence,
@@ -2187,12 +2159,12 @@ async def list_watches(
                 .where(ProductStore.product_id.in_(watched_ids))
             )
             for w_ps, w_store, w_pp in (await session.execute(cur_stmt)).all():
-                effective = _effective_price(w_pp)
+                effective = effective_price(w_pp)
                 if effective is None:
                     continue
                 candidate = (
                     float(effective),
-                    _computed_unit_price(effective, w_ps.package_quantity),
+                    rounded_unit_price(effective, w_ps.package_quantity),
                     link_store_name(w_ps, w_store),
                 )
                 held = current.get(w_ps.product_id)
@@ -2487,8 +2459,8 @@ async def export_data(
                     "is_active": ps.is_active,
                     # The package data follows the LINK it describes.
                     "package_size": ps.package_size,
-                    "package_quantity": _as_float(ps.package_quantity),
-                    "scraped_package_quantity": _as_float(ps.scraped_package_quantity),
+                    "package_quantity": as_float(ps.package_quantity),
+                    "scraped_package_quantity": as_float(ps.scraped_package_quantity),
                 }
                 for ps, store in ps_rows
             ]
@@ -2586,7 +2558,7 @@ async def export_data(
                                 # actually OBSERVED on the page. The comparable kr/unit is
                                 # derived from the link's quantity, so re-deriving it on import
                                 # is correct behavior, not data loss (D-04).
-                                "store_unit_price_sek": _as_float(pp.store_unit_price_sek),
+                                "store_unit_price_sek": as_float(pp.store_unit_price_sek),
                                 "offer_price_sek": (
                                     float(pp.offer_price_sek) if pp.offer_price_sek else None
                                 ),

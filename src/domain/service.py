@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,17 +20,17 @@ from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, 
 from domain.parser import PriceParser
 from domain.pricing import (
     apply_scrape_to_link,
+    as_float,
+    effective_price,
     quantity_mismatch,
+    rounded_unit_price,
     unit_price_expr,
-    unit_price_py,
 )
 from domain.protocols import ICheckAttemptLog, IFetcher
 from domain.result import PriceExtractionResult, StoreBlockedError, extraction_source
 from domain.schedule import effective_schedule, is_inherited
 
 logger = logging.getLogger(__name__)
-
-_CENT = Decimal("0.01")
 
 
 def _utc_now() -> datetime:
@@ -39,30 +39,6 @@ def _utc_now() -> datetime:
     Returns naive datetime to match TIMESTAMP WITHOUT TIME ZONE columns.
     """
     return datetime.now(UTC).replace(tzinfo=None)
-
-
-def _as_float(value: Decimal | None) -> float | None:
-    """Decimal -> float for a row dict, preserving None."""
-    return float(value) if value is not None else None
-
-
-def _computed_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
-    """kr/unit for a row dict — the single definition (D-03), rounded at this presentation boundary.
-
-    None when the link has no amount yet (D-02): the row says "needs amount", it does not lie
-    with a zero.
-    """
-    value = unit_price_py(price, quantity)
-    if value is None:
-        return None
-    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
-
-
-def _effective_price(price_point: PricePoint) -> Decimal | None:
-    """The price actually paid: the offer when there is one, else the regular price."""
-    if price_point.offer_price_sek is not None:
-        return price_point.offer_price_sek
-    return price_point.price_sek
 
 
 @dataclass
@@ -361,12 +337,12 @@ class PriceTrackerService:
                         "store_name": link_store_name(product_store, store),
                         "store_slug": store.slug,
                         "package_size": product_store.package_size,
-                        "package_quantity": _as_float(product_store.package_quantity),
+                        "package_quantity": as_float(product_store.package_quantity),
                         "price_sek": float(price_point.price_sek),
-                        "offer_price_sek": _as_float(price_point.offer_price_sek),
-                        "store_unit_price_sek": _as_float(price_point.store_unit_price_sek),
-                        "unit_price_sek": _computed_unit_price(
-                            _effective_price(price_point), product_store.package_quantity
+                        "offer_price_sek": as_float(price_point.offer_price_sek),
+                        "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
+                        "unit_price_sek": rounded_unit_price(
+                            effective_price(price_point), product_store.package_quantity
                         ),
                         "in_stock": price_point.in_stock,
                     }
@@ -437,7 +413,7 @@ class PriceTrackerService:
 
                 links: list[dict[str, str | float | bool | datetime | None]] = []
                 for product_store, store, price_point in rows:
-                    effective = _effective_price(price_point) if price_point else None
+                    effective = effective_price(price_point) if price_point else None
                     eff_weekdays, eff_frequency = effective_schedule(product_store, store)
                     links.append(
                         {
@@ -462,18 +438,18 @@ class PriceTrackerService:
                                 "frequency_hours": store.check_frequency_hours,
                             },
                             "package_size": product_store.package_size,
-                            "package_quantity": _as_float(product_store.package_quantity),
-                            "scraped_package_quantity": _as_float(
+                            "package_quantity": as_float(product_store.package_quantity),
+                            "scraped_package_quantity": as_float(
                                 product_store.scraped_package_quantity
                             ),
                             "price_sek": (float(price_point.price_sek) if price_point else None),
                             "offer_price_sek": (
-                                _as_float(price_point.offer_price_sek) if price_point else None
+                                as_float(price_point.offer_price_sek) if price_point else None
                             ),
                             "store_unit_price_sek": (
-                                _as_float(price_point.store_unit_price_sek) if price_point else None
+                                as_float(price_point.store_unit_price_sek) if price_point else None
                             ),
-                            "unit_price_sek": _computed_unit_price(
+                            "unit_price_sek": rounded_unit_price(
                                 effective, product_store.package_quantity
                             ),
                             "in_stock": price_point.in_stock if price_point else None,
