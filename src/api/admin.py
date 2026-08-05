@@ -1783,14 +1783,14 @@ async def get_price_history(
                 store_slug=store.slug,
                 package_size=product_store.package_size,
                 package_quantity=_as_float(product_store.package_quantity),
-                price_sek=float(price_point.price_sek) if price_point.price_sek else None,
+                # price_sek is NOT NULL — a truthiness test here turned a legitimate
+                # 0.00 into null in the chart while guarding against nothing.
+                price_sek=float(price_point.price_sek),
                 unit_price_sek=_computed_unit_price(
                     _effective_price(price_point), product_store.package_quantity
                 ),
                 store_unit_price_sek=_as_float(price_point.store_unit_price_sek),
-                offer_price_sek=(
-                    float(price_point.offer_price_sek) if price_point.offer_price_sek else None
-                ),
+                offer_price_sek=_as_float(price_point.offer_price_sek),
                 offer_type=price_point.offer_type,
                 offer_details=price_point.offer_details,
                 in_stock=price_point.in_stock,
