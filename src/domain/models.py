@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, aliased, mapped_column, relationship
 
 from domain.pricing import unit_price_expr, unit_price_py
 from infra.db import Base, _utc_now
@@ -151,6 +151,33 @@ class ProductStore(Base):
             f"store_id={self.store_id}, is_active={self.is_active}, "
             f"next_check_at={self.next_check_at})>"
         )
+
+
+def latest_point_per_link() -> tuple["PricePoint", Any]:
+    """THE "latest price point per link" lookup: an aliased PricePoint plus its rank.
+
+    Usage::
+
+        latest_pp, rn = latest_point_per_link()
+        stmt = select(latest_pp).join(...).where(rn == 1)
+
+    ``rn == 1`` selects each link's most recent point. row_number, NOT the
+    ``max(checked_at)`` group-by joined back on equality: that shape was hand-written
+    five times across deals/service/scheduler/admin and returns DUPLICATE rows when two
+    points on one link share an exact ``checked_at`` — so two of those copies could
+    disagree about a link's current price (the Gotcha-4 drift, one level down). Ties
+    break on ``id`` so the answer is deterministic even then.
+    """
+    rn = (
+        func.row_number()
+        .over(
+            partition_by=PricePoint.product_store_id,
+            order_by=[PricePoint.checked_at.desc(), PricePoint.id.desc()],
+        )
+        .label("rn")
+    )
+    subq = select(PricePoint, rn).subquery()
+    return aliased(PricePoint, subq), subq.c.rn
 
 
 def link_store_name(product_store: "ProductStore", store: "Store") -> str:

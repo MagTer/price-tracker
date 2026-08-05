@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from domain.categories import normalize_category
 from domain.deals import current_deals
 from domain.link_health import broken_links
-from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
+from domain.models import (
+    PricePoint,
+    PriceWatch,
+    Product,
+    ProductStore,
+    Store,
+    latest_point_per_link,
+    link_store_name,
+)
 from domain.parser import PriceParser
 from domain.pricing import (
     apply_scrape_to_link,
@@ -402,29 +410,18 @@ class PriceTrackerService:
             try:
                 product_uuid = uuid.UUID(product_id)
 
-                latest = (
-                    select(
-                        PricePoint.product_store_id.label("ps_id"),
-                        func.max(PricePoint.checked_at).label("checked_at"),
-                    )
-                    .group_by(PricePoint.product_store_id)
-                    .subquery()
-                )
-
+                latest_pp, rn = latest_point_per_link()
                 unit_price = unit_price_expr(
-                    PricePoint.effective_price_sek, ProductStore.package_quantity
+                    latest_pp.effective_price_sek, ProductStore.package_quantity
                 )
 
                 # Outer-joined: a link with no price point yet is still a link, and still needs
                 # to show its "needs amount" flag.
                 stmt = (
-                    select(ProductStore, Store, PricePoint)
+                    select(ProductStore, Store, latest_pp)
                     .join(Store, ProductStore.store_id == Store.id)
-                    .outerjoin(latest, latest.c.ps_id == ProductStore.id)
                     .outerjoin(
-                        PricePoint,
-                        (PricePoint.product_store_id == latest.c.ps_id)
-                        & (PricePoint.checked_at == latest.c.checked_at),
+                        latest_pp, (latest_pp.product_store_id == ProductStore.id) & (rn == 1)
                     )
                     .where(ProductStore.product_id == product_uuid)
                     .order_by(unit_price.asc().nulls_last())

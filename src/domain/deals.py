@@ -53,10 +53,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from domain.link_health import broken_links
-from domain.models import PricePoint, Product, ProductStore, Store, link_store_name
+from domain.models import (
+    PricePoint,
+    Product,
+    ProductStore,
+    Store,
+    latest_point_per_link,
+    link_store_name,
+)
 from domain.pricing import effective_price, rounded_unit_price
 
 if TYPE_CHECKING:
@@ -267,29 +274,17 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     """
     cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEALS_WINDOW_DAYS)
 
-    latest = (
-        select(
-            PricePoint.product_store_id.label("ps_id"),
-            func.max(PricePoint.checked_at).label("checked_at"),
-        )
-        .group_by(PricePoint.product_store_id)
-        .subquery()
-    )
-
+    latest_pp, rn = latest_point_per_link()
     stmt = (
-        select(PricePoint, ProductStore, Product, Store)
-        .join(
-            latest,
-            (PricePoint.product_store_id == latest.c.ps_id)
-            & (PricePoint.checked_at == latest.c.checked_at),
-        )
-        .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
+        select(latest_pp, ProductStore, Product, Store)
+        .join(ProductStore, latest_pp.product_store_id == ProductStore.id)
         .join(Product, ProductStore.product_id == Product.id)
         .join(Store, ProductStore.store_id == Store.id)
+        .where(rn == 1)
         .where(ProductStore.is_active.is_(True))
-        .where(PricePoint.offer_price_sek.is_not(None))
-        .where(PricePoint.checked_at >= cutoff)
-        .order_by(PricePoint.checked_at.desc())
+        .where(latest_pp.offer_price_sek.is_not(None))
+        .where(latest_pp.checked_at >= cutoff)
+        .order_by(latest_pp.checked_at.desc())
     )
     if store_type:
         stmt = stmt.where(Store.store_type == store_type)
@@ -303,23 +298,12 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     floors: dict[uuid.UUID, _Floor] = {}
     if rows:
         product_ids = {product.id for _, _, product, _ in rows}
-        alt_latest = (
-            select(
-                PricePoint.product_store_id.label("ps_id"),
-                func.max(PricePoint.checked_at).label("checked_at"),
-            )
-            .group_by(PricePoint.product_store_id)
-            .subquery()
-        )
+        alt_pp, alt_rn = latest_point_per_link()
         alt_stmt = (
-            select(ProductStore, Store, PricePoint)
+            select(ProductStore, Store, alt_pp)
             .join(Store, ProductStore.store_id == Store.id)
-            .join(alt_latest, alt_latest.c.ps_id == ProductStore.id)
-            .join(
-                PricePoint,
-                (PricePoint.product_store_id == alt_latest.c.ps_id)
-                & (PricePoint.checked_at == alt_latest.c.checked_at),
-            )
+            .join(alt_pp, alt_pp.product_store_id == ProductStore.id)
+            .where(alt_rn == 1)
             # Same is_active filter as the deal query itself: an inactive link's frozen
             # last price is not a shelf anyone can buy from, and letting it win as
             # best_alt flips a genuine BEST to WORSE — which the weekly email then drops.

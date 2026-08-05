@@ -47,7 +47,15 @@ from domain.categories import PRODUCT_CATEGORIES, normalize_category
 from domain.deals import current_deals
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.link_health import LinkHealth, broken_links
-from domain.models import PricePoint, PriceWatch, Product, ProductStore, Store, link_store_name
+from domain.models import (
+    PricePoint,
+    PriceWatch,
+    Product,
+    ProductStore,
+    Store,
+    latest_point_per_link,
+    link_store_name,
+)
 from domain.parser import PriceParser, get_api_extractor, get_html_extractor
 from domain.pricing import (
     CANONICAL_UNITS,
@@ -472,23 +480,9 @@ async def list_products(
 
             ps_ids = [ps.id for rows in ps_by_product.values() for ps, _ in rows]
             if ps_ids:
-                from sqlalchemy import func
-                from sqlalchemy.orm import aliased
-
-                rn = (
-                    func.row_number()
-                    .over(
-                        partition_by=PricePoint.product_store_id,
-                        order_by=PricePoint.checked_at.desc(),
-                    )
-                    .label("rn")
-                )
-                latest_subq = (
-                    select(PricePoint, rn).where(PricePoint.product_store_id.in_(ps_ids)).subquery()
-                )
-                latest_pp = aliased(PricePoint, latest_subq)
+                latest_pp, rn = latest_point_per_link()
                 latest_result = await session.execute(
-                    select(latest_pp).where(latest_subq.c.rn == 1)
+                    select(latest_pp).where(rn == 1).where(latest_pp.product_store_id.in_(ps_ids))
                 )
                 for pp in latest_result.scalars().all():
                     latest_by_ps[pp.product_store_id] = pp
@@ -2100,23 +2094,12 @@ async def list_watches(
         current: dict[uuid.UUID, tuple[float, float | None, str]] = {}
         if rows:
             watched_ids = {product.id for _, product in rows}
-            latest = (
-                select(
-                    PricePoint.product_store_id.label("ps_id"),
-                    func.max(PricePoint.checked_at).label("checked_at"),
-                )
-                .group_by(PricePoint.product_store_id)
-                .subquery()
-            )
+            latest_pp, rn = latest_point_per_link()
             cur_stmt = (
-                select(ProductStore, Store, PricePoint)
+                select(ProductStore, Store, latest_pp)
                 .join(Store, ProductStore.store_id == Store.id)
-                .join(latest, latest.c.ps_id == ProductStore.id)
-                .join(
-                    PricePoint,
-                    (PricePoint.product_store_id == latest.c.ps_id)
-                    & (PricePoint.checked_at == latest.c.checked_at),
-                )
+                .join(latest_pp, latest_pp.product_store_id == ProductStore.id)
+                .where(rn == 1)
                 .where(ProductStore.product_id.in_(watched_ids))
             )
             for w_ps, w_store, w_pp in (await session.execute(cur_stmt)).all():

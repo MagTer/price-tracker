@@ -9,16 +9,16 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
 from domain.deals import DEAL_WORSE, TIMING_POOR, current_deals
 from domain.models import (
-    PricePoint,
     PriceWatch,
     ProductStore,
     Store,
+    latest_point_per_link,
     link_store_name,
 )
 from domain.notifier import PriceNotifier
@@ -714,23 +714,12 @@ class PriceCheckScheduler:
                 continue
             product_ids_seen.add(pid)
 
-            # Latest point PER LINK (same shape as service.get_links_for_product).
-            latest = (
-                select(
-                    PricePoint.product_store_id.label("ps_id"),
-                    func.max(PricePoint.checked_at).label("checked_at"),
-                )
-                .group_by(PricePoint.product_store_id)
-                .subquery()
-            )
+            # Latest point PER LINK — THE lookup in domain.models.
+            latest_pp, rn = latest_point_per_link()
             links_stmt = (
-                select(PricePoint, ProductStore, Store)
-                .join(
-                    latest,
-                    (PricePoint.product_store_id == latest.c.ps_id)
-                    & (PricePoint.checked_at == latest.c.checked_at),
-                )
-                .join(ProductStore, PricePoint.product_store_id == ProductStore.id)
+                select(latest_pp, ProductStore, Store)
+                .join(ProductStore, latest_pp.product_store_id == ProductStore.id)
+                .where(rn == 1)
                 .join(Store, ProductStore.store_id == Store.id)
                 .where(ProductStore.product_id == watch.product_id)
             )
