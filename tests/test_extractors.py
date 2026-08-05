@@ -254,7 +254,7 @@ class TestParseResponse:
         assert result.raw_response["comparison_unit"] == "/kg"
 
     def test_parse_compare_price_with_group_separator(self) -> None:
-        """"1 234,50 kr/kg": the bare [\\d.,]+ match stopped at the space and recorded
+        """ "1 234,50 kr/kg": the bare [\\d.,]+ match stopped at the space and recorded
         1.00 — a confident wrong number the validator then flagged. Separators are
         stripped before the decimal swap."""
         extractor = _make_extractor()
@@ -541,7 +541,7 @@ class TestJsonLdExtractor:
         assert result.price_sek == Decimal("137")  # ordinarie
         assert result.offer_price_sek == Decimal("102.75")  # campaign price paid
         assert result.offer_type == "kampanj"
-        assert result.offer_details == "Spara 34.25 kr"
+        assert result.offer_details == "Spara 34,25 kr"  # Swedish comma — user-facing text
         assert result.in_stock is True
 
     def test_list_price_not_higher_is_not_a_sale(self) -> None:

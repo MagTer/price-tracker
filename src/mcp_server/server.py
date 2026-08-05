@@ -64,9 +64,13 @@ async def check_price(product_name: str) -> str:
 
     for product in products:
         lines.append(f"**{product['name']}** ({product['brand'] or 'okänt märke'})")
-        history = await service.get_price_history(product["id"], days=7)
+        # 30 days, not 7: ICA/Willys links are checked WEEKLY, so a 7-day window asked
+        # on a Monday morning answered "Inga priser registrerade än" about a product
+        # with years of history — a false statement. And the empty answer names its
+        # window instead of claiming the history does not exist.
+        history = await service.get_price_history(product["id"], days=30)
         if not history:
-            lines.append("- Inga priser registrerade än.")
+            lines.append("- Inga priser observerade de senaste 30 dagarna.")
         else:
             # Deduped per LINK, not per store name: a product may now hold several
             # listings at one store (different pack sizes), and keying on the store

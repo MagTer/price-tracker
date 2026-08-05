@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from domain.result import PriceExtractionResult, ProductMetadata
+
+
+def format_sek(amount: Decimal) -> str:
+    """An öre-quantized amount for a USER-FACING string — Swedish comma decimal, no
+    trailing zeros ("3,39", "5").
+
+    The extractors grew three private near-copies of this (Willys with the comma,
+    Rusta/Clas Ohlson with a dot); new user-visible savings text goes through this one.
+    """
+    quantized = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    text = format(quantized, "f").rstrip("0").rstrip(".")
+    return (text or "0").replace(".", ",")
 
 
 def read_json_object(text: str, start: int) -> str | None:

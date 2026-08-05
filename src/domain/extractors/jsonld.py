@@ -27,6 +27,7 @@ from decimal import Decimal, InvalidOperation
 from html import unescape
 from typing import Any
 
+from domain.extractors.base import format_sek
 from domain.result import PriceExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,9 @@ class JsonLdExtractor:
         if regular is not None and regular > price:
             offer_price_sek = price  # what you pay now
             offer_type = "kampanj"
-            offer_details = f"Spara {regular - price} kr"
+            # User-visible Swedish text: formatted like the other extractors' savings
+            # strings, never a raw Decimal ("Spara 10.5000 kr" reached the portal).
+            offer_details = f"Spara {format_sek(regular - price)} kr"
             price = regular  # price_sek is the ordinarie
 
         in_stock = self._parse_availability(offer.get("availability"))
