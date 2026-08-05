@@ -1,0 +1,150 @@
+<!-- The server-rendered shell: outer document, sidebar, header and the phone's chrome.
+     Assembled by price_tracker_dashboard in api/admin.py, which substitutes the %%…%%
+     tokens (small, pre-escaped strings) and the placeholder comments (whole CSS/HTML/JS
+     blocks — .replace(), never str.format(), because the CSS and JS are full of braces).
+
+     Sidebar: two nav groups, live counters, and a foot that answers "is it still
+     running?". The grouping is the app's own division of labour: VECKAN is what you act
+     on this week, UNDERHÅLL is what keeps the data honest. The counters and the
+     scheduler line are filled by the JS — `active` is likewise owned by renderPage(),
+     never hardcoded here, because the app is ONE served page with a hash router.
+
+     Header: breadcrumb, the scope switch, and who you are. The scope switch (Allt /
+     Livsmedel / Apotek) is `store_type` on the server and shows only on the two pages it
+     filters — the JS hides it elsewhere. A reader keeps the role badge: a page whose
+     write buttons are simply absent reads as a broken deploy, not as a permission level.
+
+     Mobile chrome: rendered always and shown only under 768px (CSS) — building it in JS
+     on a resize means the first paint on a phone is the desktop shell. The fourth tab is
+     "Mer": Bevakningar, Fel & luckor and Loggar do not earn a permanent tab, but must
+     not become deep-link-only either. The sheet carries the phone's copy of the scope
+     switch and the scheduler line, because `display: none` would otherwise hide both
+     exactly where the app is used (in the aisle); a blocked/paused scheduler gets the
+     #mobile-status strip too — "ICA:s priser slutar uppdateras" must not hide behind
+     "Mer". -->
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Tracker</title>
+    <script src="/static/chart.umd.min.js" defer></script>
+    <style>
+        <!--BASE_CSS-->
+        <!--EXTRA_CSS-->
+    </style>
+</head>
+<body class="%%BODY_CLASS%%">
+    <div class="admin-layout">
+    <aside class="admin-sidebar">
+        <div class="sidebar-header">
+            <a href="#/kopa" class="sidebar-logo">
+                <span class="logo-mark">&#128181;</span>
+                Price Tracker
+            </a>
+            <div class="sidebar-sub" id="user-email" title="%%EMAIL%%">%%EMAIL%%</div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="nav-section">Veckan</div>
+            <a href="#/kopa" class="nav-item" data-page="kopa">
+                <span class="nav-icon">&#127991;&#65039;</span>
+                Att köpa
+                <span class="nav-count" id="nav-count-kopa"></span>
+            </a>
+            <a href="#/bevakningar" class="nav-item" data-page="bevakningar">
+                <span class="nav-icon">&#128276;</span>
+                Bevakningar
+                <span class="nav-count" id="nav-count-bevakningar"></span>
+            </a>
+            <a href="#/utveckling" class="nav-item" data-page="utveckling">
+                <span class="nav-icon">&#128200;</span>
+                Prisutveckling
+            </a>
+            <div class="nav-section">Underhåll</div>
+            <a href="#/produkter" class="nav-item" data-page="produkter">
+                <span class="nav-icon">&#128230;</span>
+                Produkter
+                <span class="nav-count" id="nav-count-produkter"></span>
+            </a>
+            <a href="#/luckor" class="nav-item" data-page="luckor">
+                <span class="nav-icon">&#9888;&#65039;</span>
+                Fel &amp; luckor
+                <span class="nav-count count-gap" id="nav-count-luckor"></span>
+            </a>
+            <a href="#/loggar" class="nav-item" data-page="loggar">
+                <span class="nav-icon">&#128220;</span>
+                Loggar
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="sched-state" id="sched-state">
+                <span class="sched-dot"></span><span id="sched-state-text">Schemaläggare</span>
+            </div>
+            <div id="sched-when"></div>
+            %%VERSION%%
+        </div>
+    </aside>
+        <main class="admin-main">
+    <header class="admin-header">
+        <div class="breadcrumbs">
+            <a href="#/kopa">Price Tracker</a>
+            <span class="separator">/</span>
+            <span class="current" id="breadcrumb-current">Att köpa</span>
+        </div>
+        <div class="header-actions">
+            <div class="segmented" id="scope-switch">
+                <button type="button" data-scope="">Allt</button>
+                <button type="button" data-scope="grocery">Livsmedel</button>
+                <button type="button" data-scope="pharmacy">Apotek</button>
+            </div>
+            %%ROLE_BADGE%%
+            <span class="user-avatar">%%AVATAR%%</span>
+        </div>
+    </header>
+    <div class="mobile-topbar">
+        <span class="mt-title"><span class="logo-mark">&#128181;</span>
+            <span id="mobile-page-title">Att köpa</span></span>
+        <span class="user-avatar">%%AVATAR%%</span>
+    </div>
+    <div class="mobile-status" id="mobile-status" hidden></div>
+    <nav class="mobile-tabs" id="mobile-tabs">
+        <button type="button" data-page="kopa">
+            <span class="mt-icon">&#127991;&#65039;</span>Att köpa</button>
+        <button type="button" data-page="produkter">
+            <span class="mt-icon">&#128230;</span>Produkter</button>
+        <button type="button" data-page="utveckling">
+            <span class="mt-icon">&#128200;</span>Utveckling</button>
+        <button type="button" data-more="1"><span class="mt-icon">&#8801;</span>Mer</button>
+    </nav>
+    <div class="mobile-sheet" id="mobile-sheet">
+        <div class="mobile-sheet-inner">
+            <div class="mobile-sheet-scope">
+                <span class="mss-label">Visa</span>
+                <div class="segmented" id="scope-switch-m">
+                    <button type="button" data-scope="">Allt</button>
+                    <button type="button" data-scope="grocery">Livsmedel</button>
+                    <button type="button" data-scope="pharmacy">Apotek</button>
+                </div>
+            </div>
+            <button type="button" data-page="bevakningar">&#128276; Bevakningar</button>
+            <button type="button" data-page="luckor">&#9888;&#65039; Fel &amp; luckor</button>
+            <button type="button" data-page="loggar">&#128220; Loggar</button>
+            <div class="mobile-sheet-sched">
+                <div class="sched-state" id="sched-state-m">
+                    <span class="sched-dot"></span><span
+                        id="sched-state-text-m">Schemaläggare</span>
+                </div>
+                <div id="sched-when-m"></div>
+            </div>
+        </div>
+    </div>
+            <div class="admin-content">
+                <!--CONTENT-->
+            </div>
+        </main>
+    </div>
+    <script>
+        <!--EXTRA_JS-->
+    </script>
+</body>
+</html>

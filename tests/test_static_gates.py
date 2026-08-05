@@ -419,19 +419,20 @@ def test_every_getelementbyid_literal_resolves_to_markup() -> None:
     bindings added after that gate (#filter-more's phone fold, #stats-container's sort
     delegation) had the same shape and no coverage. This gate is the general form: all
     getElementById string literals in the JS fragment, checked against the template AND
-    the wrapper markup admin.py renders around it (which owns e.g. #user-email).
+    the shell template rendered around it (templates/shell.html — sidebar, header and
+    mobile chrome, which own e.g. #user-email; string literals in admin.py until v0.51.0).
 
     Every id in this app is static by design (the portal is ONE served page); if a
     legitimately dynamic id ever appears, exempt it here explicitly with a comment.
     """
     html = ADMIN_HTML.read_text(encoding="utf-8")
-    admin_py = (SRC_ROOT / "api" / "admin.py").read_text(encoding="utf-8")
+    shell = (ADMIN_HTML.parent / "shell.html").read_text(encoding="utf-8")
     js = html.split("<!-- SECTION_SEPARATOR -->")[2]
 
     ids = sorted(set(re.findall(r"getElementById\('([\w-]+)'\)", js)))
     assert len(ids) >= 60, f"Parsed only {len(ids)} ids — has the extraction broken?"
 
-    missing = [i for i in ids if f'id="{i}"' not in html and f'id="{i}"' not in admin_py]
+    missing = [i for i in ids if f'id="{i}"' not in html and f'id="{i}"' not in shell]
     assert not missing, (
         f"admin.html's script binds to {missing} but no markup renders them — "
         "getElementById returns null, the script throws while loading, and the page goes inert."

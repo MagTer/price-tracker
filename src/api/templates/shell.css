@@ -1,0 +1,625 @@
+/* The design system: tokens, shell, sidebar, header and the shared row/card language.
+ *
+ * Page-specific CSS lives in admin.html's second fragment (split on SECTION_SEPARATOR).
+ * What is here is what the server-rendered shell needs (sidebar + header) plus the
+ * primitives every page builds from — so a colour exists in exactly one place. The
+ * palette is the 3a handoff's, and it is closed: nothing outside these tokens may be
+ * introduced. Served inline by price_tracker_dashboard, read per request like admin.html.
+ */
+        :root {
+            --nav-width: 220px;
+            --header-height: 56px;
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            /* Page background is the muted slate the cards sit on — cards define
+               themselves with a 1px border, never a shadow. */
+            --bg: #eef1f5;
+            --bg-nav: #1e293b;
+            --bg-card: #fff;
+            /* Two different edges, deliberately: cards/list rows use --border, controls
+               (inputs, selects, secondary buttons, segments) the darker --border-control.
+               A control that shares the card's edge stops reading as a control. */
+            --border: #dbe2ea;
+            --border-control: #cbd5e1;
+            --row-line: #f1f5f9;
+            --row-line-weak: #f8fafc;
+            --text: #0f172a;
+            --text-secondary: #334155;
+            --text-muted: #64748b;
+            --text-faint: #94a3b8;
+            --text-nav: #94a3b8;
+            --text-nav-active: #fff;
+            /* Positive is the DEEP green (text-legible on white); the light one is for
+               bars and dots only, where it is a shape rather than a word. */
+            --success: #047857;
+            --success-bar: #10b981;
+            --success-chip-bg: #d1fae5;
+            --success-chip-fg: #065f46;
+            --success-row: #f6fdf9;
+            --warning: #92400e;
+            --warning-bg: #fffbeb;
+            --warning-border: #fde68a;
+            --warning-chip-bg: #fef3c7;
+            --warning-link: #b45309;
+            --error: #b91c1c;
+            --error-strong: #991b1b;
+            --error-bg: #fef2f2;
+            --error-border: #fca5a5;
+            --error-line: #fee2e2;
+            --error-chip-bg: #fee2e2;
+            --neutral-chip-bg: #eef1f5;
+            --neutral-chip-fg: #475569;
+            --hover: #fbfcfe;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            min-height: 100vh;
+        }
+        /* Every number that is compared with another number is set in tabular figures —
+           a column of prices that jitters horizontally cannot be scanned. */
+        .tnum, .stat-value, .unit-price, .num { font-variant-numeric: tabular-nums; }
+        a { color: var(--primary); text-decoration: none; }
+        a:hover { color: var(--primary-dark); }
+        input, select, button, textarea { font-family: inherit; }
+        /* One visible focus ring for everything interactive — keyboard users get the same
+           page, not a diminished one. */
+        a:focus-visible, button:focus-visible, input:focus-visible,
+        select:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+
+        .admin-layout { display: flex; min-height: 100vh; }
+
+        /* --- Sidebar: two groups with live counters, and a foot that answers "does the
+           scheduler still run?" without opening a page. --- */
+        .admin-sidebar {
+            width: var(--nav-width);
+            flex: 0 0 var(--nav-width);
+            background: var(--bg-nav);
+            color: var(--text-nav);
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+        }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .sidebar-logo {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sidebar-logo:hover { color: #fff; }
+        .sidebar-logo .logo-mark { font-size: 18px; }
+        /* Indented to line up with the wordmark, not with the emoji. */
+        .sidebar-sub {
+            margin-left: 26px;
+            margin-top: 2px;
+            font-size: 11.5px;
+            color: #64748b;
+            /* Clipped, not wrapped: a long address broken mid-word reads as a rendering
+               fault. The full value stays in the title attribute. */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-nav { flex: 1; overflow-y: auto; padding: 0 0 8px; }
+        .nav-section {
+            padding: 14px 16px 4px;
+            font-size: 10.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: #64748b;
+        }
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            color: var(--text-nav);
+            text-decoration: none;
+            font-size: 13px;
+            /* Transparent on the inactive item too, so the label does not shift 3px
+               sideways the moment a page is selected. */
+            border-left: 3px solid transparent;
+        }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
+        .nav-item.active {
+            background: rgba(37, 99, 235, 0.2);
+            color: var(--text-nav-active);
+            border-left-color: var(--primary);
+        }
+        .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+        .nav-count {
+            margin-left: auto;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 1px 7px;
+            border-radius: 9px;
+            background: transparent;
+            color: #64748b;
+        }
+        .nav-item.active .nav-count { background: var(--primary); color: #fff; }
+        /* An empty counter renders nothing at all — a 0 in a pill still draws the eye. */
+        .nav-count:empty { display: none; }
+        /* Fel & luckor is the one counter that carries a severity: amber while it is only
+           gaps to close, red the moment a SILENT error is among them (the check said "ok"
+           and the number is still wrong). Set by the JS, both states here. */
+        .nav-count.count-gap,
+        .nav-item.active .nav-count.count-gap { background: #78350f; color: #fde68a; }
+        .nav-count.count-error,
+        .nav-item.active .nav-count.count-error { background: #991b1b; color: #fee2e2; }
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 12px 16px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 11.5px;
+            line-height: 1.7;
+            color: #64748b;
+        }
+        .sched-state {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-weight: 600;
+            color: #34d399;
+        }
+        .sched-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success-bar);
+            flex: 0 0 auto;
+        }
+        .sched-state.is-paused { color: #fcd34d; }
+        .sched-state.is-paused .sched-dot { background: #f59e0b; }
+        .sched-state.is-blocked, .sched-state.is-off { color: #fca5a5; }
+        .sched-state.is-blocked .sched-dot, .sched-state.is-off .sched-dot { background: #ef4444; }
+
+        .admin-main {
+            flex: 1;
+            min-width: 0;
+            margin-left: var(--nav-width);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .admin-header {
+            height: var(--header-height);
+            background: var(--bg-card);
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+        .breadcrumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .breadcrumbs .separator { color: var(--border-control); }
+        .breadcrumbs .current { color: var(--text); font-weight: 600; }
+        .header-actions { display: flex; align-items: center; gap: 10px; }
+        /* --- Segmented control (the Allt/Livsmedel/Apotek scope). One frame, dividers
+           BETWEEN the segments only. --- */
+        .segmented {
+            display: flex;
+            border: 1px solid var(--border-control);
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+        }
+        .segmented button {
+            padding: 7px 13px;
+            font-size: 13px;
+            border: none;
+            background: #fff;
+            color: var(--neutral-chip-fg);
+            cursor: pointer;
+        }
+        .segmented button + button { border-left: 1px solid #e2e8f0; }
+        .segmented button.active { background: var(--primary); color: #fff; font-weight: 600; }
+        .user-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 12px;
+            flex: 0 0 auto;
+        }
+        .role-badge {
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--neutral-chip-bg);
+            color: var(--neutral-chip-fg);
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        /* Every write control in the static markup carries .admin-only. A reader's page
+           is the same document with those removed — the API 403s them anyway, so this is
+           about not offering a button that cannot work. The JS-built row actions make the
+           same decision from IS_ADMIN (see the script fragment). */
+        body.role-reader .admin-only { display: none !important; }
+
+        .admin-content {
+            flex: 1;
+            padding: 22px 24px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        /* --- Page heading: the question the page answers, then what it was computed
+           from. Every page has both; a number without its basis is a claim. --- */
+        .page-head {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .page-title { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+        .page-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; max-width: 76ch; }
+        .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .card-pad { padding: 18px; }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--row-line);
+        }
+        .card-title { font-size: 15px; font-weight: 600; }
+        .card-title .card-title-note {
+            font-weight: 400;
+            color: var(--text-faint);
+            font-size: 13px;
+        }
+
+        /* --- Buttons --- */
+        .btn {
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border-control);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover { background: var(--bg); color: var(--text); }
+        .btn-primary {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+            font-weight: 600;
+        }
+        .btn-primary:hover { background: var(--primary-dark); color: #fff; }
+        .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 6px; border-color: #e2e8f0; }
+        .action-btn {
+            padding: 6px 10px;
+            font-size: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid #e2e8f0;
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .action-btn:hover { background: var(--bg); }
+
+        /* --- Tables. Headings are small and muted, NOT uppercase: the figures carry the
+           contrast, the headings only say what they are. --- */
+        table { width: 100%; border-collapse: collapse; }
+        th, td {
+            padding: 12px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--row-line-weak);
+        }
+        th {
+            font-weight: 500;
+            font-size: 11.5px;
+            color: var(--text-faint);
+            border-bottom: 1px solid var(--row-line);
+            white-space: nowrap;
+        }
+        .num-col { text-align: right; font-variant-numeric: tabular-nums; }
+
+        /* --- Chips and badges --- */
+        .badge {
+            display: inline-block;
+            /* Never breaks mid-label: a two-line "en butik" chip reads as a layout fault. */
+            white-space: nowrap;
+            padding: 3px 9px;
+            border-radius: 6px;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .badge-success { background: var(--success-chip-bg); color: var(--success-chip-fg); }
+        .badge-warning { background: var(--warning-chip-bg); color: var(--warning); }
+        .badge-error { background: var(--error-chip-bg); color: var(--error-strong); }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-muted { background: var(--neutral-chip-bg); color: var(--neutral-chip-fg); }
+        /* Filter chip: a pill you press. The dark fill is "everything", the blue one a
+           store filter — two different kinds of active, deliberately different colours. */
+        .chip {
+            padding: 5px 11px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            border: 1px solid var(--border-control);
+            background: #fff;
+            color: var(--neutral-chip-fg);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .chip:hover { border-color: var(--text-faint); }
+        .chip.active {
+            background: var(--bg-nav);
+            border-color: var(--bg-nav);
+            color: #fff;
+            font-weight: 600;
+        }
+        .chip.chip-warn {
+            background: var(--warning-bg);
+            border-color: var(--warning-border);
+            color: var(--warning);
+        }
+        .chip.chip-warn.active {
+            background: var(--warning);
+            border-color: var(--warning);
+            color: #fff;
+        }
+        .chip-row { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+
+        /* --- The bar language: one track, one fill, used by the price span, the watch
+           progress and the store comparison. Same shape everywhere on purpose. --- */
+        .bar-track {
+            height: 8px;
+            border-radius: 4px;
+            background: var(--bg);
+            position: relative;
+            overflow: hidden;
+        }
+        .bar-fill { height: 100%; border-radius: 4px; background: var(--primary); }
+        .bar-fill.is-low { background: var(--success-bar); }
+
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .status-dot.ok { background: var(--success-bar); }
+        .status-dot.warning { background: #f59e0b; }
+        .status-dot.error { background: #ef4444; }
+
+        /* --- Key figures --- */
+        .stat-grid { display: grid; gap: 14px; }
+        .stat-grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .stat-grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .stat-box.is-warning { background: var(--warning-bg); border-color: var(--warning-border); }
+        .stat-label { font-size: 12.5px; color: var(--text-muted); }
+        .stat-box.is-warning .stat-label { color: #78350f; }
+        .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; }
+        .stat-box.is-warning .stat-value { color: var(--warning); }
+        .stat-note { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+        a.stat-box, .stat-box.clickable { cursor: pointer; color: inherit; display: block; }
+        a.stat-box:hover, .stat-box.clickable:hover { border-color: var(--primary); }
+
+        .loading {
+            color: var(--text-muted);
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 32px 20px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .empty-state-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+
+        .shared-toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 9999;
+            display: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 400px;
+        }
+        .shared-toast.success { background: var(--success); display: block; }
+        .shared-toast.error { background: var(--error); display: block; }
+        .shared-toast.warning { background: var(--warning); display: block; }
+        .shared-toast.info { background: var(--primary); display: block; }
+
+        /* --- Mobile shell. The phone is a first-class surface: the app doubles as the
+           shopping list IN the store. The sidebar collapses to a dark title bar and a
+           four-tab bottom menu; the breadcrumb header goes away entirely (the page's own
+           header says where you are). --- */
+        .mobile-topbar, .mobile-tabs, .mobile-sheet, .mobile-status { display: none; }
+        @media (max-width: 768px) {
+            .admin-sidebar { display: none; }
+            .admin-main { margin-left: 0; padding-bottom: 66px; }
+            .admin-header { display: none; }
+            .admin-content { padding: 12px; gap: 10px; }
+            .mobile-topbar {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                background: var(--bg-nav);
+                color: #fff;
+                padding: 12px 14px;
+                position: sticky;
+                top: 0;
+                z-index: 90;
+            }
+            .mobile-topbar .mt-title {
+                font-weight: 600;
+                font-size: 14px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .mobile-topbar .mt-title .logo-mark { font-size: 17px; }
+            .mobile-topbar .user-avatar { width: 26px; height: 26px; font-size: 11px; }
+            .mobile-tabs {
+                display: flex;
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: var(--bg-nav);
+                z-index: 95;
+            }
+            .mobile-tabs button {
+                flex: 1;
+                padding: 9px 0;
+                text-align: center;
+                font-size: 11px;
+                border: none;
+                background: none;
+                color: var(--text-nav);
+                cursor: pointer;
+                min-height: 46px;
+            }
+            .mobile-tabs button .mt-icon { font-size: 16px; display: block; }
+            .mobile-tabs button.active {
+                color: #fff;
+                font-weight: 600;
+                box-shadow: inset 0 2px 0 var(--primary);
+            }
+            /* "Mer" holds the three pages that do not earn a permanent tab. Without it
+               Bevakningar and Fel & luckor would be reachable only by deep link. */
+            .mobile-sheet {
+                display: none;
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                top: 0;
+                background: rgba(15,23,42,0.35);
+                z-index: 96;
+                align-items: flex-end;
+            }
+            .mobile-sheet.open { display: flex; }
+            .mobile-sheet-inner {
+                width: 100%;
+                background: #fff;
+                border-radius: 12px 12px 0 0;
+                padding: 8px 0 calc(66px + 8px);
+            }
+            .mobile-sheet-inner button {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                width: 100%;
+                padding: 14px 18px;
+                border: none;
+                background: none;
+                font-size: 15px;
+                color: var(--text);
+                text-align: left;
+                cursor: pointer;
+            }
+            /* The sheet's scope row reuses .segmented but must undo the sheet's own
+               full-width button rule above, or three buttons stack a screen tall. */
+            .mobile-sheet-scope {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 18px 12px;
+                border-bottom: 1px solid var(--border);
+            }
+            .mss-label { font-size: 12.5px; color: var(--text-muted); flex: 0 0 auto; }
+            .mobile-sheet-scope .segmented { flex: 1; display: flex; }
+            .mobile-sheet-scope .segmented button {
+                flex: 1;
+                width: auto;
+                padding: 8px 0;
+                justify-content: center;
+                text-align: center;
+                font-size: 13.5px;
+            }
+            .mobile-sheet-sched {
+                padding: 12px 18px 4px;
+                border-top: 1px solid var(--border);
+                font-size: 12px;
+                line-height: 1.7;
+                color: var(--text-muted);
+            }
+            /* The sidebar's status colours are tuned for its dark ground — on the white
+               sheet the pale tints have no contrast, so they darken here. */
+            .mobile-sheet-sched .sched-state { color: #047857; }
+            .mobile-sheet-sched .sched-state.is-paused { color: #b45309; }
+            .mobile-sheet-sched .sched-state.is-blocked,
+            .mobile-sheet-sched .sched-state.is-off { color: #b91c1c; }
+            /* Blocked/paused must not hide behind "Mer": a strip under the title bar,
+               amber for a pause (self-inflicted, lapses on its own), red for a block. */
+            .mobile-status {
+                display: block;
+                padding: 7px 14px;
+                font-size: 12.5px;
+                font-weight: 600;
+                background: #fef3c7;
+                color: #92400e;
+            }
+            .mobile-status.is-blocked { background: #fee2e2; color: #991b1b; }
+            .mobile-status[hidden] { display: none; }
+            .page-head { align-items: flex-start; gap: 10px; }
+            .page-title { font-size: 19px; letter-spacing: -0.01em; }
+            .page-sub { font-size: 12.5px; }
+            .card { border-radius: 10px; }
+            .card-pad { padding: 12px; }
+            .card-header { padding: 12px 14px; }
+            .stat-grid-3, .stat-grid-4 { grid-template-columns: repeat(2, 1fr); }
+            .stat-value { font-size: 22px; }
+            /* iOS Safari auto-zooms any focused field under 16px — the page jumps on
+               every keystroke in the search box. 16px is not a preference here. */
+            .search-input, .form-input, .gap-input { font-size: 16px; }
+            /* Fingertip targets. */
+            .action-btn, .btn-sm { padding: 9px 12px; }
+            th, td { padding: 8px 6px; }
+            th { font-size: 11px; }
+        }
+    
