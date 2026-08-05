@@ -1695,7 +1695,15 @@ async function loadStats() {
 }
 
 async function loadStores() {
-    allStores = await apiGet('/stores');
+    // Guarded because boot AWAITS this one: an unguarded rejection here would stop
+    // loadProducts/loadWatches/loadStats from ever running and leave every page on
+    // "Laddar…" with nothing anywhere saying why. Store facets degrade; the app loads.
+    try {
+        allStores = await apiGet('/stores');
+    } catch (e) {
+        console.error('Stores failed', e);
+        showToast('Kunde inte ladda butikerna ' + DASH + ' butiksfiltren kan saknas.', 'error');
+    }
 }
 
 // --- Produkter ---
@@ -2198,6 +2206,11 @@ function dealSpanHtml(d, stat) {
     // either of the last two "en observation" misstates what we know.
     if (now == null) {
         return `<div class="span-note">inget jfr-pris ${DASH} länken saknar mängd</div>`;
+    }
+    if (statsData === null) {
+        // /stats failed or has not answered: "en observation" would be a confident
+        // claim about history we could not read — the em-dash rule, not a guess.
+        return `<div class="span-note">historiken kunde inte laddas</div>`;
     }
     if (low == null || high == null) {
         return `<div class="span-note">en observation ${DASH} inget spann än</div>`;
@@ -4251,6 +4264,9 @@ async function loadExport() {
     try {
         // history_days=0 = ALL history: this button is the backup, not a 30-day report.
         const r = await fetch(API_BASE + '/export?include_history=true&history_days=0');
+        // Without this a 500 body is saved AS the backup and toasted "Export
+        // nedladdad" — a corrupt backup discovered only at restore time.
+        if (!r.ok) throw await apiError(r);
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -4276,7 +4292,8 @@ async function handleImport(e) {
             method: 'POST',
             body: fd
         });
-        if (!r.ok) throw new Error(await r.text());
+        // apiError, not r.text(): the ingress swaps a 403 body for "Found".
+        if (!r.ok) throw await apiError(r);
         const data = await r.json();
         closeModal('modal-import');
         showToast(`Import klar: ${data.summary.products_created} skapade, ${data.summary.watches_created} bevakningar`);
