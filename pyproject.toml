@@ -36,7 +36,6 @@ packages = [
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
 pytest-asyncio = "^0.23"
-aiosqlite = "^0.22.1"
 ruff = "0.14.4"
 
 # Ruff config inherited from the source repo (ai-agent-platform/services/agent),

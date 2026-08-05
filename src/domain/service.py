@@ -8,7 +8,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -312,79 +311,6 @@ class PriceTrackerService:
             session_factory: SQLAlchemy async session factory.
         """
         self.session_factory = session_factory
-
-    async def record_price(
-        self, product_store_id: str, price_data: dict[str, Any], session: AsyncSession
-    ) -> PricePoint | None:
-        """Record a new price point for a product-store combination.
-
-        Args:
-            product_store_id: UUID string of the ProductStore.
-            price_data: Dictionary containing price information:
-                - price_sek: Regular price (required)
-                - store_unit_price_sek: The store's PRINTED comparison price, as scraped
-                  (optional; D-05). NOT the computed kr/unit — that is derived on read from
-                  the link's package_quantity and is never persisted (D-04).
-                - offer_price_sek: Offer price (optional)
-                - offer_type: Type of offer (optional)
-                - offer_details: Offer description (optional)
-                - in_stock: Stock status (default: True)
-                - raw_data: Raw scraped data (optional)
-            session: Database session.
-
-        Returns:
-            Created PricePoint instance, or None if ProductStore not found.
-        """
-        try:
-            product_store_uuid = uuid.UUID(product_store_id)
-
-            # Verify ProductStore exists
-            stmt = select(ProductStore).where(ProductStore.id == product_store_uuid)
-            result = await session.execute(stmt)
-            product_store = result.scalar_one_or_none()
-
-            if not product_store:
-                logger.warning(f"ProductStore {product_store_id} not found")
-                return None
-
-            # Create price point
-            price_point = PricePoint(
-                product_store_id=product_store_uuid,
-                price_sek=Decimal(str(price_data["price_sek"])),
-                store_unit_price_sek=(
-                    Decimal(str(price_data["store_unit_price_sek"]))
-                    if price_data.get("store_unit_price_sek")
-                    else None
-                ),
-                offer_price_sek=(
-                    Decimal(str(price_data["offer_price_sek"]))
-                    if price_data.get("offer_price_sek")
-                    else None
-                ),
-                offer_type=price_data.get("offer_type"),
-                offer_details=price_data.get("offer_details"),
-                in_stock=price_data.get("in_stock", True),
-                raw_data=price_data.get("raw_data"),
-                checked_at=_utc_now(),
-            )
-
-            session.add(price_point)
-
-            # Update ProductStore last_checked_at
-            product_store.last_checked_at = _utc_now()
-
-            await session.commit()
-            await session.refresh(price_point)
-
-            logger.info(
-                f"Recorded price {price_point.price_sek} SEK for ProductStore {product_store_id}"
-            )
-            return price_point
-
-        except SQLAlchemyError:
-            await session.rollback()
-            logger.exception(f"Failed to record price for ProductStore {product_store_id}")
-            return None
 
     async def get_price_history(
         self, product_id: str, days: int = 30
@@ -718,33 +644,6 @@ class PriceTrackerService:
             except SQLAlchemyError:
                 logger.exception("Failed to get store names by product")
                 return {}
-
-    async def get_stores(self) -> list[dict[str, str]]:
-        """Get all active stores.
-
-        Returns:
-            List of store dictionaries.
-        """
-        async with self.session_factory() as session:
-            try:
-                stmt = select(Store).where(Store.is_active.is_(True)).order_by(Store.name)
-
-                result = await session.execute(stmt)
-                stores = result.scalars().all()
-
-                return [
-                    {
-                        "id": str(store.id),
-                        "name": store.name,
-                        "slug": store.slug,
-                        "store_type": store.store_type,
-                    }
-                    for store in stores
-                ]
-
-            except SQLAlchemyError:
-                logger.exception("Failed to get stores")
-                return []
 
     async def create_product(
         self,

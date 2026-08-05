@@ -10,7 +10,12 @@ class IRateLimiter(Protocol):
     """Abstract per-key request spacing — see infra.rate_limiter.StoreRateLimiter."""
 
     async def acquire(
-        self, key: object, min_interval: float, *, max_wait: float | None = None
+        self,
+        key: object,
+        min_interval: float,
+        *,
+        max_wait: float | None = None,
+        jitter: float = 0.0,
     ) -> float:
         """Block until it is polite to make a request to ``key``'s store.
 
@@ -19,6 +24,8 @@ class IRateLimiter(Protocol):
             min_interval: Minimum seconds between successive requests to this store.
             max_wait: Optional cap on how long the caller will wait (for interactive
                 callers that must not stall on a background reservation).
+            jitter: Random extra seconds added to the NEXT slot (never to the current
+                caller's wait), so a store is not hit on a clockwork beat (v0.24.0).
 
         Returns:
             The number of seconds actually slept before the slot opened.

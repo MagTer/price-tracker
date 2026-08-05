@@ -69,50 +69,6 @@ class TestPriceTrackerService:
     """Tests for PriceTrackerService."""
 
     @pytest.mark.asyncio
-    async def test_get_stores_returns_list(self, mock_session_factory: Mock) -> None:
-        """Test get_stores returns list of active stores."""
-        mock_session = AsyncMock()
-        mock_session_factory.return_value.__aenter__.return_value = mock_session
-
-        # Create mock store with actual attributes
-        store_id = uuid.uuid4()
-        mock_store = MagicMock()
-        mock_store.id = store_id
-        mock_store.name = "ICA Maxi"
-        mock_store.slug = "ica-maxi"
-        mock_store.store_type = "grocery"
-
-        # Mock execute result
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [mock_store]
-        mock_session.execute.return_value = mock_result
-
-        service = PriceTrackerService(mock_session_factory)
-        stores = await service.get_stores()
-
-        assert len(stores) == 1
-        assert stores[0]["name"] == "ICA Maxi"
-        assert stores[0]["slug"] == "ica-maxi"
-        assert stores[0]["store_type"] == "grocery"
-        assert "id" in stores[0]
-
-    @pytest.mark.asyncio
-    async def test_get_stores_filters_inactive(self, mock_session_factory: Mock) -> None:
-        """Test get_stores query filters by is_active."""
-        mock_session = AsyncMock()
-        mock_session_factory.return_value.__aenter__.return_value = mock_session
-
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute.return_value = mock_result
-
-        service = PriceTrackerService(mock_session_factory)
-        await service.get_stores()
-
-        # Verify execute was called (query construction is verified by other tests)
-        assert mock_session.execute.called
-
-    @pytest.mark.asyncio
     async def test_get_products_with_empty_result(self, mock_session_factory: Mock) -> None:
         """Test get_products returns empty list when no products exist."""
         mock_session = AsyncMock()
@@ -313,54 +269,6 @@ class TestPriceTrackerService:
         # The 24-pack beats its sibling per unit; MCP consumers can now read the verdict.
         assert by_size["24-pack"]["verdict"] == "best"
         assert by_size["8-pack"]["verdict"] == "worse"
-
-    @pytest.mark.asyncio
-    async def test_record_price_success(self, mock_session_factory: Mock) -> None:
-        """Test record_price creates PricePoint successfully."""
-        mock_session = AsyncMock()
-        product_store_id = uuid.uuid4()
-
-        # Mock ProductStore exists
-        mock_product_store = MagicMock()
-        mock_product_store.id = product_store_id
-        mock_product_store.last_checked_at = None
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_product_store
-        mock_session.execute.return_value = mock_result
-
-        price_data = {
-            "price_sek": 29.90,
-            "store_unit_price_sek": 149.50,
-            "in_stock": True,
-        }
-
-        service = PriceTrackerService(mock_session_factory)
-        price_point = await service.record_price(str(product_store_id), price_data, mock_session)
-
-        assert price_point is not None
-        assert price_point.price_sek == Decimal("29.90")
-        # What the store PRINTED (D-05) — persisted as-is, never sorted on. The computed
-        # kr/unit is not stored at all (D-04).
-        assert price_point.store_unit_price_sek == Decimal("149.50")
-        assert price_point.in_stock is True
-
-    @pytest.mark.asyncio
-    async def test_record_price_invalid_product_store_id(self, mock_session_factory: Mock) -> None:
-        """Test record_price returns None for invalid ProductStore ID."""
-        mock_session = AsyncMock()
-
-        # Mock ProductStore does not exist
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_session.execute.return_value = mock_result
-
-        price_data = {"price_sek": 29.90, "in_stock": True}
-
-        service = PriceTrackerService(mock_session_factory)
-        result = await service.record_price(str(uuid.uuid4()), price_data, mock_session)
-
-        assert result is None
 
     @pytest.mark.asyncio
     async def test_create_product(self, mock_session_factory: Mock) -> None:
