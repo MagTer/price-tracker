@@ -416,27 +416,13 @@ async def list_products(
         Users can only query their own tenant_id.
     """
     try:
-        # Security check: if tenant_id provided, verify user has access to it
-        if tenant_id:
-            try:
-                tenant_uuid = uuid.UUID(tenant_id)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail="Ogiltigt format på tenant_id") from e
-
-            # Verify user can only query their own context
-            if tenant_uuid != DEFAULT_TENANT_ID:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Åtkomst nekad: du kan bara se produkter i din egen kontext",
-                )
-
         # Build query with proper join handling
         stmt = select(Product)
 
-        # Apply context filter: show products owned by this context
+        # Apply context filter: show products owned by this context. THE guard is
+        # require_default_tenant — this was one of two inline hand-rolled copies.
         if tenant_id:
-            tenant_uuid = uuid.UUID(tenant_id)
-            stmt = stmt.where(Product.tenant_id == tenant_uuid)
+            stmt = stmt.where(Product.tenant_id == require_default_tenant(tenant_id))
 
         # Apply search filter
         if search:
@@ -556,7 +542,12 @@ async def create_product(
             detail=f"unit måste vara en av: {', '.join(CANONICAL_UNITS)}",
         )
     try:
-        tenant_uuid = require_default_tenant(data.tenant_id)
+        # Absent tenant_id = the seeded single-tenant constant. The client used to be
+        # REQUIRED to echo a UUID the server already knows and refuses any other value
+        # of — a hardcoded literal in the JS for nothing.
+        tenant_uuid = (
+            require_default_tenant(data.tenant_id) if data.tenant_id else DEFAULT_TENANT_ID
+        )
 
         product = await service.create_product(
             tenant_id=tenant_uuid,
@@ -2062,26 +2053,12 @@ async def list_watches(
         Users can only query their own tenant_id.
     """
     try:
-        # If no tenant_id provided, use user's default context
-        if not tenant_id:
-            tenant_id = str(DEFAULT_TENANT_ID)
+        # Absent = the single seeded context; provided = validated by THE guard
+        # (require_default_tenant — this was the other inline hand-rolled copy).
+        tenant_uuid = require_default_tenant(tenant_id) if tenant_id else DEFAULT_TENANT_ID
 
         stmt = select(PriceWatch, Product).join(Product, PriceWatch.product_id == Product.id)
-
-        if tenant_id:
-            try:
-                tenant_uuid = uuid.UUID(tenant_id)
-
-                # Security check: verify user has access to this context
-                if tenant_uuid != DEFAULT_TENANT_ID:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Åtkomst nekad: du kan bara se bevakningar i din egen kontext",
-                    )
-
-                stmt = stmt.where(PriceWatch.tenant_id == tenant_uuid)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail="Ogiltigt format på tenant_id") from e
+        stmt = stmt.where(PriceWatch.tenant_id == tenant_uuid)
 
         stmt = stmt.where(PriceWatch.is_active.is_(True)).order_by(PriceWatch.created_at.desc())
 
@@ -2156,14 +2133,14 @@ async def list_watches(
 @router.post("/watches", status_code=201)
 async def create_watch(
     data: PriceWatchCreate,
-    tenant_id: str,
+    tenant_id: str | None = None,
     service: PriceTrackerService = Depends(get_price_tracker_service),
 ) -> dict[str, str]:
     """Create a new price watch alert.
 
     Args:
         data: Price watch configuration.
-        tenant_id: Context UUID for multi-tenancy.
+        tenant_id: Context UUID for multi-tenancy. Absent = the seeded tenant.
         service: Price tracker service.
 
     Returns:
@@ -2171,9 +2148,12 @@ async def create_watch(
 
     Security:
         Requires IAP header auth (X-Auth-Request-Email).
-        tenant_id must match the seeded tenant; email must be well-formed.
+        A provided tenant_id must match the seeded tenant; email must be well-formed.
     """
-    require_default_tenant(tenant_id)
+    if tenant_id:
+        require_default_tenant(tenant_id)
+    else:
+        tenant_id = str(DEFAULT_TENANT_ID)
     if not EMAIL_PATTERN.match(data.email_address):
         raise HTTPException(status_code=400, detail="Ogiltig e-postadress")
     try:

@@ -17,7 +17,9 @@ class ProductCreate(BaseModel):
     store. See ProductStoreLink / ProductStoreUpdate.
     """
 
-    tenant_id: str
+    # Optional since v0.51.0: absent = the seeded single-tenant constant. A provided
+    # value must still BE that constant (require_default_tenant).
+    tenant_id: str | None = None
     name: str
     brand: str | None = None
     category: str | None = None

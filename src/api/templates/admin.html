@@ -3273,7 +3273,6 @@ async function handleCreateProduct(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const body = {
-        tenant_id: 'f21b6620-c793-46e3-a354-dfcd9956b4a2',
         name: fd.get('name'),
         brand: fd.get('brand') || null,
         category: fd.get('category') || null,
@@ -4322,7 +4321,7 @@ async function handleCreateWatch(e) {
         unit_price_target_sek: fd.get('unit_price_target_sek') ? parseFloat(fd.get('unit_price_target_sek')) : null
     };
     try {
-        await apiPost('/watches?tenant_id=f21b6620-c793-46e3-a354-dfcd9956b4a2', body);
+        await apiPost('/watches', body);
         closeModal('modal-create-watch');
         e.target.reset();
         showToast('Bevakning skapad');
