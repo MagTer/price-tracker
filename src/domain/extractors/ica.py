@@ -46,8 +46,11 @@ _STATE_RE = re.compile(r"window\.__QUERY_INITIAL_STATE__\s*=\s*\{")
 # The URL's trailing path segment is the retailer product id ("...-p%C3%A5gen/2010293").
 _PRODUCT_ID_RE = re.compile(r"/(\d+)/?(?:[?#]|$)")
 
-# "2 för 45 kr" / "3 för 95:-" — the total is what N units cost together.
-_MULTI_BUY_RE = re.compile(r"(\d+)\s*för\s*(\d+(?:[.,]\d{1,2})?)\s*(?:kr|:-)?", re.IGNORECASE)
+# "2 för 45 kr" / "3 för 95:-" — the total is what N units cost together. The currency
+# marker is required for the same reason as in _SINGLE_PRICE_RE: "3 för 2" (three for
+# the price of TWO UNITS, no total stated) would otherwise parse as a 0.67 kr offer,
+# poison effective_price in every ranking AND become the product's floor for 84 days.
+_MULTI_BUY_RE = re.compile(r"(\d+)\s*för\s*(\d+(?:[.,]\d{1,2})?)\s*(?:kr|:-)", re.IGNORECASE)
 
 # A bare per-unit price ("Stammispris 20 kr"). The currency marker is required so a
 # stray count ("2 st") can never read as a price. "kr/st" counts as bare: styck IS the
@@ -118,6 +121,19 @@ class IcaExtractor:
             if offer_price >= price:
                 logger.warning(
                     "ICA promotion %r parses to %s >= ordinarie %s - refusing the offer",
+                    offer_details,
+                    offer_price,
+                    price,
+                )
+                offer_price, offer_details = None, None
+            elif offer_price < price * Decimal("0.2"):
+                # The mirror of the inversion guard: a parsed offer below a fifth of
+                # ordinarie is a label artifact, not a campaign — no Swedish grocery
+                # discounts 80 %+, and recording it poisons every kr/unit ranking plus
+                # the 84-day floor. Refused wholesale, same as the inversion.
+                logger.warning(
+                    "ICA promotion %r parses to %s, below 20%% of ordinarie %s - "
+                    "refusing the implausible offer",
                     offer_details,
                     offer_price,
                     price,

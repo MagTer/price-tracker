@@ -136,6 +136,35 @@ class TestCampaignExtraction:
         assert result.offer_type is None
         assert result.offer_details is None
 
+    def test_three_for_the_price_of_two_is_not_a_total(self):
+        # "3 för 2" states three units for the price of TWO UNITS — no kronor anywhere.
+        # Read as a total it would record 0.67 kr, top every ranking as an absurd BEST
+        # and become the product's 84-day floor. The currency marker is mandatory, so
+        # the label falls through to the multi-buy-without-parseable-label refusal.
+        product = _product(promotions=[_promotion("3 för 2", required_quantity=3)])
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+        assert result.offer_details is None
+
+    def test_take_three_pay_for_two_wording_is_refused_too(self):
+        product = _product(promotions=[_promotion("Ta 3 för 2", required_quantity=3)])
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+
+    def test_implausibly_deep_offer_is_refused(self):
+        # The mirror of the inversion guard: a label that parses to under 20 % of
+        # ordinarie ("3 för 2 kr" on a 27.30 product = 0.67) is a parse artifact, not
+        # a campaign — refused wholesale with type and details.
+        product = _product(promotions=[_promotion("3 för 2 kr", required_quantity=3)])
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+        assert result.offer_type is None
+        assert result.offer_details is None
+
     def test_per_measure_label_converts_through_the_jamforpris(self):
         # Live catchweight shape 2026-08-03: chicken ca 925 g, ordinarie 150.91,
         # jämförpris 163.15 kr/kg, campaign "109 kr/kg". The package offer is
