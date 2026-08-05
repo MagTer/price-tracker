@@ -611,6 +611,10 @@ class PriceTrackerService:
                         "unit_price_sek": row.unit_price_sek,
                         # Swedish fallback — MCP and the email surface this as-is.
                         "offer_type": row.offer_type,
+                        # The multi-buy CONDITION ("Välj & blanda! 2 för 99,00") — a
+                        # consumer that omits it states a price that is only real in
+                        # pairs (the v0.41.2 rule).
+                        "offer_details": row.offer_details,
                         "verdict": row.verdict,
                         "savings_per_unit_sek": row.savings_per_unit_sek,
                         # The moment, beside the verdict: cheapest today can still be dear
@@ -619,6 +623,7 @@ class PriceTrackerService:
                         "timing": row.timing,
                         "seen_cheaper_pct": row.seen_cheaper_pct,
                         "lowest_unit_price_sek": row.lowest_unit_price_sek,
+                        "in_stock": row.in_stock,
                     }
                     for row in rows
                 ]

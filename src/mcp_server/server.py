@@ -95,13 +95,20 @@ async def check_price(product_name: str) -> str:
 
 @mcp.tool()
 async def find_deals(store_type: str | None = None) -> str:
-    """Find current offers and discounted products.
+    """Find current offers, each with the tracker's own two judgements.
+
+    Every row carries the VERDICT (is this the cheapest way to buy the product per
+    unit, against its other tracked links) and the TIMING (is this a good moment,
+    against the product's own cheapest observed kr/unit) — the same two judgements
+    the portal's buy list and the weekly email are built on. The store's discount
+    percentage ranks nothing.
 
     Args:
         store_type: Optional filter — "grocery" or "pharmacy".
 
     Returns:
-        Markdown list of current deals sorted by recency.
+        Markdown list of ALL current deals sorted by recency — no cap: a truncated
+        buy list silently drops real wins.
     """
     service = _get_service()
     deals = await service.get_current_deals(store_type=store_type)
@@ -115,14 +122,44 @@ async def find_deals(store_type: str | None = None) -> str:
         "",
     ]
 
-    for deal in deals[:20]:
+    for deal in deals:
         regular = _fmt_price(deal.get("regular_price_sek"))
         offer = _fmt_price(deal.get("offer_price_sek"))
-        lines.append(
+        head = (
             f"- **{deal['product_name']}** hos *{deal['store_name']}*: "
             f"~~{regular}~~ → **{offer}** "
             f"({deal.get('offer_type', 'kampanj')})"
         )
+        if deal.get("offer_details"):
+            head += f" — villkor: {deal['offer_details']}"
+        lines.append(head)
+
+        unit_label = f"kr/{deal['unit']}" if deal.get("unit") else "kr/enhet"
+        facts: list[str] = []
+        verdict = deal.get("verdict")
+        savings = deal.get("savings_per_unit_sek")
+        if verdict == "best":
+            margin = ""
+            if savings:
+                margin = f" ({_fmt_price(savings)} {unit_label} under näst bästa länk)"
+            facts.append(f"billigaste sättet att köpa produkten{margin}")
+        elif verdict == "worse":
+            facts.append(
+                "en annan länk är billigare per enhet"
+                + (f" ({_fmt_price(abs(savings))} {unit_label} dyrare)" if savings else "")
+            )
+        else:
+            facts.append("kan inte jämföras (länken eller syskonen saknar mängd)")
+        timing = deal.get("timing")
+        pct = deal.get("seen_cheaper_pct")
+        if timing == "poor" and pct is not None:
+            floor = _fmt_price(deal.get("lowest_unit_price_sek"))
+            facts.append(f"dåligt läge: har varit {round(pct)} % billigare ({floor} {unit_label})")
+        elif timing == "good":
+            facts.append("bra läge: nära produktens egen lägstanivå")
+        if deal.get("in_stock") is False:
+            facts.append("butiken anger slut i lager")
+        lines.append(f"  - {'; '.join(facts)}")
 
     return "\n".join(lines)
 

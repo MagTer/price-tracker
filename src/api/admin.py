@@ -1985,6 +1985,9 @@ async def get_current_deals(
                 lowest_unit_price_sek=row.lowest_unit_price_sek,
                 lowest_seen_at=row.lowest_seen_at.isoformat() if row.lowest_seen_at else None,
                 lowest_store=row.lowest_store,
+                highest_unit_price_sek=row.highest_unit_price_sek,
+                in_stock=row.in_stock,
+                floor_is_manual=row.floor_is_manual,
             )
             for row in rows
         ]

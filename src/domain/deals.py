@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
+from domain.link_health import broken_links
 from domain.models import PricePoint, Product, ProductStore, Store, link_store_name
 from domain.pricing import unit_price_py
 
@@ -142,11 +143,19 @@ def classify_timing(unit_price_sek: float | None, lowest_unit_price_sek: float |
 
 @dataclass(frozen=True)
 class _Floor:
-    """The lowest kr/unit observed for one product, and where it was seen."""
+    """The observed kr/unit span for one product: the floor, where it was seen, and the high.
+
+    ``is_manual`` marks a floor set by a hand-recorded price (raw_data source "manual") —
+    a förbokning that existed for one week and cannot be bought again. Consumers that DROP
+    poor rows (the weekly email) keep those instead: demoting a real campaign for twelve
+    weeks because of a price no shelf ever carried again is the opposite of a buy list.
+    """
 
     unit_price_sek: float
     seen_at: datetime
     store_name: str
+    is_manual: bool
+    high_unit_price_sek: float
 
 
 @dataclass(frozen=True)
@@ -180,6 +189,14 @@ class DealRow:
     lowest_unit_price_sek: float | None = None
     lowest_seen_at: datetime | None = None
     lowest_store: str | None = None
+    # The other end of the observed span — same 84-day window, same walk as the floor, so
+    # the portal's span bar and the timing judgement can never disagree about history.
+    highest_unit_price_sek: float | None = None
+    # What the store said about the shelf on the deal's own latest point. Consumers MARK
+    # an out-of-stock row ("mark, never hide" — the stale-row rule); the alternatives map
+    # already excludes such links, because a shelf that is empty beats nothing.
+    in_stock: bool = True
+    floor_is_manual: bool = False
 
 
 def _rounded_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
@@ -200,12 +217,16 @@ def _effective(price_point: PricePoint) -> Decimal | None:
 async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uuid.UUID, _Floor]:
     """The lowest kr/unit observed per product inside the window — the buy list's floor.
 
-    This is the same number the portal's span bar draws as its low end, and it is computed
-    the same way: the minimum over every observation of every link, effective price over the
-    link's amount. (The bar's low comes from ``stats.py``'s min-across-links step series;
-    the minimum of that series IS the single lowest observation, because nothing can be
-    below the global minimum at the moment it is recorded. The HIGH end does not reduce that
-    way — which is one more reason the judgement never uses it.)
+    The HIGH end of the same walk rides along as the span the portal's bar draws, so the
+    bar and the timing judgement read the SAME window by construction — they used to read
+    different ones (the bar took whatever period the statistics picker last held) and could
+    make opposite claims about one row.
+
+    A product needs at least TWO observations with a computable kr/unit before it gets a
+    floor at all. With one, the deal's own point is the floor and ``timing`` would announce
+    "at its own floor — what a genuine campaign looks like" from a single data point; the
+    span bar and ``stats.change_pct`` already refuse exactly that claim, and this is the
+    third component on the same row.
 
     INACTIVE links count. The question is "have I seen this cheaper", which is about a price
     that was really charged, not about a shelf we can still reach today — that is the
@@ -220,18 +241,32 @@ async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uu
         .where(PricePoint.checked_at >= cutoff)
     )
     floors: dict[uuid.UUID, _Floor] = {}
+    observations: dict[uuid.UUID, int] = {}
     for point, link, store in (await session.execute(stmt)).all():
         value = _rounded_unit_price(_effective(point), link.package_quantity)
         if value is None:
             continue
+        observations[link.product_id] = observations.get(link.product_id, 0) + 1
         current = floors.get(link.product_id)
+        high = max(value, current.high_unit_price_sek) if current else value
         if current is None or value < current.unit_price_sek:
+            raw = point.raw_data if isinstance(point.raw_data, dict) else {}
             floors[link.product_id] = _Floor(
                 unit_price_sek=value,
                 seen_at=point.checked_at,
                 store_name=link_store_name(link, store),
+                is_manual=raw.get("source") == "manual",
+                high_unit_price_sek=high,
             )
-    return floors
+        elif high > current.high_unit_price_sek:
+            floors[link.product_id] = _Floor(
+                unit_price_sek=current.unit_price_sek,
+                seen_at=current.seen_at,
+                store_name=current.store_name,
+                is_manual=current.is_manual,
+                high_unit_price_sek=high,
+            )
+    return {pid: f for pid, f in floors.items() if observations.get(pid, 0) >= 2}
 
 
 async def current_deals(session: AsyncSession, store_type: str | None = None) -> list[DealRow]:
@@ -309,7 +344,16 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
             .where(ProductStore.is_active.is_(True))
             .where(ProductStore.product_id.in_(product_ids))
         )
-        for alt_ps, alt_store, alt_pp in (await session.execute(alt_stmt)).all():
+        alt_rows = (await session.execute(alt_stmt)).all()
+        # Two more reasons a link cannot veto a real deal, both about whether the shelf
+        # EXISTS: a page whose last three non-blocked checks all failed (link_health's
+        # judgement — a 404 from February holding a January price), and a latest point
+        # the store itself marked out of stock. The FLOOR keeps counting both — "have I
+        # seen it cheaper" is about a price that was charged, not a shelf reachable now.
+        unhealthy = await broken_links(session, [ps.id for ps, _, _ in alt_rows])
+        for alt_ps, alt_store, alt_pp in alt_rows:
+            if alt_ps.id in unhealthy or alt_pp.in_stock is False:
+                continue
             alt_unit_price = _rounded_unit_price(_effective(alt_pp), alt_ps.package_quantity)
             if alt_unit_price is None:
                 continue
@@ -369,6 +413,9 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 lowest_unit_price_sek=floor_price,
                 lowest_seen_at=floor.seen_at if floor else None,
                 lowest_store=floor.store_name if floor else None,
+                highest_unit_price_sek=floor.high_unit_price_sek if floor else None,
+                in_stock=price_point.in_stock,
+                floor_is_manual=floor.is_manual if floor else False,
             )
         )
 

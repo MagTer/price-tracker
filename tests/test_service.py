@@ -298,7 +298,9 @@ class TestPriceTrackerService:
             (price_24, link_24, mock_store),
             (price_8, link_8, mock_store),
         ]
-        mock_session.execute.side_effect = [mock_result, alt_result, floor_result]
+        health_result = MagicMock()  # link-health query (v0.50.0): nothing broken
+        health_result.all.return_value = []
+        mock_session.execute.side_effect = [mock_result, alt_result, health_result, floor_result]
 
         service = PriceTrackerService(mock_session_factory)
         deals = await service.get_current_deals()

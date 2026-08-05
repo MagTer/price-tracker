@@ -27,7 +27,7 @@ from domain.deals import (
     deal_savings,
     seen_cheaper_pct,
 )
-from domain.models import PricePoint, Product, ProductStore, Store
+from domain.models import CheckAttempt, PricePoint, Product, ProductStore, Store
 from domain.tenant import DEFAULT_TENANT_ID
 
 
@@ -270,6 +270,7 @@ class TestTheFloorComesFromRealHistory:
         db_session.add_all(
             [
                 self._point(link, "39.90", offer="20.00", days_ago=PRICE_LOW_WINDOW_DAYS + 1),
+                self._point(link, "39.90", days_ago=5),
                 self._point(link, "39.90", offer="29.90"),
             ]
         )
@@ -300,3 +301,123 @@ class TestTheFloorComesFromRealHistory:
         assert deal.verdict == DEAL_UNKNOWN, "the inactive link is no alternative"
         assert deal.timing == TIMING_POOR
         assert deal.lowest_unit_price_sek == pytest.approx(10.00)
+
+    @pytest.mark.asyncio
+    async def test_a_single_observation_is_no_floor(self, db_session) -> None:
+        """A product whose only in-window observation is the deal itself must answer
+        `unknown`, not `good`: "at its own floor — what a genuine campaign looks like"
+        from one data point is the confident claim the span bar and stats.change_pct
+        already refuse on the same row."""
+        product, store = await self._product(db_session, "Ny produkt 500g")
+        link = await self._link(db_session, product, store, "0.5")
+        db_session.add(self._point(link, "48.90", offer="37.80"))
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.timing == TIMING_UNKNOWN
+        assert deal.lowest_unit_price_sek is None
+        assert deal.seen_cheaper_pct is None
+
+    @pytest.mark.asyncio
+    async def test_the_span_high_rides_the_same_window_as_the_floor(self, db_session) -> None:
+        """The portal's span bar draws lowest..highest off the DEAL row — same 84-day
+        walk as the floor, so the bar and `timing` can never disagree about history."""
+        product, store = await self._product(db_session, "Kaffe 450g")
+        link = await self._link(db_session, product, store, "0.45")
+        db_session.add_all(
+            [
+                self._point(link, "79.90", days_ago=30),  # 177,56 kr/kg — the high
+                self._point(link, "67.90", offer="49.50", days_ago=9),  # 110,00 — the floor
+                self._point(link, "67.90", offer="65.00"),  # today: 144,44
+            ]
+        )
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.lowest_unit_price_sek == pytest.approx(110.00)
+        assert deal.highest_unit_price_sek == pytest.approx(177.56, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_a_manual_floor_is_flagged(self, db_session) -> None:
+        """A floor set by a hand-recorded price (a one-off förbokning) is marked so the
+        weekly email can keep the demoted row — a price no shelf carries again must not
+        silence twelve weeks of genuine campaigns."""
+        product, store = await self._product(db_session, "Toapapper 32p")
+        link = await self._link(db_session, product, store, "32")
+        manual = self._point(link, "162.00", offer="109.00", days_ago=10)
+        manual.raw_data = {"source": "manual"}
+        db_session.add_all(
+            [
+                manual,  # 3,41 kr/st — the förbokning floor
+                self._point(link, "162.00", offer="129.00"),  # today: 4,03 kr/st, 18 % above
+            ]
+        )
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.timing == TIMING_POOR
+        assert deal.floor_is_manual is True
+
+    @pytest.mark.asyncio
+    async def test_an_out_of_stock_link_is_no_alternative(self, db_session) -> None:
+        """A latest point the store marked out of stock cannot veto a buyable deal:
+        an empty shelf beats nothing. The deal row itself carries in_stock so
+        consumers can MARK (never hide) a sold-out deal."""
+        product, store = await self._product(db_session, "Tandkräm 75ml")
+        deal_link = await self._link(db_session, product, store, "0.075")
+        sold_out = await self._link(db_session, product, store, "0.075")
+
+        cheap_but_gone = self._point(sold_out, "15.00", days_ago=1)  # 200 kr/l — cheapest
+        cheap_but_gone.in_stock = False
+        db_session.add_all(
+            [
+                cheap_but_gone,
+                self._point(deal_link, "30.00", offer="22.50"),  # 300 kr/l on offer
+            ]
+        )
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.in_stock is True
+        assert deal.verdict == DEAL_UNKNOWN, "the sold-out link must not judge the deal WORSE"
+        # The floor keeps counting the sold-out observation — the price WAS charged.
+        assert deal.timing == TIMING_POOR
+        assert deal.lowest_unit_price_sek == pytest.approx(200.00)
+
+    @pytest.mark.asyncio
+    async def test_a_broken_link_is_no_alternative(self, db_session) -> None:
+        """A page whose last three non-blocked checks all failed (link_health's
+        judgement) is a 404 holding a stale price — it must not veto a real deal.
+        Broken links retry every morning and are never auto-retired, so without this
+        a dead February URL judges August campaigns forever."""
+        product, store = await self._product(db_session, "Diskmedel 500ml")
+        deal_link = await self._link(db_session, product, store, "0.5")
+        broken = await self._link(db_session, product, store, "0.5")
+
+        db_session.add_all(
+            [
+                self._point(broken, "10.00", days_ago=90),  # frozen cheap price, out of window
+                self._point(broken, "10.00", days_ago=40),  # ...and one inside the window
+                self._point(deal_link, "30.00", offer="24.00"),
+                self._point(deal_link, "30.00", days_ago=7),
+            ]
+        )
+        for days_ago in (3, 2, 1):
+            db_session.add(
+                CheckAttempt(
+                    store_id=store.id,
+                    product_store_id=broken.id,
+                    checked_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days_ago),
+                    outcome="fetch_failed",
+                    source="scheduler",
+                    detail="HTTP 404",
+                )
+            )
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.product_store_id == deal_link.id
+        assert deal.verdict == DEAL_UNKNOWN, "the dead link must not judge the deal"
+        # ...while its recorded history still counts toward the floor.
+        assert deal.timing == TIMING_POOR
+        assert deal.lowest_unit_price_sek == pytest.approx(20.00)

@@ -349,6 +349,13 @@ class PriceNotifier:
                 f'<br><span style="color: #b45309; font-size: 0.85em;">'
                 f"{html.escape(seen_text)}</span>"
             )
+        # The store's own stock word on the latest point — marked, never hidden (the
+        # stale-row rule): the row may still be worth the trip, but not unannounced.
+        if deal.in_stock is False:
+            verdict_cell += (
+                '<br><span style="color: #b45309; font-size: 0.85em;">'
+                "butiken anger slut i lager</span>"
+            )
 
         return f"""
                 <tr>

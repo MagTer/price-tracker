@@ -628,10 +628,15 @@ class PriceCheckScheduler:
             # information, not news; and neither is one the same product has been 10 %+
             # cheaper at inside the window, however cheapest-today it is. Both judgements
             # come from domain/deals.py; grouping per butik is the notifier's job.
+            # EXCEPT a poor row whose floor is a hand-recorded price (a one-off
+            # förbokning): that floor cannot be bought again, and dropping the row would
+            # let one manual note silence the product's genuine campaigns for twelve
+            # weeks. It rides along and the notifier prints the "har varit X % billigare"
+            # caveat, so the reader sees both facts.
             deals = [
                 d
                 for d in await current_deals(session)
-                if d.verdict != DEAL_WORSE and d.timing != TIMING_POOR
+                if d.verdict != DEAL_WORSE and (d.timing != TIMING_POOR or d.floor_is_manual)
             ]
             watched_products = await self._watched_products_summary(session)
 

@@ -2193,12 +2193,17 @@ function dealVerdictHtml(d) {
 // a different question from the margin: not "is it the cheapest anywhere" but "is this the
 // right MOMENT". They can point opposite ways, and that is the point.
 //
+// The span comes FROM THE DEAL ROW (lowest/highest over deals.py's 84-day floor window),
+// not from /stats: the bar and the timing judgement must read the SAME window, and the
+// stats period is whatever the Prisutveckling picker last held — a 4-week pick there made
+// this bar and the "har varit X % billigare" note state opposite things about one row.
+//
 // When high == low (one observation, or all of them equal) NO bar is drawn — a bar without a
 // span would claim a position that does not exist. Same rule domain/stats.py already follows:
 // one observation is not a trend, so change_pct is None rather than 0.
-function dealSpanHtml(d, stat) {
-    const low = stat ? stat.low_unit_price : null;
-    const high = stat ? stat.high_unit_price : null;
+function dealSpanHtml(d) {
+    const low = d.lowest_unit_price_sek;
+    const high = d.highest_unit_price_sek;
     const now = d.unit_price_sek;
     // Three reasons no bar can be drawn, each named truthfully: a missing amount is a GAP
     // (the "kan inte jämföras" verdict beside it says the same), one observation is short
@@ -2206,11 +2211,6 @@ function dealSpanHtml(d, stat) {
     // either of the last two "en observation" misstates what we know.
     if (now == null) {
         return `<div class="span-note">inget jfr-pris ${DASH} länken saknar mängd</div>`;
-    }
-    if (statsData === null) {
-        // /stats failed or has not answered: "en observation" would be a confident
-        // claim about history we could not read — the em-dash rule, not a guess.
-        return `<div class="span-note">historiken kunde inte laddas</div>`;
     }
     if (low == null || high == null) {
         return `<div class="span-note">en observation ${DASH} inget spann än</div>`;
@@ -2222,8 +2222,7 @@ function dealSpanHtml(d, stat) {
     const isLow = pos <= 1 / 3;
     let note, noteClass;
     if (pos <= 0.02) {
-        const since = statsData && statsData.period ? formatDay(statsData.period.first_observation) : '';
-        note = since ? 'lägsta noterade sedan ' + since : 'lägsta noterade';
+        note = 'lägsta noterade på 12 veckor';
         noteClass = 'span-note is-low';
     } else if (isLow) {
         note = 'nära lägsta noterade';
@@ -2263,6 +2262,8 @@ function dealMetaHtml(d) {
     // An offer seen days ago may already be over — the deals window is 7 days wide while
     // most links are checked weekly. Say so; never hide the row.
     if (isDealStale(d)) parts.push('kan ha hunnit ta slut');
+    // The store's own stock word — marked, never hidden, same rule as the stale caveat.
+    if (d.in_stock === false) parts.push('butiken anger slut i lager');
     if (d.offer_type && d.offer_type !== 'kampanj') parts.push(d.offer_type);
     if (d.price_sek != null) parts.push('ordinarie ' + kr(d.price_sek));
     // The store's own framing, kept as metadata and never as the ranking — whole percent
@@ -2271,9 +2272,8 @@ function dealMetaHtml(d) {
     return `<div class="deal-meta">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
-function dealRowHtml(d, spans) {
+function dealRowHtml(d) {
     const unknown = classifyDeal(d) === DEAL_UNKNOWN;
-    const stat = spans[d.product_id];
     const pkg = d.package_size ? ` <span class="deal-pkg">${escapeHtml(d.package_size)}</span>` : '';
     const terms = d.offer_details
         ? `<div class="deal-terms">${escapeHtml(d.offer_details)}</div>`
@@ -2287,7 +2287,7 @@ function dealRowHtml(d, spans) {
             ${terms}
         </div>
         <div class="deal-right">
-            <div class="deal-span">${dealSpanHtml(d, stat)}</div>
+            <div class="deal-span">${dealSpanHtml(d)}</div>
             <div class="deal-price">
                 <div class="deal-price-main">${escapeHtml(kr(d.offer_price_sek))}</div>
                 <div class="deal-unit">${escapeHtml(unitKr(d.unit_price_sek, d.unit))}</div>
@@ -2333,12 +2333,6 @@ function buyableDeals() {
 
 function dealsInStore(rows) {
     return storeFilter ? rows.filter(d => d.store_name === storeFilter) : rows;
-}
-
-function spansByProduct() {
-    const map = {};
-    for (const p of ((statsData && statsData.products) || [])) map[p.product_id] = p;
-    return map;
 }
 
 // The korgremsa. Pill counts, the subtotals, the total and the closing sentence are ALL
@@ -2414,7 +2408,6 @@ function renderBasketStrip() {
 function renderDeals() {
     const container = document.getElementById('deals-table-container');
     if (!container) return;
-    const spans = spansByProduct();
     const groups = rankDeals(allDeals);
     const top = dealsInStore(groups.best.concat(groups.unknown));
     const poor = dealsInStore(groups.poor);
@@ -2437,7 +2430,7 @@ function renderDeals() {
 
     let html = '';
     if (top.length) {
-        html += '<div class="card list-flat">' + top.map(d => dealRowHtml(d, spans)).join('') + '</div>';
+        html += '<div class="card list-flat">' + top.map(d => dealRowHtml(d)).join('') + '</div>';
     } else {
         // A page with nothing to recommend says so in a sentence rather than showing an
         // empty table and letting the reader wonder whether it loaded.
@@ -2454,7 +2447,7 @@ function renderDeals() {
             ? 'Ett erbjudande till, men du har sett det billigare'
             : `${numberWord(poor.length, true)} erbjudanden till, men du har sett dem billigare`;
         html += `<details class="deal-extra"><summary>&#9656; ${escapeHtml(label)}</summary>`
-            + '<div class="card list-flat">' + poor.map(d => dealRowHtml(d, spans)).join('') + '</div>'
+            + '<div class="card list-flat">' + poor.map(d => dealRowHtml(d)).join('') + '</div>'
             + '</details>';
     }
     if (worse.length) {
@@ -2463,7 +2456,7 @@ function renderDeals() {
             ? `${word} kampanj till, men den är inte billigast per enhet`
             : `${word} kampanjer till, men de är inte billigast per enhet`;
         html += `<details class="deal-extra"><summary>&#9656; ${escapeHtml(label)}</summary>`
-            + '<div class="card list-flat">' + worse.map(d => dealRowHtml(d, spans)).join('') + '</div>'
+            + '<div class="card list-flat">' + worse.map(d => dealRowHtml(d)).join('') + '</div>'
             + '</details>';
     }
     container.innerHTML = html;
@@ -2731,10 +2724,9 @@ async function loadStatistics() {
         const weeks = document.getElementById('stats-period').value;
         statsData = await apiGet('/stats?weeks=' + encodeURIComponent(weeks));
         renderStatistics();
-        // /stats carries three things no other endpoint does: the price spans Att köpa's
-        // bars need, the validator's findings, and the coverage counts. Everything that
-        // reads them re-renders here.
-        renderDeals();
+        // /stats carries two things no other endpoint does: the validator's findings and
+        // the coverage counts. (Att köpa's span bars ride on the /deals rows themselves
+        // since v0.50.0 — same 84-day window as the timing judgement, by construction.)
         renderLuckor();
         updateIssueBadges();
     } catch (e) {

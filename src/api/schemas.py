@@ -283,6 +283,15 @@ class DealResponse(BaseModel):
     lowest_unit_price_sek: float | None
     lowest_seen_at: str | None
     lowest_store: str | None
+    # The high end of the same 84-day walk that produced the floor — the portal's span
+    # bar draws lowest..highest so the bar and `timing` can never disagree on history.
+    highest_unit_price_sek: float | None
+    # What the store said about the shelf on this latest point. Marked, never hidden.
+    in_stock: bool
+    # True when the floor was set by a hand-recorded price (a one-off förbokning): the
+    # weekly email keeps such "poor" rows — a price no shelf carries again must not
+    # silence twelve weeks of genuine campaigns.
+    floor_is_manual: bool
 
 
 __all__ = [

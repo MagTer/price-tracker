@@ -1341,6 +1341,8 @@ class TestDealsEndpoints:
                     (ps8, store, pp8),
                 ]
             ),
+            # The link-health query (v0.50.0): no attempts recorded, nothing broken.
+            _rows([]),
             # The floor query (every point in the window). Coherent with the rows above:
             # the 24-pack's 5,00 kr/st IS the product's floor, so it buys at a good moment
             # while the 8-pack sits 24 % above it.
@@ -1419,6 +1421,7 @@ class TestDealsEndpoints:
         mock_session.execute.side_effect = [
             _rows([(pp_offer, ps_offer, product, willys)]),
             _rows([(ps_offer, willys, pp_offer), (ps_cheap, ica, pp_cheap)]),
+            _rows([]),  # link-health query (v0.50.0): nothing broken
             _rows([(pp_offer, ps_offer, willys), (pp_cheap, ps_cheap, ica)]),
         ]
 
