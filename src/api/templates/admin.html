@@ -921,6 +921,12 @@
 .deal-name:hover { color: var(--primary); text-decoration: underline; }
 .is-unknown .deal-name { color: var(--neutral-chip-fg); }
 .deal-pkg { font-weight: 400; color: var(--text-faint); font-size: 16px; }
+/* Name, förpackning and the offer's own villkor on one baseline. The villkor sat at the
+   BOTTOM of the row, under the metadata, which is the last place a swept row is read —
+   and it is a CONDITION on the price printed to its right ("2 för 99,00" is not a per-unit
+   price you can just walk up and pay). It wraps rather than truncates: shortening it to a
+   badge like "Max 2" drops which condition applies. */
+.deal-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; }
 .deal-verdict { font-size: 13.5px; color: var(--text-secondary); margin-top: 3px; }
 .deal-pct { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
 .deal-verdict.no-compare { color: var(--text-faint); }
@@ -943,8 +949,10 @@
     background: var(--warning-chip-bg);
     padding: 3px 9px;
     border-radius: 6px;
-    margin-top: 7px;
 }
+/* Quieter than the verdict it replaced at the head of the meta line: the butik is where
+   you go, not what you decide. */
+.deal-store a { color: var(--text-muted); }
 .deal-span { flex: 0 1 240px; min-width: 132px; }
 /* The bar earned a label of its own once it became the row's only graphic. */
 .span-label {
@@ -998,6 +1006,10 @@
 .p-row:last-child { border-bottom: 0; }
 .p-row:hover { background: var(--hover); }
 .p-main { flex: 1 1 240px; min-width: 220px; }
+/* The badge belongs to the PRODUCT, so it sits beside the name. On the right it was
+   right-aligned against the price column, which read as a property of the butik it stood
+   next to — and it moved horizontally from row to row with the price's width. */
+.p-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px; }
 /* The product NAME carries the visible affordance and is a real <button>, so it takes
    focus and answers Enter; the rest of the row is a quiet convenience target. */
 .p-name {
@@ -1083,6 +1095,19 @@
     color: var(--warning-link);
 }
 .group-head.is-warn { color: var(--warning); }
+/* Which chains the product IS at, and which it is not. The missing ones are dashed rather
+   than coloured: an absent link is not an error, it is a comparison that cannot happen. */
+.cover-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-static {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--neutral-chip-fg);
+    white-space: nowrap;
+}
+.chip-static.is-missing { border-style: dashed; color: var(--text-faint); background: var(--hover); }
 
 /* --- Fel & luckor. The silent errors sit at the top and in red because their entire
    failure mode is that they are not heard: the check reported "ok", the price is
@@ -1362,12 +1387,11 @@ form { padding: 20px; }
         column-gap: 10px;
         grid-template-areas:
             "name  price"
+            "unit  unit"
+            "verdict verdict"
             "moment moment"
             "meta  meta"
-            "terms terms"
-            "span  span"
-            "unit  unit"
-            "verdict verdict";
+            "span  span";
         padding: 12px;
         border: 1px solid var(--border);
         border-radius: 10px;
@@ -1383,20 +1407,12 @@ form { padding: 20px; }
     /* Named, not auto-placed: an unplaced item in a grid with explicit areas lands in an
        implicit row of its own and shoves the whole card about. */
     .deal-moment { grid-area: moment; }
-    .deal-terms { grid-area: terms; justify-self: start; }
     .deal-span { grid-area: span; min-width: 0; margin-top: 9px; }
-    .deal-unit {
-        grid-area: unit;
-        /* The foot reads left-to-right: jfr-pris, then the verdict sentence. Without this
-           it inherits the price zone's right alignment. */
-        text-align: left;
-        margin-top: 9px;
-        padding-top: 9px;
-        border-top: 1px solid var(--row-line);
-        font-size: 13px;
-        font-weight: 700;
-    }
-    .deal-verdict { grid-area: verdict; margin-top: 4px; font-size: 12.5px; }
+    /* Under the price it belongs to, not in a foot of its own. The foot existed to hold
+       jfr-pris AND the verdict sentence side by side; a BEST row has no sentence any more
+       (v0.53.1), so the rule and the padding were framing an empty band. */
+    .deal-unit { grid-area: unit; text-align: right; margin-top: 3px; font-size: 13px; font-weight: 700; }
+    .deal-verdict { grid-area: verdict; margin-top: 6px; font-size: 12.5px; }
 
     /* Name and price on one baseline, then the metadata and the chip, then the winning
        link and the two actions. Same technique as the offer card: the desktop wrappers
@@ -1410,15 +1426,16 @@ form { padding: 20px; }
         row-gap: 4px;
         grid-template-areas:
             "name  price"
-            "meta  tag"
+            "meta  meta"
             "best  act";
         padding: 12px;
     }
     .p-main, .p-right, .p-price { display: contents; }
-    .p-name { grid-area: name; align-self: baseline; }
+    /* The badge travels WITH the name (it is the product's), so the head stays one flex
+       box inside the name area instead of being placed in a column of its own. */
+    .p-head { grid-area: name; align-self: baseline; }
     .p-unit { grid-area: price; justify-self: end; font-size: 15px; }
     .p-meta { grid-area: meta; }
-    .p-right > .badge { grid-area: tag; justify-self: end; align-self: center; }
     .p-best { grid-area: best; text-align: left; }
     /* Context columns fold away rather than squeezing the table into an unreadable
        ribbon: name, price and the change are what a phone is asked for. */
@@ -1905,11 +1922,13 @@ function buildProductsList(products, filtered) {
             .filter(Boolean).join(' · ');
         html += `<div class="p-row" data-action="links" data-id="${escapeHtml(p.id)}">
             <div class="p-main">
-                <button type="button" class="p-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>
+                <div class="p-head">
+                    <button type="button" class="p-name" data-action="links" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>
+                    ${productTagHtml(p)}
+                </div>
                 <div class="p-meta">${escapeHtml(meta)}</div>
             </div>
             <div class="p-right">
-                ${productTagHtml(p)}
                 <div class="p-price">${productPriceHtml(p)}</div>
                 <div class="p-actions">
                     <button class="action-btn" data-action="history" data-id="${escapeHtml(p.id)}">Historik</button>
@@ -2107,9 +2126,12 @@ function renderProductChips() {
         chips.push(`<button type="button" class="chip${scope === type ? ' active' : ''}" `
             + `data-chip="scope" data-value="${type}">${label} ${n}</button>`);
     }
+    // "Luckor" (needs_amount) is deliberately NOT here: a link without a mängd is fixed by
+    // typing the amount, and that field lives on Fel & luckor, one row per gap, saved in
+    // place. A chip here only narrowed a list you then had to leave anyway — two pages
+    // owning one to-do list, with the second one holding the only affordance that closes it.
     const statuses = [
         ['offer', 'Har erbjudande', ''],
-        ['needs_amount', 'Luckor', 'chip-warn'],
         ['no_price', 'Saknar pris', ''],
         ['broken', 'Trasig länk', 'chip-warn']
     ];
@@ -2194,6 +2216,10 @@ function restoreProductFilters() {
                 if (typeof saved[key] === 'string') productFilters[key] = saved[key];
             }
         }
+        // A status no chip offers any more would filter the list with nothing on screen
+        // saying so, and no control to switch it off — an invisible filter is worse than
+        // a stale one. (needs_amount moved to Fel & luckor.)
+        if (productFilters.status === 'needs_amount') productFilters.status = '';
         const savedScope = sessionStorage.getItem(SCOPE_STORAGE);
         if (savedScope === 'grocery' || savedScope === 'pharmacy') scope = savedScope;
     } catch (e) { productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS); }
@@ -2279,10 +2305,24 @@ function isDealStale(d) {
 // earlier draft: there the number and the span bar read as two competing scores for the same
 // row, and the percentage won by sitting first and being biggest. In a sentence it has a
 // subject and an object and cannot be mistaken for the bar's message.
+// A BEST row says nothing here, and that is the point (v0.53.1). "31 % billigare per kg än
+// Willys 500 g" was the row's loudest line while every row under "Värt att köpa" is best by
+// construction — the heading already says it, and the margin's real job is the ORDER, which
+// a list expresses by being a list. The span bar answers the question the reader actually
+// arrives with ("is this a good price?"), and two graphics-plus-a-sentence competing to be
+// the row's single verdict is what made the row hard to sweep.
+//
+// The other two verdicts keep their sentence, because nothing else on the row carries it:
+// WORSE is the whole reason the row was demoted (the span bar is TIME — it cannot say
+// another link is cheaper right now), and UNKNOWN names a gap plus the fix for it.
+//
+// The butik moved to the meta line for every row, so it is in one place regardless of
+// verdict — it used to be the tail of this sentence, which is why removing the sentence
+// had to move it rather than drop it: that link is the way OUT to the store's own page.
 function dealVerdictHtml(d) {
     const unit = d.unit || 'enhet';
-    const store = storeLinkHtml(d.store_name, d.product_url);
     const kind = classifyDeal(d);
+    if (kind === DEAL_BEST) return '';
     if (kind === DEAL_UNKNOWN) {
         // NOT "enda länken": best_alt is also null when sibling links exist but none is
         // comparable (no mängd on them) — that wording hid the actual fix.
@@ -2292,18 +2332,12 @@ function dealVerdictHtml(d) {
         const fix = d.unit_price_sek == null
             ? ' <button type="button" class="deal-fix" data-deal-action="gaps">Ange mängd</button>'
             : '';
-        return `<div class="deal-verdict no-compare">${why}${fix} ${store}</div>`;
+        return `<div class="deal-verdict no-compare">${why}${fix}</div>`;
     }
     const pct = dealMarginPct(d);
-    if (kind === DEAL_BEST) {
-        const lead = (pct && pct > 0.05)
-            ? `<span class="deal-pct">${formatMargin(pct)}</span> billigare per ${escapeHtml(unit)} än ${escapeHtml(dealAltLabel(d))}.`
-            : `Lika billigt per ${escapeHtml(unit)} som ${escapeHtml(dealAltLabel(d))}.`;
-        return `<div class="deal-verdict">${lead} ${store}</div>`;
-    }
     return '<div class="deal-verdict">'
         + `<span class="deal-pct is-bad">${formatMargin(pct || 0)}</span> dyrare per ${escapeHtml(unit)} `
-        + `än ${escapeHtml(dealAltLabel(d))}. ${store}</div>`;
+        + `än ${escapeHtml(dealAltLabel(d))}.</div>`;
 }
 
 // Where this price sits between the product's own lowest and highest observed kr/unit —
@@ -2373,6 +2407,9 @@ function dealMomentHtml(d) {
         + `${escapeHtml(where)}.</div>`;
 }
 
+// Butiken first, as the link out to the store's own page — it used to close the verdict
+// sentence, and a BEST row no longer has one. Everything after it is escaped text; the
+// link is not, so the two are concatenated rather than joined.
 function dealMetaHtml(d) {
     const parts = [];
     if (d.checked_at) parts.push('sett ' + (formatShortWhen(d.checked_at) || ''));
@@ -2386,7 +2423,9 @@ function dealMetaHtml(d) {
     // The store's own framing, kept as metadata and never as the ranking — whole percent
     // is all the precision it deserves.
     if (d.discount_percent) parts.push(Math.round(d.discount_percent) + '\u202f% rabatt');
-    return `<div class="deal-meta">${escapeHtml(parts.join(' · '))}</div>`;
+    const store = `<span class="deal-store">${storeLinkHtml(d.store_name, d.product_url)}</span>`;
+    const rest = parts.length ? ' &#183; ' + escapeHtml(parts.join(' · ')) : '';
+    return `<div class="deal-meta">${store}${rest}</div>`;
 }
 
 function dealRowHtml(d) {
@@ -2397,11 +2436,10 @@ function dealRowHtml(d) {
         : '';
     return `<div class="deal-row${unknown ? ' is-unknown' : ''}">
         <div class="deal-main">
-            <div class="deal-head"><button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}</div>
+            <div class="deal-head"><button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}${terms}</div>
             ${dealVerdictHtml(d)}
             ${dealMomentHtml(d)}
             ${dealMetaHtml(d)}
-            ${terms}
         </div>
         <div class="deal-right">
             <div class="deal-span">${dealSpanHtml(d)}</div>
@@ -3201,22 +3239,90 @@ function buildSilentErrors(counts, q) {
         + 'en vägg är butikens tillstånd, inte vårt.</div></div>';
 }
 
-function buildLuckorCounters(coverage) {
+// A count on this page is a way into the list it counts, and that list is HERE — the two
+// clickable boxes scroll to their own section instead of navigating to Produkter with a
+// facet preset. Fel & luckor is the to-do list; sending the reader to a filtered product
+// table put the work on one page and the number on another, and the product table has no
+// affordance that closes any of it.
+//
+// The two right-hand figures have no list because they have no per-row action: "aldrig
+// kollade" resolves itself the moment the scheduler reaches them, and the oldest check is
+// a single number about the whole tracker. They are context, and they are not clickable —
+// a box that looks pressable and does nothing is worse than a plain figure.
+function buildLuckorCounters(coverage, singleChainCount) {
     const stale = coverage.stalest_days != null ? coverage.stalest_days + ' dygn' : DASH;
+    const box = (value, label, warn, target) => {
+        const cls = 'stat-box' + (warn ? ' is-warning' : '') + (target ? ' clickable' : '');
+        const attr = target ? ` data-issue-goto="${target}"` : '';
+        return `<div class="${cls}"${attr}><div class="stat-value">${value}</div>`
+            + `<div class="stat-label">${label}</div></div>`;
+    };
     return '<div class="stat-grid stat-grid-4">'
-        + '<div class="stat-box is-warning clickable" data-issue-filter="needs_amount">'
-        + `<div class="stat-value">${coverage.links_without_amount}</div>`
-        + '<div class="stat-label">Länkar utan mängd</div></div>'
-        + '<div class="stat-box">'
-        + `<div class="stat-value">${coverage.products_single_store}</div>`
-        + '<div class="stat-label">Produkter i bara en butik</div></div>'
-        + '<div class="stat-box">'
-        + `<div class="stat-value">${coverage.links_never_checked}</div>`
-        + '<div class="stat-label">Länkar aldrig kollade</div></div>'
-        + '<div class="stat-box">'
-        + `<div class="stat-value">${escapeHtml(stale)}</div>`
-        + '<div class="stat-label">Äldsta kontroll</div></div>'
+        + box(coverage.links_without_amount, 'Länkar utan mängd', true, 'gap-amounts')
+        + box(singleChainCount, 'Produkter i bara en kedja', false, 'gap-coverage')
+        + box(coverage.links_never_checked, 'Länkar aldrig kollade', false, '')
+        + box(escapeHtml(stale), 'Äldsta kontroll', false, '')
         + '</div>';
+}
+
+// "Bara en kedja" — the comparison gap, and the only one of these counts with a fix that is
+// a single action: add a link at the chain that is missing.
+//
+// Keyed on store_slug (the CHAIN), never on store_name: two ICA butiker are two links under
+// one chain, and /stats counts this by butik label — so an ICA Maxi + ICA Björksätra product
+// counted as two "butiker" while being comparable nowhere. The count shown above therefore
+// comes from THIS list rather than from coverage.products_single_store: one number, one
+// list, no way for them to drift apart.
+//
+// Own-brand products are excluded by missingFromStore (an ICA-branded product will never be
+// at Willys), which is what keeps this list actionable instead of permanently five rows
+// long — the same rule the täckning facet follows. Candidate chains are restricted to the
+// store_type the product already lives in: a bag of coffee does not "saknar Apotea".
+function singleChainProducts() {
+    const types = storeTypeBySlug();
+    const inUse = new Set(
+        (allProducts || []).flatMap(p => (p.stores || []).map(s => s.store_slug)).filter(Boolean)
+    );
+    const rows = [];
+    for (const p of allProducts || []) {
+        const links = p.stores || [];
+        const slugs = new Set(links.map(s => s.store_slug).filter(Boolean));
+        if (!slugs.size || slugs.size > 1) continue;
+        const ownType = types[Array.from(slugs)[0]];
+        const missing = (allStores || [])
+            .filter(s => inUse.has(s.slug) && s.store_type === ownType && missingFromStore(p, s.slug))
+            .map(s => s.name);
+        if (!missing.length) continue;   // own brand, or nothing else of its kind is tracked
+        rows.push({ product: p, has: links, missing });
+    }
+    return rows.sort((a, b) => String(a.product.name).localeCompare(String(b.product.name), 'sv'));
+}
+
+function buildSingleChainProducts(rows) {
+    if (!rows.length) return '';
+    let html = '<div class="card" id="gap-coverage"><div class="card-header">'
+        + '<div class="card-title">Produkter i bara en kedja '
+        + '<span class="card-title-note">— priset går inte att jämföra mot någon annan kedja; '
+        + 'egna varumärken räknas inte som lucka</span></div></div>';
+    for (const { product, has, missing } of rows) {
+        const chips = Array.from(new Set(has.map(s => s.store_name)))
+            .map(n => `<span class="chip-static">${escapeHtml(n)}</span>`).join('')
+            + missing.map(n => `<span class="chip-static is-missing">${escapeHtml(n)}</span>`).join('');
+        const sub = [product.brand, product.category].filter(Boolean).join(' · ');
+        html += `<div class="issue-row">
+            <div class="issue-main">
+                <div class="issue-name">${escapeHtml(product.name)}</div>
+                <div class="issue-sub">${escapeHtml(sub)}</div>
+            </div>
+            <div class="issue-right">
+                <div class="cover-chips">${chips}</div>
+                ${IS_ADMIN ? `<button class="action-btn" data-issue-action="link-store"
+                    data-id="${escapeHtml(product.id)}"
+                    data-unit="${escapeHtml(product.unit || '')}">+ Länk</button>` : ''}
+            </div>
+        </div>`;
+    }
+    return html + '</div>';
 }
 
 function buildBrokenLinks(rows) {
@@ -3253,7 +3359,7 @@ function buildBrokenLinks(rows) {
 // reader to a dialog three clicks away is how a six-item list stays a six-item list.
 function buildAmountGaps(rows) {
     if (!rows.length) return '';
-    let html = '<div class="card"><div class="card-header"><div class="card-title">Länkar utan mängd '
+    let html = '<div class="card" id="gap-amounts"><div class="card-header"><div class="card-title">Länkar utan mängd '
         + '<span class="card-title-note">— utan ett antal går länken inte att jämföra</span>'
         + '</div></div>';
     for (const { product, link } of rows) {
@@ -3295,8 +3401,11 @@ function renderLuckor() {
     const q = statsData.data_quality || {};
     const broken = brokenLinkRows();
     const gaps = missingAmountRows();
-    let html = buildSilentErrors(counts, q) + buildLuckorCounters(statsData.coverage)
-        + buildBrokenLinks(broken) + buildAmountGaps(gaps);
+    const singleChain = singleChainProducts();
+    let html = buildSilentErrors(counts, q)
+        + buildLuckorCounters(statsData.coverage, singleChain.length)
+        + buildBrokenLinks(broken) + buildAmountGaps(gaps)
+        + buildSingleChainProducts(singleChain);
     if (!counts.total) {
         html += '<div class="card"><div class="empty-state"><p>Inga luckor att åtgärda — '
             + 'varje länk har en mängd och svarar på sina kontroller.</p></div></div>';
@@ -5097,13 +5206,11 @@ document.getElementById('stats-container').addEventListener('click', (e) => {
 // is typed and saved in place, a broken link is re-checked from here, and a silent error
 // opens the link it is about.
 document.getElementById('luckor-container').addEventListener('click', (e) => {
-    const box = e.target.closest('[data-issue-filter]');
+    const box = e.target.closest('[data-issue-goto]');
     if (box) {
-        // A count is a way IN to the list it counts: set the facet and go, instead of making
-        // the reader re-derive the filter that produced the number.
-        clearProductFilters();
-        setProductFilter('status', box.getAttribute('data-issue-filter'));
-        location.hash = '#/produkter';
+        // A count is a way IN to the list it counts, and that list is on this page.
+        const target = document.getElementById(box.getAttribute('data-issue-goto'));
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
     }
     const btn = e.target.closest('button[data-issue-action]');
@@ -5119,6 +5226,10 @@ document.getElementById('luckor-container').addEventListener('click', (e) => {
         checkLinkNow(btn.getAttribute('data-link'));
     } else if (action === 'save-amount') {
         saveGapAmount(btn.getAttribute('data-link'), btn.getAttribute('data-unit'));
+    } else if (action === 'link-store') {
+        // Straight to the dialog that closes the gap — not the links panel it usually
+        // opens from, which would be a click spent looking at links we already listed here.
+        showLinkStoreModal(btn.getAttribute('data-id'), btn.getAttribute('data-unit'));
     }
 });
 

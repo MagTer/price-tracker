@@ -504,17 +504,26 @@ class TestAdminDashboard:
         """Att köpa must carry the platform's OWN comparison, not the store's framing.
 
         The margin is `savings_per_unit_sek / best_alt_unit_price_sek` — a PERCENTAGE,
-        because kronor per unit cannot be compared between rows — and it lives inside the
-        verdict sentence rather than in a column of its own, where it competed with the
-        span bar for being the row's single score. `discount_percent` must never be the
-        ranking: 30 % off a bad price is still a bad price.
+        because kronor per unit cannot be compared between rows — and it is what the list
+        is ORDERED by. Since v0.53.1 it is no longer PRINTED on a best row: every row under
+        "Värt att köpa" is best by construction, the heading says so, and a list expresses
+        its ranking by being a list. `discount_percent` must never be the ranking: 30 % off
+        a bad price is still a bad price.
+
+        The other two verdicts keep their sentence, because nothing else carries it — WORSE
+        is the reason the row was demoted (the span bar is TIME; it cannot say another link
+        is cheaper right now) and UNKNOWN names the gap plus its fix.
         """
         r = client.get("/")
         assert "dealMarginPct" in r.text
         assert "saving / d.best_alt_unit_price_sek" in r.text
         assert "dealVerdictHtml" in r.text
-        assert "billigare per" in r.text
+        assert "if (kind === DEAL_BEST) return '';" in r.text
         assert "dyrare per" in r.text
+        assert "går inte att rangordna" in r.text
+        # The butik moved out of that sentence and into the meta line — it is the way OUT
+        # to the store's own page and must not have gone with the sentence.
+        assert "deal-store" in r.text
         # The span bar is the row's OTHER question — right moment, not right store.
         assert "Prisläge i eget spann" in r.text
         assert "inget spann än" in r.text
