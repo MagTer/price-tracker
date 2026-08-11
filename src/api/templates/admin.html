@@ -2379,7 +2379,9 @@ function dealSpanHtml(d) {
         note = 'nära lägsta noterade';
         noteClass = 'span-note is-low';
     } else {
-        note = 'har varit ' + formatSek(now - low) + ' kr billigare';
+        // The difference of two kr/enhet figures is in kr/enhet, and a bare "kr" beside a
+        // 138,89 kr/kg row reads as kronor off the package.
+        note = 'har varit ' + unitKr(now - low, d.unit) + ' billigare';
         noteClass = 'span-note';
     }
     const width = (pos * 100).toFixed(1) + '%';

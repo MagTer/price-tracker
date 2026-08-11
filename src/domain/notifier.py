@@ -13,6 +13,7 @@ from domain.deals import (
     DEAL_STALE_HOURS,
     DEAL_UNKNOWN,
     DEAL_WORSE,
+    PRICE_LOW_WINDOW_DAYS,
     TIMING_POOR,
     DealRow,
 )
@@ -22,6 +23,29 @@ from domain.schedule import STORE_TIMEZONE
 logger = logging.getLogger(__name__)
 
 _SWEDISH_WEEKDAYS = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
+
+# The span window, said in the unit the reader thinks in. Derived, never written down: it
+# IS the floor window, and a "12 veckor" that stopped matching PRICE_LOW_WINDOW_DAYS would
+# be a claim about a period we did not look at.
+_SPAN_WEEKS = PRICE_LOW_WINDOW_DAYS // 7
+
+# At or within a hair of the floor — the same 2 % the portal's bar uses to promote the note
+# from "nära lägsta" to "lägsta noterade": below it, quantity rounding alone can move the
+# figure, so claiming a new record would be arithmetic noise wearing a superlative.
+_SPAN_AT_LOW = 0.02
+# The lower third of the observed span reads as "cheap"; above it the honest thing is the
+# distance to the floor, in kronor.
+_SPAN_NEAR_LOW = 1 / 3
+
+# The portal's twin is dealSpanHtml() in api/templates/admin.html. Both READ the deal row's
+# own lowest/highest (deals.observed_spans, 84 days) — there is no second query here, only a
+# second rendering, because email HTML cannot share a stylesheet with the portal. Keep the
+# refusals and the wording in step; they are the same three sentences.
+
+
+def _muted(text: str) -> str:
+    """A reason where a bar would have been — the same weight the portal gives it."""
+    return f'<span style="color: #64748b; font-size: 11px;">{html.escape(text)}</span>'
 
 
 def _sek(value: float | Decimal) -> str:
@@ -325,7 +349,13 @@ class PriceNotifier:
                 f"{html.escape(' · '.join(condition_bits))}</span>"
             )
 
-        verdict_cell = self._verdict_html(deal, unit_label)
+        # The span bar leads the cell; the sentences under it are the exceptions — why the
+        # row is not a plain buy, and the caveats (poor moment, stale, out of stock).
+        span_cell = self._span_html(deal, unit_label)
+        verdict = self._verdict_html(deal, unit_label)
+        verdict_cell = span_cell
+        if verdict:
+            verdict_cell += f'<div style="margin-top: 5px;">{verdict}</div>'
         # The MOMENT, when it is a poor one. The scheduler filters these out of the weekly
         # buy list, so this is the same defensive honesty the WORSE wording gets: a caller
         # that does not filter must not have the row read as an unqualified recommendation.
@@ -359,29 +389,110 @@ class PriceNotifier:
 
         return f"""
                 <tr>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {product_cell}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {price_cell}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                        {verdict_cell}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eee;
+                        vertical-align: top;">{product_cell}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eee;
+                        vertical-align: top;">{price_cell}</td>
+                    <td width="40%" style="padding: 8px; border-bottom: 1px solid #eee;
+                        vertical-align: top; width: 40%;">{verdict_cell}</td>
                 </tr>"""
 
     @staticmethod
+    def _span_html(deal: DealRow, unit_label: str) -> str:
+        """Where this price sits between the product's own lowest and highest observed
+        kr/enhet — the column that replaced "0,45 kr/l billigare än Willys 24-pack".
+
+        That sentence answered the wrong question for a buy list. Cheaper than the next
+        link says nothing about whether either price is any good: both can sit at the top
+        of a span the product has spent twelve weeks below, and the row still reads as a
+        win. The span answers what the reader actually stands in the aisle asking — is
+        this a good price for THIS product — and it needs no second store to do it.
+
+        Built from tables and percentage widths, not absolute positioning: Outlook renders
+        HTML through Word, which has no `position`, and a bar that collapses there would
+        take the row's only judgement with it. The fill's right edge IS the marker (the
+        portal draws a tick at the same place); a bar in an email cannot afford a second
+        overlapping element to say the same thing.
+
+        Refuses in exactly the cases the portal refuses, and says which: no jfr-pris, one
+        observation, or a price that has not moved. A bar drawn anyway would claim a
+        position inside a range that does not exist.
+        """
+        now_price = deal.unit_price_sek
+        low = deal.lowest_unit_price_sek
+        high = deal.highest_unit_price_sek
+        if now_price is None:
+            return _muted("inget jfr-pris — länken saknar mängd")
+        if low is None or high is None:
+            return _muted("en observation — inget spann än")
+        if high <= low:
+            return _muted("priset har inte rört sig — inget spann än")
+
+        pos = min(1.0, max(0.0, (now_price - low) / (high - low)))
+        is_low = pos <= _SPAN_NEAR_LOW
+        fill_color = "#10b981" if is_low else "#2563eb"
+        fill_pct = round(pos * 100, 1)
+
+        cell = "height: 8px; line-height: 8px; font-size: 0;"
+        if fill_pct <= 0:
+            bar_cells = f'<td style="{cell} background: #eef1f5;">&nbsp;</td>'
+        elif fill_pct >= 100:
+            bar_cells = f'<td style="{cell} background: {fill_color};">&nbsp;</td>'
+        else:
+            bar_cells = (
+                f'<td width="{fill_pct}%" style="{cell} width: {fill_pct}%; '
+                f'background: {fill_color};">&nbsp;</td>'
+                f'<td width="{100 - fill_pct}%" style="{cell} width: {100 - fill_pct}%; '
+                f'background: #eef1f5;">&nbsp;</td>'
+            )
+
+        if pos <= _SPAN_AT_LOW:
+            note, note_color = f"lägsta noterade på {_SPAN_WEEKS} veckor", "#047857"
+        elif is_low:
+            note, note_color = "nära lägsta noterade", "#047857"
+        elif deal.timing == TIMING_POOR:
+            # The poor-moment line below carries the distance with its butik and date;
+            # two sentences saying "har varit billigare" would be one too many.
+            note, note_color = "", ""
+        else:
+            note = f"har varit {_sek(now_price - low)} {unit_label} billigare"
+            note_color = "#64748b"
+
+        ends = (
+            '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
+            ' style="width: 100%; border-collapse: collapse;"><tr>'
+            f'<td style="font-size: 11px; color: #94a3b8; text-align: left;">{_sek(low)}</td>'
+            f'<td style="font-size: 11px; color: #94a3b8; text-align: right;">{_sek(high)}</td>'
+            "</tr></table>"
+        )
+        bar = (
+            '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
+            ' style="width: 100%; border-collapse: collapse; margin-top: 4px;">'
+            f"<tr>{bar_cells}</tr></table>"
+        )
+        note_html = (
+            f'<div style="font-size: 11px; color: {note_color}; margin-top: 5px;">'
+            f"{html.escape(note)}</div>"
+            if note
+            else ""
+        )
+        return ends + bar + note_html
+
+    @staticmethod
     def _verdict_html(deal: DealRow, unit_label: str) -> str:
-        """The margin as a sentence — '0,45 kr/l billigare än Willys 24-pack' is what
-        you act on; a bare 'Billigast' badge is not."""
+        """Why the row is NOT a plain buy, when it is not — and nothing at all when it is.
+
+        A BEST row says nothing here (v0.53.2): every row in this list is best of its
+        product's links by construction, so the sentence restated the section it stood in
+        while the span bar above it answers the question worth asking. The margin still
+        ORDERS each butik's section (_ranked_store_groups) — it is the sort key, not a line
+        of text. Same change the portal made, and for the same reason.
+        """
         alt = deal.best_alt_store or ""
         if deal.best_alt_package_size:
             alt = f"{alt} {deal.best_alt_package_size}".strip()
         if deal.verdict == DEAL_BEST:
-            margin = deal.savings_per_unit_sek or 0.0
-            text = (
-                f"{_sek(margin)} {unit_label} billigare än {alt}"
-                if margin > 0
-                else f"lika billigt som {alt}"
-            )
-            return f'<span style="color: #16a34a;">{html.escape(text)}</span>'
+            return ""
         if deal.verdict == DEAL_WORSE:
             # The scheduler filters WORSE out of the weekly email, but _ranked_store_groups
             # keeps them defensively for any caller that does not — and that caller must
@@ -390,11 +501,13 @@ class PriceNotifier:
             text = f"{_sek(margin)} {unit_label} dyrare än {alt}"
             return f'<span style="color: #b45309;">{html.escape(text)}</span>'
         # UNKNOWN rides with the buyable ones (it is not KNOWN to be bad) but says
-        # honestly why no comparison exists — same wording as the portal. NOT "enda
-        # länken": best_alt is also None when sibling links exist but none is
-        # comparable (no mängd), and that wording hid the actual fix.
-        why = "länken saknar mängd" if deal.unit_price_sek is None else "ingen annan jämförbar länk"
-        return f'<span style="color: #64748b;">{html.escape(f"kan inte jämföras — {why}")}</span>'
+        # honestly why no comparison exists. NOT "enda länken": best_alt is also None when
+        # sibling links exist but none is comparable (no mängd), and that wording hid the
+        # actual fix. When the link itself has no mängd the SPAN cell above has already
+        # said exactly that and named the same fix — one sentence, not two.
+        if deal.unit_price_sek is None:
+            return ""
+        return '<span style="color: #64748b;">kan inte jämföras — ingen annan jämförbar länk</span>'
 
     def _build_summary_html(
         self,
@@ -418,7 +531,7 @@ class PriceNotifier:
                     <tr style="background: #f3f4f6;">
                         <th style="padding: 8px; text-align: left;">Produkt</th>
                         <th style="padding: 8px; text-align: left;">Pris</th>
-                        <th style="padding: 8px; text-align: left;">Jämförelse</th>
+                        <th style="padding: 8px; text-align: left;">Prisläge i eget spann</th>
                     </tr>
                 </thead>
                 <tbody>{rows}</tbody>
@@ -512,7 +625,8 @@ class PriceNotifier:
                      margin: 0 auto; padding: 20px;">
             <h2 style="color: #1e3a5f;">Veckans inköpslista</h2>
             <p>Det här är värt att köpa den här veckan — ett avsnitt per butik.
-               Jämförelsen är mot produktens billigaste andra länk, per enhet.</p>
+               Stapeln visar var priset ligger mellan det lägsta och det högsta
+               jämförpriset produkten noterats till de senaste {_SPAN_WEEKS} veckorna.</p>
             {deals_html}
             {watched_html}
             {quality_html}

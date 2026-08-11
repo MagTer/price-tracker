@@ -31,6 +31,7 @@ def _deal(
     timing: str = "good",
     seen_cheaper: float | None = 0.0,
     lowest_unit_price: float | None = None,
+    highest_unit_price: float | None = None,
     lowest_store: str | None = None,
 ) -> DealRow:
     """A DealRow as the scheduler hands them to the notifier (naive-UTC checked_at)."""
@@ -58,6 +59,7 @@ def _deal(
         timing=timing,
         seen_cheaper_pct=seen_cheaper,
         lowest_unit_price_sek=lowest_unit_price,
+        highest_unit_price_sek=highest_unit_price,
         lowest_seen_at=datetime(2026, 7, 18, 8, 0, 0),
         lowest_store=lowest_store,
     )
@@ -235,9 +237,15 @@ class TestPriceNotifier:
 
         assert html.index("Stor vinst") < html.index("Liten vinst") < html.index("Okand mangd")
 
-    def test_build_summary_html_names_the_margin_and_the_alternative(self) -> None:
-        """The verdict is a sentence you act on — '1,24 kr/st billigare än ICA 8-pack' —
-        and an equal price says 'lika billigt', never a bare badge."""
+    def test_a_best_row_shows_the_span_not_a_comparison_with_another_store(self) -> None:
+        """ "1,24 kr/st billigare än ICA 8-pack" is gone (v0.53.2).
+
+        Cheaper than the next link says nothing about whether EITHER price is any good:
+        both can sit at the top of a span the product has spent twelve weeks below, and the
+        row still reads as a win. The span bar answers the question the reader stands in the
+        aisle with. The margin still ORDERS each butik's section — it is a sort key now, not
+        a sentence.
+        """
         notifier = PriceNotifier(email_service=MockEmailService())
 
         deals = [
@@ -246,29 +254,91 @@ class TestPriceNotifier:
                 store_name="Willys",
                 verdict="best",
                 unit="st",
-                unit_price=5.00,
+                unit_price=5.90,
                 savings=1.24,
                 best_alt_store="ICA",
                 best_alt_package_size="8-pack",
+                lowest_unit_price=4.90,
+                highest_unit_price=9.90,
             ),
-            _deal(
-                product_name="Bregott",
-                store_name="Willys",
-                verdict="best",
-                unit="kg",
-                unit_price=89.00,
-                savings=0.0,
-                best_alt_store="Coop",
-            ),
-            _deal(product_name="Sukrin", store_name="Willys", verdict="unknown"),
         ]
 
         html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
 
-        assert "1,24 kr/st billigare än ICA 8-pack" in html
-        assert "lika billigt som Coop" in html
-        # UNKNOWN says WHY no comparison exists (this row has no kr/unit -> no amount).
-        assert "kan inte jämföras — länken saknar mängd" in html
+        assert "billigare än ICA 8-pack" not in html
+        assert "lika billigt" not in html
+        # The span's ends, and a bar filled to where 5,90 sits between 4,90 and 9,90 (20 %).
+        assert "4,90" in html
+        assert "9,90" in html
+        assert "width: 20.0%" in html
+        assert "nära lägsta noterade" in html
+        assert "Prisläge i eget spann" in html
+
+    def test_the_span_names_a_new_low_and_the_distance_to_an_old_one(self) -> None:
+        """The two ends of the same judgement: at the floor it says so, above it says how
+        far — in kr/enhet, because that is what the difference of two kr/enhet figures is."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        at_floor = _deal(
+            product_name="Lambi",
+            verdict="best",
+            unit="st",
+            unit_price=6.99,
+            lowest_unit_price=6.99,
+            highest_unit_price=12.40,
+        )
+        mid_span = _deal(
+            product_name="Bregott",
+            verdict="best",
+            unit="kg",
+            unit_price=89.00,
+            lowest_unit_price=79.00,
+            highest_unit_price=99.00,
+        )
+
+        html = notifier._build_summary_html(
+            deals=[at_floor, mid_span], watched_products=[], now=_NOW
+        )
+
+        assert "lägsta noterade på 12 veckor" in html
+        assert "har varit 10,00 kr/kg billigare" in html
+
+    def test_the_span_refuses_rather_than_drawing_a_range_that_was_never_seen(self) -> None:
+        """The three refusals the portal's bar makes, in the same words: no jfr-pris, one
+        observation, a price that has not moved. Each names itself — a silent empty cell
+        would read as "we have no opinion" when the truth is "there is nothing to draw"."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        deals = [
+            # No amount on the link: no kr/enhet exists, so neither does a position.
+            _deal(product_name="Sukrin", store_name="A", verdict="unknown"),
+            # One observation: the deal's own point would BE both ends.
+            _deal(
+                product_name="Kanel",
+                store_name="B",
+                verdict="best",
+                unit="kg",
+                unit_price=120.0,
+            ),
+            # Real history that happens to hold one price.
+            _deal(
+                product_name="Havregryn",
+                store_name="C",
+                verdict="best",
+                unit="kg",
+                unit_price=14.93,
+                lowest_unit_price=14.93,
+                highest_unit_price=14.93,
+            ),
+        ]
+
+        html = notifier._build_summary_html(deals=deals, watched_products=[], now=_NOW)
+
+        assert "inget jfr-pris — länken saknar mängd" in html
+        assert "en observation — inget spann än" in html
+        assert "priset har inte rört sig — inget spann än" in html
+        # And the row without an amount says it ONCE: the span cell already named the fix.
+        assert html.count("länken saknar mängd") == 1
 
     def test_unknown_with_a_unit_price_never_claims_to_be_the_only_link(self) -> None:
         """best_alt is also None when sibling links exist but none is comparable (no mängd
