@@ -146,7 +146,7 @@ def classify_timing(unit_price_sek: float | None, lowest_unit_price_sek: float |
 
 
 @dataclass(frozen=True)
-class _Floor:
+class ObservedSpan:
     """The observed kr/unit span for one product: the floor, where it was seen, and the high.
 
     ``is_manual`` marks a floor set by a hand-recorded price (raw_data source "manual") —
@@ -203,13 +203,21 @@ class DealRow:
     floor_is_manual: bool = False
 
 
-async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uuid.UUID, _Floor]:
+async def observed_spans(
+    session: AsyncSession, product_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, ObservedSpan]:
     """The lowest kr/unit observed per product inside the window — the buy list's floor.
 
     The HIGH end of the same walk rides along as the span the portal's bar draws, so the
     bar and the timing judgement read the SAME window by construction — they used to read
     different ones (the bar took whatever period the statistics picker last held) and could
     make opposite claims about one row.
+
+    PUBLIC because the watches page is the second consumer (v0.53.0): a unit-price target
+    below the product's own observed floor can never fire, and saying so needs THIS floor —
+    the same window, the same "inactive links count" rule. A second hand-written floor query
+    would drift from the buy list's within a release (Gotcha 4), and the two disagreeing
+    about what a product has cost would be invisible until an alarm silently never went off.
 
     A product needs at least TWO observations with a computable kr/unit before it gets a
     floor at all. With one, the deal's own point is the floor and ``timing`` would announce
@@ -229,7 +237,7 @@ async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uu
         .where(ProductStore.product_id.in_(product_ids))
         .where(PricePoint.checked_at >= cutoff)
     )
-    floors: dict[uuid.UUID, _Floor] = {}
+    floors: dict[uuid.UUID, ObservedSpan] = {}
     observations: dict[uuid.UUID, int] = {}
     for point, link, store in (await session.execute(stmt)).all():
         value = rounded_unit_price(effective_price(point), link.package_quantity)
@@ -240,7 +248,7 @@ async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uu
         high = max(value, current.high_unit_price_sek) if current else value
         if current is None or value < current.unit_price_sek:
             raw = point.raw_data if isinstance(point.raw_data, dict) else {}
-            floors[link.product_id] = _Floor(
+            floors[link.product_id] = ObservedSpan(
                 unit_price_sek=value,
                 seen_at=point.checked_at,
                 store_name=link_store_name(link, store),
@@ -248,7 +256,7 @@ async def _floors(session: AsyncSession, product_ids: set[uuid.UUID]) -> dict[uu
                 high_unit_price_sek=high,
             )
         elif high > current.high_unit_price_sek:
-            floors[link.product_id] = _Floor(
+            floors[link.product_id] = ObservedSpan(
                 unit_price_sek=current.unit_price_sek,
                 seen_at=current.seen_at,
                 store_name=current.store_name,
@@ -269,7 +277,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     — latest point per link, no staleness cutoff, because it is the platform's best
     knowledge of what the shelf says elsewhere.
 
-    The floor (:func:`_floors`) is the same product's own cheapest OBSERVED kr/unit inside
+    The floor (:func:`observed_spans`) is the same product's own cheapest OBSERVED kr/unit inside
     the window — the second axis, in time rather than in space, that decides ``timing``.
     """
     cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEALS_WINDOW_DAYS)
@@ -295,7 +303,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
     # "20 % rabatt" into a decision: the discount is the STORE's framing, the
     # cross-link unit price is ours.
     alternatives: dict[uuid.UUID, list[tuple[uuid.UUID, float, str, str | None]]] = {}
-    floors: dict[uuid.UUID, _Floor] = {}
+    floors: dict[uuid.UUID, ObservedSpan] = {}
     if rows:
         product_ids = {product.id for _, _, product, _ in rows}
         alt_pp, alt_rn = latest_point_per_link()
@@ -332,7 +340,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 )
             )
 
-        floors = await _floors(session, product_ids)
+        floors = await observed_spans(session, product_ids)
 
     deals: list[DealRow] = []
     for price_point, product_store, product, store in rows:

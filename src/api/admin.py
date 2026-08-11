@@ -44,7 +44,7 @@ from domain.blad import (
     parse_offline_offer,
 )
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
-from domain.deals import current_deals
+from domain.deals import PRICE_LOW_WINDOW_DAYS, current_deals, observed_spans
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.link_health import LinkHealth, broken_links
 from domain.models import (
@@ -2092,9 +2092,19 @@ async def list_watches(
                 if held is None or candidate[0] < held[0]:
                     current[w_ps.product_id] = candidate
 
+        # What the product has actually COST inside the floor window — the same span the
+        # buy list draws its bar from (domain/deals.observed_spans), never a second walk.
+        # A watch is a standing question about the future, and the only evidence for whether
+        # it can ever be answered is the past: a unit-price target below everything the
+        # product has ever been observed at is not a strict alarm, it is an alarm that
+        # cannot fire. Without this the page had no way to say so, and such a watch looked
+        # exactly like one that is merely waiting.
+        spans = await observed_spans(session, {product.id for _, product in rows}) if rows else {}
+
         watches_list: list[dict[str, Any]] = []
         for watch, product in rows:
             now = current.get(product.id)
+            span = spans.get(product.id)
             target_price = float(watch.target_price_sek) if watch.target_price_sek else None
             unit_price_target = (
                 float(watch.unit_price_target_sek) if watch.unit_price_target_sek else None
@@ -2119,6 +2129,16 @@ async def list_watches(
                     "current_lowest_price_sek": now[0] if now else None,
                     "current_lowest_unit_price_sek": now[1] if now else None,
                     "current_lowest_store": now[2] if now else None,
+                    # kr/unit only, and that is the whole contract: an absolute
+                    # target_price_sek is a package price and MUST NOT be judged against a
+                    # per-unit span — the two are different quantities, and drawing one on
+                    # the other's axis is the g/kg class of error. The client shows the
+                    # span for unit targets and stays silent for absolute ones.
+                    "lowest_unit_price_sek": span.unit_price_sek if span else None,
+                    "highest_unit_price_sek": span.high_unit_price_sek if span else None,
+                    "lowest_seen_at": span.seen_at.isoformat() if span else None,
+                    "lowest_store": span.store_name if span else None,
+                    "span_window_days": PRICE_LOW_WINDOW_DAYS,
                 }
             )
 

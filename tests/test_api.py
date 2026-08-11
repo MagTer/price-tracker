@@ -1671,6 +1671,7 @@ class TestWatchesEndpoint:
         mock_session.execute.side_effect = [
             _rows([(watch, product)]),
             _rows([(ps, store, pp)]),
+            _rows([(pp, ps, store)]),  # the observed span walk
         ]
 
         watches = client.get("/watches").json()
@@ -1680,6 +1681,68 @@ class TestWatchesEndpoint:
         assert watches[0]["current_lowest_unit_price_sek"] == pytest.approx(5.0)
         assert watches[0]["current_lowest_store"] == "Willys"
         assert watches[0]["unit"] == "st"
+
+    def test_one_observation_is_no_span(self, client, mock_session):
+        """The floor rule the buy list already follows, carried here unchanged: with a
+        single observation the product's own point IS the low and the high, and a watch
+        page that drew a span from it would place every target at an end of a range that
+        was never seen. Null instead — the client draws nothing."""
+        from domain.models import PriceWatch
+
+        product, store = _product(), _store()
+        watch = PriceWatch(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(TENANT),
+            product_id=product.id,
+            email_address="magnus@example.com",
+            unit_price_target_sek=Decimal("4.00"),
+            created_at=datetime(2026, 7, 1),
+        )
+        ps = _ps(product, store, package_quantity="24")
+        pp = _pp(ps, price="139.90")
+
+        mock_session.execute.side_effect = [
+            _rows([(watch, product)]),
+            _rows([(ps, store, pp)]),
+            _rows([(pp, ps, store)]),
+        ]
+
+        row = client.get("/watches").json()[0]
+        assert row["lowest_unit_price_sek"] is None
+        assert row["highest_unit_price_sek"] is None
+
+    def test_the_span_is_the_buy_lists_own_floor_window(self, client, mock_session):
+        """Two observations make a span, and it is the SAME span domain/deals.py draws its
+        floor and its bar from — one definition, so the two pages can never disagree about
+        what a product has cost. A unit target under the low is what the page calls
+        'larmar inte som det är satt'."""
+        from domain.models import PriceWatch
+
+        product, store = _product(), _store()
+        watch = PriceWatch(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(TENANT),
+            product_id=product.id,
+            email_address="magnus@example.com",
+            unit_price_target_sek=Decimal("4.00"),
+            created_at=datetime(2026, 7, 1),
+        )
+        ps = _ps(product, store, package_quantity="24")
+        high = _pp(ps, price="139.90")  # 5.83 kr/st
+        low = _pp(ps, price="119.90")  # 5.00 kr/st
+
+        mock_session.execute.side_effect = [
+            _rows([(watch, product)]),
+            _rows([(ps, store, low)]),
+            _rows([(high, ps, store), (low, ps, store)]),
+        ]
+
+        row = client.get("/watches").json()[0]
+        assert row["lowest_unit_price_sek"] == pytest.approx(5.0)
+        assert row["highest_unit_price_sek"] == pytest.approx(5.83)
+        assert row["lowest_store"] == "Willys"
+        assert row["lowest_seen_at"] is not None
+        assert row["span_window_days"] == 84
 
 
 class TestUpdateWatch:
@@ -2381,10 +2444,13 @@ class TestBladCandidatesCarryNotableLinks:
         }
 
         with (
-            patch("api.admin.get_block_registry", return_value=MagicMock(
-                blocked_until=MagicMock(return_value=None),
-                record_success=MagicMock(),
-            )),
+            patch(
+                "api.admin.get_block_registry",
+                return_value=MagicMock(
+                    blocked_until=MagicMock(return_value=None),
+                    record_success=MagicMock(),
+                ),
+            ),
             patch("api.admin.get_check_log", return_value=MagicMock(record=AsyncMock())),
             patch("api.admin.fetch_offline_offer", AsyncMock(return_value=data)),
         ):
