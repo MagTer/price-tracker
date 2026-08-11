@@ -1062,6 +1062,27 @@
 .w-now-value.is-met { color: var(--success); }
 .w-store { font-size: 12px; color: var(--text-faint); }
 .w-actions { display: flex; gap: 6px; }
+/* The row's own sentence, on its own line under the whole row: it explains the GROUP the
+   row landed in, and a heading cannot carry the number that put it there. */
+.w-note { flex: 1 1 100%; font-size: 12px; color: var(--text-muted); }
+.w-note.is-met { color: var(--success); font-weight: 600; }
+.w-note.is-warn { color: var(--warning-link); }
+/* The target on the span bar — deliberately NOT the same mark as the current price
+   (.span-marker), because they answer different questions and a reader who confuses them
+   reads the row backwards. Taller, thinner, and off to the left edge as an arrow when the
+   target sits outside the observed span at all. */
+.span-target { position: absolute; top: -5px; bottom: -5px; width: 2px; border-radius: 1px; background: var(--warning-link); }
+.span-target.is-out {
+    top: -6px;
+    bottom: auto;
+    left: -13px;
+    width: auto;
+    background: none;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--warning-link);
+}
+.group-head.is-warn { color: var(--warning); }
 
 /* --- Fel & luckor. The silent errors sit at the top and in red because their entire
    failure mode is that they are not heard: the check reported "ok", the price is
@@ -1155,6 +1176,10 @@
 /* --- Prisutveckling --- */
 .stats-section + .stats-section { margin-top: 16px; }
 .stats-basis { color: var(--text-muted); font-size: 12.5px; margin-top: 3px; margin-bottom: 12px; }
+/* A table cell holding a bar, not a number: the ends are its labels, so it needs the
+   column's whole width and none of the num-col right-alignment. */
+.stats-span { min-width: 130px; vertical-align: middle; }
+.stats-span .span-track { margin-top: 4px; }
 .store-cmp-row { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--row-line-weak); }
 .store-cmp-row:last-child { border-bottom: 0; }
 .store-cmp-name { width: 200px; font-weight: 600; }
@@ -1411,6 +1436,7 @@ form { padding: 20px; }
             "name  value"
             "meta  meta"
             "prog  prog"
+            "note  note"
             "store act";
         border: 1px solid var(--border);
         border-radius: 10px;
@@ -1424,6 +1450,9 @@ form { padding: 20px; }
     .w-now-value { grid-area: value; justify-self: end; align-self: baseline; }
     .w-meta { grid-area: meta; }
     .w-progress { grid-area: prog; width: auto; max-width: none; margin-top: 8px; }
+    /* The card's 12px padding is all the room the off-span target arrow has to sit in. */
+    .w-note { grid-area: note; margin-top: 8px; }
+    .span-target.is-out { left: -11px; }
     .w-store { grid-area: store; align-self: center; text-align: left; }
     .w-actions { grid-area: act; justify-self: end; margin-top: 10px; }
 
@@ -2869,6 +2898,34 @@ function buildStatsHeadline(data) {
         + '</div>';
 }
 
+// The same bar Att köpa draws, on the same question: where does today's price sit between
+// the lowest and highest kr/enhet this product has been observed at? It replaces the pair
+// of numbers that used to sit in this cell — the numbers are still the bar's end labels,
+// so nothing is lost, and the POSITION between them stops being something the reader has
+// to work out per row against a third column.
+//
+// It reads the STATISTICS period, not the deal window, and that is correct here: this page
+// owns a period picker and every other figure in the row honours it. The deal row's bar
+// must keep coming from /deals for exactly the opposite reason (its timing verdict is
+// judged on the 84-day floor, and the two must not be able to contradict each other).
+//
+// Every refusal the deal bar makes is repeated: no bar for one observation, none for a
+// price that has not moved, none without a current price to place on it. A bar drawn
+// anyway would claim a position that does not exist.
+function statsSpanHtml(r) {
+    const low = r.low_unit_price;
+    const high = r.high_unit_price;
+    const now = r.current_unit_price;
+    if (low == null || high == null || high <= low || now == null) return DASH;
+    const pos = clamp01((now - low) / (high - low));
+    const width = (pos * 100).toFixed(1) + '%';
+    return `<div class="span-ends"><span>${escapeHtml(formatSek(low))}</span><span>${escapeHtml(formatSek(high))}</span></div>`
+        + '<div class="span-track">'
+        + `<div class="span-fill${pos <= 1 / 3 ? ' is-low' : ''}" style="width:${width}"></div>`
+        + `<div class="span-marker" style="left:${width}"></div>`
+        + '</div>';
+}
+
 function buildStatsProducts(data) {
     const rows = statsSort.column
         ? sortRows(data.products, statsSort.column, statsSort.direction)
@@ -2884,23 +2941,20 @@ function buildStatsProducts(data) {
         <th class="sortable-col" data-stats-sort="name">Produkt</th>
         <th class="sortable-col num-col" data-stats-sort="current_unit_price" style="width:150px">Billigast nu</th>
         <th class="sortable-col num-col" data-stats-sort="change_pct" style="width:120px">Förändring</th>
-        <th class="num-col col-secondary" style="width:170px">Lägst–högst</th>
+        <th class="col-secondary" style="width:170px">Prisläge</th>
         <th class="sortable-col num-col col-secondary" data-stats-sort="observations" style="width:80px">Obs.</th>
         <th class="col-secondary" style="width:230px">Billigast var</th>
     </tr></thead><tbody>`;
     for (const r of rows) {
         // One observation is not a span: "460,00 – 460,00" claims a range that was never
         // seen. Same rule the deal row's bar follows by drawing nothing.
-        const span = (r.low_unit_price != null && r.high_unit_price != null
-                      && r.high_unit_price > r.low_unit_price)
-            ? escapeHtml(formatSek(r.low_unit_price) + ' – ' + formatSek(r.high_unit_price))
-            : DASH;
+        const span = statsSpanHtml(r);
         const where = [r.cheapest_store, r.cheapest_package].filter(Boolean).join(' · ');
         html += `<tr>
             <td><div style="font-weight:600">${escapeHtml(r.name)}</div>${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
             <td class="num-col" style="font-weight:600; white-space:nowrap">${escapeHtml(unitKr(r.current_unit_price, r.unit))}</td>
             <td class="num-col" style="font-weight:600">${changeCell(r.change_pct)}</td>
-            <td class="num-col best-link col-secondary" style="white-space:nowrap">${span}</td>
+            <td class="stats-span best-link col-secondary">${span}</td>
             <td class="num-col best-link col-secondary">${r.observations}</td>
             <td class="best-link col-secondary">${escapeHtml(where || DASH)}</td>
         </tr>`;
@@ -3360,6 +3414,29 @@ async function loadLogs() {
 //
 // Each row shows the DISTANCE to its target as a bar. Without it a watch is a write-only
 // register: you can see that you set one, but not whether it is close.
+//
+// The rows are GROUPED by what the reader can do about them, because "how close is it" has
+// four different answers and only one of them is a number (v0.53.0):
+//   * met          — the alarm's condition holds right now. Buy, if you need it.
+//   * reach        — waiting, and the gap says how long a wait it looks like.
+//   * unreachable  — the target sits BELOW everything the product has been observed at
+//                    inside the floor window. This is not a strict watch, it is a watch
+//                    that cannot fire, and nothing in the interface said so before: it
+//                    rendered exactly like one that is merely waiting, forever.
+//   * no target    — alarms on any offer at all. A legitimate setting, not an omission.
+//
+// Only a UNIT target can be judged unreachable, and that is a hard rule, not a shortcut:
+// the observed span is kr/enhet and an absolute target_price_sek is a package price. A
+// 100-pack and a 20-pack of one product have the same kr/tabl. and wildly different kr —
+// comparing across them is the same category error as the g/kg slip. So an absolute target
+// is never called unreachable and never gets a marker on the span; it keeps the distance
+// bar it always had. BOTH targets stay visible in the meta line either way (v0.27.0: the
+// scheduler alerts on both, and a target the page does not show is an invisible trigger).
+
+const WATCH_MET = 'met';
+const WATCH_REACH = 'reach';
+const WATCH_UNREACHABLE = 'unreachable';
+const WATCH_NO_TARGET = 'none';
 
 function watchTarget(w) {
     if (w.unit_price_target_sek != null) {
@@ -3382,25 +3459,130 @@ function watchCurrent(w) {
         : null;
 }
 
-function watchRowHtml(w) {
+// The product's own observed kr/enhet span, or null when it would claim a range that was
+// never seen — the same three refusals the deal row's bar makes (no span, one observation,
+// a price that has not moved). Never drawn from a single point.
+function watchSpan(w) {
+    const low = w.lowest_unit_price_sek;
+    const high = w.highest_unit_price_sek;
+    if (low == null || high == null || high <= low) return null;
+    return { low, high };
+}
+
+function classifyWatch(w) {
+    const target = watchTarget(w);
+    if (!target) return WATCH_NO_TARGET;
+    const current = watchCurrent(w);
+    if (current && current.value <= target.value) return WATCH_MET;
+    const span = watchSpan(w);
+    // Strictly below the floor: AT the floor is reachable — it has happened, once.
+    if (target.unit && span && target.value < span.low) return WATCH_UNREACHABLE;
+    return WATCH_REACH;
+}
+
+// How far from firing, as a share of what is being asked for. Percent, not kronor, because
+// the groups mix units: 0,29 kr/l and 4,00 kr/kg say nothing about which is closer.
+function watchGapPct(w) {
     const target = watchTarget(w);
     const current = watchCurrent(w);
-    const met = !!(target && current && current.value <= target.value);
-    const kind = w.unit_price_target_sek != null ? 'mål i jfr-pris'
+    if (!target || !current || !target.value) return null;
+    return ((current.value - target.value) / target.value) * 100;
+}
+
+// The span bar, with the target as a second tick — the same component Att köpa and
+// Prisutveckling draw, so "where does this price sit in its own history" looks and means
+// the same thing on every page. A target outside the span gets an edge arrow instead of a
+// tick: pinning it to 0 % would draw it AT the floor and quietly deny the very problem the
+// row is reporting.
+function watchSpanHtml(w, kind) {
+    const span = watchSpan(w);
+    const target = watchTarget(w);
+    const current = watchCurrent(w);
+    // The span is kr/enhet, so the row may only be placed on it when the row's own figure
+    // is kr/enhet too — which it is exactly when the watch has a unit target. An absolute
+    // target makes watchCurrent() a PACKAGE price, and putting 21,90 kr on a 13,20–18,90
+    // kr/liter axis pins it to the high end and calls a cheap link expensive. That row
+    // keeps the distance bar instead; it says less, and everything it says is true.
+    if (!span || !current || !target || !target.unit) return '';
+    const pos = clamp01((current.value - span.low) / (span.high - span.low));
+    const width = (pos * 100).toFixed(1) + '%';
+    const isLow = pos <= 1 / 3;
+    let targetMark;
+    if (kind === WATCH_UNREACHABLE) {
+        targetMark = `<div class="span-target is-out" title="mål ${escapeHtml(target.label)} — under lägsta noterade">&#9666;</div>`;
+    } else {
+        const tp = (clamp01((target.value - span.low) / (span.high - span.low)) * 100).toFixed(1) + '%';
+        targetMark = `<div class="span-target" style="left:${tp}" title="mål ${escapeHtml(target.label)}"></div>`;
+    }
+    return `<div class="span-ends"><span>${escapeHtml(formatSek(span.low))}</span><span>${escapeHtml(formatSek(span.high))}</span></div>`
+        + '<div class="span-track">'
+        + `<div class="span-fill${isLow ? ' is-low' : ''}" style="width:${width}"></div>`
+        + `<div class="span-marker" style="left:${width}"></div>`
+        + targetMark
+        + '</div>';
+}
+
+// One line per row saying what the group heading cannot: the number behind the placement.
+function watchNoteHtml(w, kind) {
+    const target = watchTarget(w);
+    const span = watchSpan(w);
+    if (kind === WATCH_UNREACHABLE) {
+        return '<div class="w-note is-warn">Målet ' + escapeHtml(target.label)
+            + ' ligger under lägsta noterade ' + escapeHtml(unitKr(span.low, w.unit))
+            + ' — larmet kan inte gå som det är satt.</div>';
+    }
+    if (kind === WATCH_MET) {
+        const when = w.last_alerted_at ? ' · larmade ' + (formatShortWhen(w.last_alerted_at) || '') : '';
+        return `<div class="w-note is-met">Under målet ${escapeHtml(target.label)}${escapeHtml(when)}</div>`;
+    }
+    if (kind === WATCH_REACH) {
+        const pct = watchGapPct(w);
+        const gapText = pct == null ? 'inget pris att jämföra med än'
+            : formatMargin(pct) + ' kvar till målet ' + target.label;
+        // Where it has been is the only evidence for how long a wait this is — and it is
+        // the answer to "is this target sane?" for a target we cannot call unreachable.
+        // Only beside a unit target: one sentence, one quantity (see watchSpanHtml).
+        const seen = span && target.unit
+            ? ' · lägst noterat ' + unitKr(span.low, w.unit)
+                + (w.lowest_store ? ' hos ' + w.lowest_store : '')
+                + (w.lowest_seen_at ? ' ' + (formatShortWhen(w.lowest_seen_at) || '') : '')
+            : '';
+        return `<div class="w-note">${escapeHtml(gapText + seen)}</div>`;
+    }
+    return '';
+}
+
+function watchRowHtml(w) {
+    const kind = classifyWatch(w);
+    const target = watchTarget(w);
+    const current = watchCurrent(w);
+    const met = kind === WATCH_MET;
+    // Both targets, always named — the scheduler alerts on whichever is set, so the page
+    // must never leave one of them unsaid.
+    const targetKind = w.unit_price_target_sek != null ? 'mål i jfr-pris'
         : (w.target_price_sek != null ? 'absolut målpris' : 'inget mål');
-    const meta = [kind, w.alert_on_any_offer ? 'larmar även vid erbjudande' : null]
+    const meta = [targetKind, w.alert_on_any_offer ? 'larmar även vid erbjudande' : null]
         .filter(Boolean).join(' · ');
 
-    let progress = '<div class="w-progress"><div class="w-progress-head">'
-        + `<span>inget mål satt</span><span></span></div></div>`;
-    if (target) {
-        const gap = current ? (met ? 'under målet' : formatSek(current.value - target.value) + ' kr kvar') : 'inget pris än';
+    // The span bar is the product's own history and outranks the distance bar wherever it
+    // can be drawn. The distance bar stays as the fallback: an absolute target, a product
+    // with no span yet, or no current price — cases where the span would say nothing.
+    let progress = watchSpanHtml(w, kind);
+    if (progress) {
+        progress = `<div class="w-progress">${progress}</div>`;
+    } else if (target) {
+        const gap = current
+            ? (met ? 'under målet' : formatSek(current.value - target.value) + ' kr kvar')
+            : 'inget pris än';
         // How close, as a proportion of what is being asked for. Full and green the moment
         // the target is met — the bar is a state, not an animation.
         const share = current ? clamp01(target.value / current.value) : 0;
         progress = '<div class="w-progress"><div class="w-progress-head">'
             + `<span>mål ${escapeHtml(target.label)}</span><span>${escapeHtml(gap)}</span></div>`
             + `<div class="bar-track"><div class="bar-fill${met ? ' is-low' : ''}" style="width:${(share * 100).toFixed(1)}%"></div></div></div>`;
+    } else {
+        progress = '<div class="w-progress"><div class="w-progress-head">'
+            + '<span>inget mål satt</span><span></span></div></div>';
     }
     return `<div class="w-row${met ? ' is-met' : ''}">
         <div class="w-main">
@@ -3418,8 +3600,20 @@ function watchRowHtml(w) {
                 <button class="action-btn" data-watch-action="delete" data-id="${escapeHtml(w.watch_id)}">Ta bort</button>
             </div>` : ''}
         </div>
+        ${watchNoteHtml(w, kind)}
     </div>`;
 }
+
+// Order is deliberate: what has fired, what is close, what is broken, what has no target.
+// A group with no rows prints nothing at all — an empty "larmar inte som det är satt"
+// heading would read as a warning where there is none.
+const WATCH_GROUPS = [
+    [WATCH_MET, 'Under målet nu', 'köp om du behöver dem'],
+    [WATCH_REACH, 'Inom räckhåll', 'väntar på sitt pris — närmast först'],
+    [WATCH_UNREACHABLE, 'Larmar inte som det är satt',
+     'målet ligger under det lägsta priset produkten noterats till'],
+    [WATCH_NO_TARGET, 'Utan mål', 'larmar vid varje erbjudande']
+];
 
 async function loadWatches() {
     try {
@@ -3433,14 +3627,39 @@ async function loadWatches() {
             basis.textContent = 'Ingen bevakning ännu — en bevakning larmar när ett jfr-pris når ditt mål.';
             return;
         }
-        const met = watches.filter(w => {
-            const t = watchTarget(w), c = watchCurrent(w);
-            return t && c && c.value <= t.value;
-        }).length;
+        const byKind = {};
+        for (const w of watches) {
+            (byKind[classifyWatch(w)] = byKind[classifyWatch(w)] || []).push(w);
+        }
+        // Closest first, and a watch with no price to compare sorts last rather than first:
+        // a missing number is not a small gap.
+        (byKind[WATCH_REACH] || []).sort((a, b) => {
+            const pa = watchGapPct(a), pb = watchGapPct(b);
+            if (pa == null) return pb == null ? 0 : 1;
+            if (pb == null) return -1;
+            return pa - pb;
+        });
+        const met = (byKind[WATCH_MET] || []).length;
+        const unreachable = (byKind[WATCH_UNREACHABLE] || []).length;
         const emails = Array.from(new Set(watches.map(w => w.email_address).filter(Boolean)));
-        basis.textContent = `${numberWord(met, true)} av ${numberWord(watches.length)} är under sitt mål just nu`
-            + (emails.length ? ' · larm går till ' + emails.join(', ') : '');
-        container.innerHTML = '<div class="card list-flat">' + watches.map(watchRowHtml).join('') + '</div>';
+        const parts = [`${numberWord(met, true)} av ${numberWord(watches.length)} är under sitt mål just nu`];
+        // Said in the page's own summary too: a watch that cannot fire is silent by
+        // definition, so nothing else will ever bring it up.
+        if (unreachable) {
+            parts.push(numberWord(unreachable) + (unreachable === 1 ? ' kan inte larma som den är satt' : ' kan inte larma som de är satta'));
+        }
+        if (emails.length) parts.push('larm går till ' + emails.join(', '));
+        basis.textContent = parts.join(' · ');
+
+        let html = '<div class="card list-flat">';
+        for (const [kind, title, why] of WATCH_GROUPS) {
+            const rows = byKind[kind] || [];
+            if (!rows.length) continue;
+            html += `<div class="group-head${kind === WATCH_UNREACHABLE ? ' is-warn' : ''}">${escapeHtml(title)} `
+                + `<span class="group-why">— ${escapeHtml(why)}</span></div>`
+                + rows.map(watchRowHtml).join('');
+        }
+        container.innerHTML = html + '</div>';
     } catch (e) {
         document.getElementById('watches-table-container').innerHTML =
             '<div class="card"><div class="empty-state"><p>Kunde inte ladda bevakningar.</p></div></div>';
