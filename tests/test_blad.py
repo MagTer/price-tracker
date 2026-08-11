@@ -249,9 +249,7 @@ class TestNotableLinks:
         session.add(product)
         await session.flush()
         for slug in slugs:
-            store = (
-                await session.execute(select(Store).where(Store.slug == slug))
-            ).scalar_one()
+            store = (await session.execute(select(Store).where(Store.slug == slug))).scalar_one()
             link = ProductStore(
                 product_id=product.id,
                 store_id=store.id,
@@ -288,9 +286,7 @@ class TestNotableLinks:
         assert links[0]["price_sek"] == pytest.approx(137.45)
 
     @pytest.mark.asyncio
-    async def test_a_product_tracked_elsewhere_only_has_no_notable_link(
-        self, db_session
-    ) -> None:
+    async def test_a_product_tracked_elsewhere_only_has_no_notable_link(self, db_session) -> None:
         """An honest empty list: the portal says "ingen Willys-länk att notera på"
         rather than offering a target that would misattribute the observation."""
         await self._product_with_links(db_session, "Läsk Cola Zero 33cl", ["ica"])
