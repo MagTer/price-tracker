@@ -500,6 +500,58 @@ class TestAdminDashboard:
         assert 'id="edit-frequency"' in r.text
         assert "/frequency'" in r.text  # the JS actually calls the endpoint
 
+    def test_the_history_modal_answers_before_the_graph(self, client):
+        """The modal used to open on a chart and a table and state nothing.
+
+        Everything on the summary strip is a plain FACT about the fetched rows — a minimum,
+        a maximum, a count, a timestamp. The one judgement, förändring, is READ off /stats
+        and omitted when that payload is not loaded: change over a period is stats.py's
+        definition, and a second one in JS would drift from it (Gotcha 4). The same shape
+        as the deal row reading `verdict` instead of deciding it.
+        """
+        r = client.get("/")
+        assert 'id="price-history-summary"' in r.text
+        assert "function historySummaryHtml" in r.text
+        # Read, never recomputed: the strip looks the row up by product_id.
+        assert (
+            "statsData && statsData.products || []).find(p => p.product_id === productId)" in r.text
+        )
+        assert "changeCell(statsRow.change_pct)" in r.text
+
+    def test_the_history_chart_marks_campaigns_and_drops_the_redundant_line(self, client):
+        """A campaign is the reason a curve dips, and the dip alone does not say so — the
+        point is drawn as a hollow ring instead.
+
+        The "Billigast tillgänglig" line is gone: it traced the minimum across links, which
+        is by construction whichever coloured line sits lowest at each moment, so it added
+        nothing while being the darkest and thickest mark on the canvas. A dashed mean took
+        its place. buildBestAvailableSeries stays — it is the honest carry-forward walk, and
+        an envelope should reuse it rather than grow a second copy.
+        """
+        r = client.get("/")
+        assert "is_offer" in r.text
+        assert "pointRadius: offers.map(" in r.text
+        # The DATASET, not the prose: the comment above it still names what was removed
+        # and why, which is the part a future reader needs.
+        assert "role: 'best'" not in r.text
+        assert "label: 'Billigast tillgänglig'" not in r.text
+        assert "function buildBestAvailableSeries" in r.text
+        assert "Snitt av observationerna" in r.text
+        # Notation belongs in the caption, not in a legend row you could switch off.
+        assert "Ringar är erbjudanden" in r.text
+
+    def test_the_history_table_prints_swedish_money(self, client):
+        """It was the one table in the portal that bypassed kr()/unitKr() and concatenated
+        the raw number, so it printed "79.9 kr" — an English decimal point and a dropped
+        öre — beside cells that said "79,90 kr" everywhere else."""
+        r = client.get("/")
+        assert "escapeHtml(h.price_sek + ' kr')" not in r.text
+        assert "escapeHtml(h.offer_price_sek + ' kr')" not in r.text
+        assert "escapeHtml(kr(h.price_sek))" in r.text
+        assert "escapeHtml(unitKr(h.unit_price_sek, unit))" in r.text
+        # The tooltip had the same slip.
+        assert "item.parsed.y.toFixed(2)" not in r.text
+
     def test_deals_view_is_a_decision_not_a_listing(self, client):
         """Att köpa must carry the platform's OWN comparison, not the store's framing.
 

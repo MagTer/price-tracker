@@ -506,13 +506,23 @@
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
              that has no honest answer: a smaller box always looks cheaper. In absolute mode
              the best-available line is not drawn at all. -->
-        <div id="price-history-modes" class="history-modes">
-            <button type="button" class="btn btn-sm active" data-history-mode="unit">Jfr-pris</button>
-            <button type="button" class="btn btn-sm" data-history-mode="absolute">Absolut pris</button>
+        <!-- The answer before the graph. The modal used to open on a chart and a table and
+             state nothing: every question it can answer in one line had to be read off the
+             curve first. -->
+        <div id="price-history-summary" class="ph-summary"></div>
+        <div class="ph-controls">
+            <div id="price-history-modes" class="history-modes">
+                <button type="button" class="btn btn-sm active" data-history-mode="unit">Jfr-pris</button>
+                <button type="button" class="btn btn-sm" data-history-mode="absolute">Absolut pris</button>
+            </div>
+            <!-- Ours, not Chart.js's: it belongs beside the mode switch rather than under
+                 the canvas, and it keeps the click-to-hide the built-in legend gave us. -->
+            <div id="price-history-legend" class="ph-legend"></div>
         </div>
         <div id="price-history-chart-container">
             <canvas id="price-history-chart"></canvas>
         </div>
+        <div id="price-history-caption" class="ph-caption"></div>
         <div id="price-history-table"></div>
     </div>
 </div>
@@ -1308,8 +1318,52 @@ form { padding: 20px; }
 .pkg-entry-units { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .pkg-entry-units:empty { display: none; }
 .entry-unit-active { background: var(--primary); color: #fff; border-color: var(--primary); }
-.history-modes { display: flex; gap: 6px; padding: 12px 20px 4px; }
+.history-modes { display: flex; gap: 6px; flex: 0 0 auto; }
 .history-modes .btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+/* Mode switch on the left, legend filling the rest — one row, so the chart starts higher. */
+.ph-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px 18px;
+    flex-wrap: wrap;
+    padding: 12px 20px 4px;
+}
+.ph-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-left: auto; }
+.ph-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-family: inherit;
+    color: var(--text-secondary);
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+}
+.ph-legend-item.is-off { color: var(--text-faint); text-decoration: line-through; }
+.ph-legend-item.is-off .ph-legend-swatch { opacity: 0.35; }
+.ph-legend-swatch { width: 14px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
+/* The answer strip: the numbers first, the span bar beside them. */
+.ph-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px 32px;
+    flex-wrap: wrap;
+    padding: 4px 20px 0;
+}
+.ph-stats { display: flex; gap: 14px 32px; flex-wrap: wrap; }
+.ph-stat-label { font-size: 12px; color: var(--text-muted); }
+.ph-stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+}
+.ph-stat-note { font-size: 12px; color: var(--text-faint); }
+.ph-span { flex: 0 1 240px; min-width: 180px; margin-left: auto; }
+.ph-caption { padding: 0 20px 4px; font-size: 12px; color: var(--text-faint); }
 /* The chart gets a real height of its own: without one, Chart.js's responsive canvas
    collapses toward its default aspect and the graph reads as a cramped strip. */
 #price-history-chart-container { height: 420px; padding: 4px 20px 8px; }
@@ -1496,7 +1550,13 @@ form { padding: 20px; }
     .modal { align-items: flex-end; }
     .modal-content { width: 100%; max-width: 100%; max-height: 92vh; border-radius: 12px 12px 0 0; }
     #price-history-chart-container { height: 300px; padding: 4px 8px 8px; }
-    .history-modes { padding: 12px 8px 4px; }
+    .ph-controls { padding: 12px 8px 4px; }
+    /* The legend keeps the row on a phone rather than pushing to the right edge, and the
+       span bar goes under the figures instead of beside them. */
+    .ph-legend { margin-left: 0; }
+    .ph-summary, .ph-caption { padding-left: 8px; padding-right: 8px; }
+    .ph-span { margin-left: 0; flex: 1 1 100%; }
+    .ph-stat-value { font-size: 19px; }
     #price-history-table { padding: 0 8px 16px; }
 }
 <!-- SECTION_SEPARATOR -->
@@ -4212,7 +4272,13 @@ function groupHistoryByLink(rows) {
         link.label = row.package_size
             ? row.store_name + ' ' + row.package_size
             : row.store_name + ' (utan förpackningsmängd)';
-        link.byDate[date] = { price_sek: row.price_sek, unit_price_sek: row.unit_price_sek };
+        link.byDate[date] = {
+            price_sek: row.price_sek,
+            unit_price_sek: row.unit_price_sek,
+            // Which points the chart rings. A campaign is the whole reason a curve dips,
+            // and without the ring the dip is indistinguishable from an ordinary price cut.
+            is_offer: row.offer_price_sek != null
+        };
     }
     return links;
 }
@@ -4282,51 +4348,78 @@ function buildChartData(rows, mode) {
     const dates = Object.keys(dateSet).sort();
     const field = mode === 'absolute' ? 'price_sek' : 'unit_price_sek';
 
-    const datasets = links.map((link, index) => ({
-        role: 'link',
-        product_store_id: link.product_store_id,
-        label: link.label,
-        data: Object.keys(link.byDate).sort().map((date) => {
-            const value = link.byDate[date][field];
-            return {
-                x: toTs(date),
-                y: (typeof value === 'number' && isFinite(value)) ? value : null
-            };
-        }),
-        borderColor: palette[index % palette.length],
-        borderWidth: 2,
-        borderJoinStyle: 'round',
-        borderCapStyle: 'round',
-        stepped: 'after',
-        spanGaps: false,
-        fill: false,
-        // The markers stay visible on purpose: a dot is MEASURED, the horizontal run after it
-        // is CARRIED, and hiding the dots would erase that distinction. The surface-colored
-        // ring keeps them legible where lines cross.
-        pointRadius: 3,
-        pointBackgroundColor: palette[index % palette.length],
-        pointBorderColor: '#fff',
-        pointBorderWidth: 2,
-        pointHoverRadius: 5,
-        pointHitRadius: 12
-    }));
+    const datasets = links.map((link, index) => {
+        const color = palette[index % palette.length];
+        const dates = Object.keys(link.byDate).sort();
+        // A campaign point is drawn as a HOLLOW ring: same place on the curve, inverted
+        // fill. The dip was always visible; what was not was that it was a kampanj rather
+        // than an ordinary price cut, and that is the difference between "wait for it to
+        // come back" and "this is the new normal".
+        const offers = dates.map((date) => link.byDate[date].is_offer === true);
+        return {
+            role: 'link',
+            product_store_id: link.product_store_id,
+            label: link.label,
+            data: dates.map((date) => {
+                const value = link.byDate[date][field];
+                return {
+                    x: toTs(date),
+                    y: (typeof value === 'number' && isFinite(value)) ? value : null
+                };
+            }),
+            borderColor: color,
+            borderWidth: 2,
+            borderJoinStyle: 'round',
+            borderCapStyle: 'round',
+            stepped: 'after',
+            spanGaps: false,
+            fill: false,
+            // The markers stay visible on purpose: a dot is MEASURED, the horizontal run after
+            // it is CARRIED, and hiding the dots would erase that distinction. The
+            // surface-colored ring keeps them legible where lines cross.
+            pointRadius: offers.map(isOffer => (isOffer ? 5.5 : 3)),
+            pointBackgroundColor: offers.map(isOffer => (isOffer ? '#fff' : color)),
+            pointBorderColor: offers.map(isOffer => (isOffer ? color : '#fff')),
+            pointBorderWidth: offers.map(isOffer => (isOffer ? 2.5 : 2)),
+            pointHoverRadius: offers.map(isOffer => (isOffer ? 7 : 5)),
+            pointHitRadius: 12
+        };
+    });
 
     // kr/unit mode ONLY (QD-3). The cheapest ABSOLUTE price across pack sizes is meaningless —
     // a smaller box always wins — so rendering a "best" line in absolute mode would restate the
     // bug as a recommendation. The suppression lives here, where the harness can see it, rather
     // than in the render path where it could not.
-    if (mode === 'unit') {
-        const best = buildBestAvailableSeries(rows, dates);
-        datasets.push({
-            role: 'best',
-            label: 'Billigast tillgänglig',
-            data: dates.map((date, i) => ({ x: toTs(date), y: best[i] })),
-            borderColor: '#1e293b',
-            borderWidth: 3,
-            borderJoinStyle: 'round',
-            borderCapStyle: 'round',
-            stepped: 'after',
-            spanGaps: false,
+    // A quiet reference line at the mean of the observations, drawn BEHIND everything
+    // (unshifted: Chart.js paints datasets in array order, so first is furthest back).
+    //
+    // It replaced a "Billigast tillgänglig" line that traced the minimum across links: that
+    // line was, by construction, whichever coloured line sat lowest at each moment — so it
+    // added no value while being the darkest and thickest thing on the canvas, doubling the
+    // contour of whatever it shadowed. The information is not gone; it is the lowest line
+    // you can see. buildBestAvailableSeries is kept: it is the honest carry-forward walk
+    // across links, and the day this chart needs an envelope again it should use that one
+    // rather than a fresh copy.
+    //
+    // The mean is over the OBSERVATIONS, not over time, and the caption says so — link
+    // cadences differ (Willys is checked twice a week, ICA once), so a store we look at more
+    // often weighs more. That is a reference line, not a claim about what anything cost on
+    // average, and it must never be labelled as one.
+    const values = [];
+    for (const ds of datasets) {
+        for (const point of ds.data) {
+            if (typeof point.y === 'number' && isFinite(point.y)) values.push(point.y);
+        }
+    }
+    if (values.length >= 2 && dates.length) {
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        datasets.unshift({
+            role: 'mean',
+            label: 'Snitt av observationerna',
+            data: [{ x: toTs(dates[0]), y: mean }, { x: toTs(dates[dates.length - 1]), y: mean }],
+            borderColor: '#94a3b8',
+            borderWidth: 1.5,
+            borderDash: [6, 5],
             fill: false,
             pointRadius: 0,
             pointHoverRadius: 0,
@@ -4379,12 +4472,21 @@ function setHistoryMode(mode) {
 
 function renderPriceHistory() {
     const tableDiv = document.getElementById('price-history-table');
+    const summaryDiv = document.getElementById('price-history-summary');
+    const legendDiv = document.getElementById('price-history-legend');
+    const captionDiv = document.getElementById('price-history-caption');
     if (!historyRows.length) {
         tableDiv.innerHTML = '<p class="empty-state">Ingen prishistorik än.</p>';
+        summaryDiv.innerHTML = '';
+        legendDiv.innerHTML = '';
+        captionDiv.textContent = '';
         if (priceChart) { priceChart.destroy(); priceChart = null; }
         return;
     }
     const unit = historyFor ? historyFor.unit : null;
+    // The strip reads kr/enhet in both modes on purpose: it answers "what does this product
+    // cost", and the absolute price of a 450 g bag against a 500 g bag answers nothing.
+    summaryDiv.innerHTML = historySummaryHtml(historyRows, historyFor ? historyFor.id : null, unit);
     tableDiv.innerHTML = buildHistoryTable(historyRows, unit);
 
     if (window.Chart) {
@@ -4392,6 +4494,12 @@ function renderPriceHistory() {
         const chart = buildChartData(historyRows, historyMode);
         const ctx = document.getElementById('price-history-chart').getContext('2d');
         if (priceChart) priceChart.destroy();
+        legendDiv.innerHTML = buildHistoryLegend(chart);
+        // Said once, under the chart, rather than in a legend row that would invite hiding
+        // it: the ring and the dashed line are notation, not series.
+        captionDiv.textContent = 'Ringar är erbjudanden. Streckad linje är snittet av '
+            + 'observationerna i perioden. En prick är en mätning; den vågräta linjen efter '
+            + 'den är priset buret framåt tills vi såg något annat.';
 
         // Day-aligned x ticks: the x values are UTC midnights, so a stepSize in whole days
         // keeps every tick a real date instead of an arbitrary epoch offset.
@@ -4418,20 +4526,10 @@ function renderPriceHistory() {
                 maintainAspectRatio: false,
                 interaction: { mode: 'nearest', intersect: false },
                 plugins: {
-                    legend: {
-                        // One series needs no legend box — the modal header already names it.
-                        display: chart.datasets.length > 1,
-                        position: 'bottom',
-                        labels: {
-                            usePointStyle: true,
-                            pointStyle: 'circle',
-                            boxWidth: 8,
-                            boxHeight: 8,
-                            padding: 16,
-                            color: '#1e293b',
-                            font: { size: 12 }
-                        }
-                    },
+                    // Ours instead (#price-history-legend): it belongs beside the mode
+                    // switch, and the built-in one also listed the dashed mean, which is a
+                    // reference line rather than a series you would ever want to toggle.
+                    legend: { display: false },
                     tooltip: {
                         backgroundColor: '#1e293b',
                         padding: 10,
@@ -4441,7 +4539,7 @@ function renderPriceHistory() {
                                 ? new Date(items[0].parsed.x).toISOString().slice(0, 10)
                                 : '',
                             label: (item) => item.dataset.label + ': '
-                                + item.parsed.y.toFixed(2) + ' '
+                                + formatSek(item.parsed.y) + ' '
                                 + (historyMode === 'unit' ? unitPriceHeading(unit) : 'kr')
                         }
                     }
@@ -4465,7 +4563,10 @@ function renderPriceHistory() {
                     },
                     y: {
                         beginAtZero: false,
-                        grace: '10%',
+                        // Air, not a third of the canvas: at 10 % the axis rounded out to a
+                        // range half again as tall as the data, and the curves flattened
+                        // into the middle of an empty box.
+                        grace: '5%',
                         title: {
                             display: true,
                             text: historyMode === 'unit' ? unitPriceHeading(unit) : 'Pris (kr)',
@@ -4484,6 +4585,100 @@ function renderPriceHistory() {
             }
         });
     }
+}
+
+// The strip under the title: what the chart would take a careful read to tell you.
+//
+// Everything here is a plain FACT about the rows the modal already fetched — a minimum, a
+// maximum, a count, a timestamp. The one JUDGEMENT on the strip, förändring, is READ from
+// /stats when that payload happens to be loaded and simply omitted when it is not: change
+// over a period is stats.py's definition (carry-forward, a baseline from before the window,
+// an em dash rather than 0,0 % on a single observation), and a second one computed here
+// would drift from it exactly as Gotcha 4 predicts. The same rule the deal row follows by
+// reading `verdict` instead of deciding it.
+//
+// "Billigast nu" is each link's LATEST observation carried forward, then the lowest of
+// those — the same walk buildBestAvailableSeries does, ending on the same value.
+function historySummaryHtml(rows, productId, unit) {
+    const links = groupHistoryByLink(rows);
+    let best = null;
+    let bestLabel = '';
+    const values = [];
+    let lastSeen = '';
+    for (const link of links) {
+        const dates = Object.keys(link.byDate).sort();
+        for (const date of dates) {
+            const value = link.byDate[date].unit_price_sek;
+            if (typeof value === 'number' && isFinite(value)) values.push(value);
+            if (!lastSeen || date > lastSeen) lastSeen = date;
+        }
+        for (let i = dates.length - 1; i >= 0; i--) {
+            const value = link.byDate[dates[i]].unit_price_sek;
+            if (typeof value === 'number' && isFinite(value)) {
+                if (best === null || value < best) { best = value; bestLabel = link.label; }
+                break;
+            }
+        }
+    }
+
+    const stat = (label, value, note) =>
+        `<div class="ph-stat"><div class="ph-stat-label">${escapeHtml(label)}</div>`
+        + `<div class="ph-stat-value">${value}</div>`
+        + (note ? `<div class="ph-stat-note">${escapeHtml(note)}</div>` : '')
+        + '</div>';
+
+    let html = '<div class="ph-stats">';
+    html += stat('Billigast nu',
+        escapeHtml(best == null ? DASH : unitKr(best, unit)),
+        best == null ? 'inget jfr-pris i perioden' : bestLabel);
+
+    // The period's own change, only when the domain has already computed it for this
+    // product — never recomputed here.
+    const statsRow = (statsData && statsData.products || []).find(p => p.product_id === productId);
+    if (statsRow) {
+        html += stat('Förändring', changeCell(statsRow.change_pct),
+            STATS_PERIODS[String((statsData.period || {}).weeks || 0)] || '');
+    }
+
+    html += stat('Observationer', String(rows.length),
+        lastSeen ? 'senast ' + formatDay(lastSeen) : '');
+    html += '</div>';
+
+    // The span, on the modal's OWN window — named, because this app has three windows that
+    // could each be called "spannet" (the deal row's 84 days, the statistics period, and
+    // these 90 days) and an unlabelled bar would silently pick one.
+    if (values.length >= 2) {
+        const low = Math.min(...values);
+        const high = Math.max(...values);
+        if (high > low && best != null) {
+            const pos = clamp01((best - low) / (high - low));
+            const width = (pos * 100).toFixed(1) + '%';
+            const isLow = pos <= 1 / 3;
+            html += '<div class="ph-span">'
+                + '<div class="span-label">Prisläge i perioden</div>'
+                + `<div class="span-ends"><span>${escapeHtml(formatSek(low))}</span>`
+                + `<span>${escapeHtml(formatSek(high))}</span></div>`
+                + '<div class="span-track">'
+                + `<div class="span-fill${isLow ? ' is-low' : ''}" style="width:${width}"></div>`
+                + `<div class="span-marker" style="left:${width}"></div>`
+                + '</div></div>';
+        }
+    }
+    return html;
+}
+
+// Ours rather than Chart.js's, so it can sit beside the mode switch — and clickable, so
+// nothing is lost by moving it: hiding a link is how you read a crowded chart.
+function buildHistoryLegend(chart) {
+    const items = chart.datasets
+        .map((ds, index) => ({ ds, index }))
+        .filter(entry => entry.ds.role === 'link');
+    if (items.length < 2) return '';
+    return items.map(({ ds, index }) =>
+        `<button type="button" class="ph-legend-item" data-legend-index="${index}">`
+        + `<span class="ph-legend-swatch" style="background:${escapeHtml(ds.borderColor)}"></span>`
+        + `${escapeHtml(ds.label)}</button>`
+    ).join('');
 }
 
 function buildHistoryTable(rows, unit) {
@@ -4505,8 +4700,11 @@ function buildHistoryTable(rows, unit) {
             pkg = escapeHtml(h.package_quantity + (unit ? ' ' + unit : ''));
         }
         // An em dash, never a 0 and never a blank — this link simply HAS no kr/unit (QD-4).
+        // kr(), not raw concatenation: `h.price_sek + ' kr'` printed "79.9 kr" — an English
+        // decimal point and a dropped öre, in the one table that bypassed the shared
+        // formatters. Money is Swedish and always to the öre in this app.
         const unitPrice = (typeof h.unit_price_sek === 'number')
-            ? escapeHtml(h.unit_price_sek.toFixed(2)) + ' kr'
+            ? escapeHtml(unitKr(h.unit_price_sek, unit))
             : '&mdash;';
         // '?' for null (QD-6). in_stock is currently non-nullable server-side, so this is
         // defensive rather than a live fix — but answering "Nej" to "we never checked" is the
@@ -4521,9 +4719,9 @@ function buildHistoryTable(rows, unit) {
             <td>${escapeHtml(h.checked_at ? String(h.checked_at).slice(0, 10) : '-')}${source}</td>
             <td>${escapeHtml(h.store_name)}</td>
             <td>${pkg}</td>
-            <td>${h.price_sek != null ? escapeHtml(h.price_sek + ' kr') : '&mdash;'}</td>
+            <td>${escapeHtml(kr(h.price_sek))}</td>
             <td class="unit-price">${unitPrice}</td>
-            <td>${h.offer_price_sek != null ? escapeHtml(h.offer_price_sek + ' kr') : '&mdash;'}</td>
+            <td>${escapeHtml(kr(h.offer_price_sek))}</td>
             <td>${stock}</td>
         </tr>`;
     }
@@ -5134,6 +5332,19 @@ document.getElementById('price-history-modes').addEventListener('click', (e) => 
     const btn = e.target.closest('button[data-history-mode]');
     if (!btn) return;
     setHistoryMode(btn.getAttribute('data-history-mode'));
+});
+
+// Click-to-hide a link, the one thing Chart.js's own legend did that ours had to keep:
+// with four links on a 12-week window the lines cross constantly, and muting one is how
+// you read the other three.
+document.getElementById('price-history-legend').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-legend-index]');
+    if (!btn || !priceChart) return;
+    const index = Number(btn.getAttribute('data-legend-index'));
+    const meta = priceChart.getDatasetMeta(index);
+    meta.hidden = meta.hidden === null ? !priceChart.data.datasets[index].hidden : !meta.hidden;
+    btn.classList.toggle('is-off', !!meta.hidden);
+    priceChart.update();
 });
 
 // On Att köpa the question behind a click on the product name is "is this price actually
