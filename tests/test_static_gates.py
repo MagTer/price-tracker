@@ -463,3 +463,51 @@ def test_every_getelementbyid_literal_resolves_to_markup() -> None:
         f"admin.html's script binds to {missing} but no markup renders them — "
         "getElementById returns null, the script throws while loading, and the page goes inert."
     )
+
+
+_PKG_AMOUNT_INPUT_RE = re.compile(r'<input[^>]*id="[\w-]*pkg-amount"[^>]*>')
+_STEP_ASSIGN_RE = re.compile(r"\.step\s*=\s*([^;]+);")
+
+
+def test_the_package_amount_field_never_narrows_below_the_stored_precision() -> None:
+    """A package amount is stored to four decimals; the input must not refuse three.
+
+    This has now bitten twice, from two different places, and it is invisible to every
+    other test because the failure is the BROWSER's constraint validation: with
+    step="0.01" the field holding 0,024 kg (a 24 g sachet — the v0.45.0 case, which is
+    exactly why the column is Numeric(12, 4) and _QUANTUM is 0.0001) reports
+    stepMismatch, the form refuses to submit, and nothing reaches the server to be
+    tested. Entering the SAME amount as 24 g goes through, because 24 is a multiple of
+    0.01 — so it reads as an arbitrary GUI lock rather than a validation rule.
+
+    v0.45.0 fixed the three markup attributes and left the JS that overwrites them
+    (pkgFieldsChanged runs on every dialog open via pkgSetEntryUnit), so the attribute
+    was correct in the file and wrong in the browser. Both places are gated here.
+
+    'st' is the one legitimate narrowing: a count is whole, so step='1' stays.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+
+    inputs = _PKG_AMOUNT_INPUT_RE.findall(html)
+    assert len(inputs) == 3, (
+        f"Expected 3 package-amount inputs (quick-add, link, edit), found {len(inputs)}"
+    )
+    for tag in inputs:
+        assert 'step="any"' in tag, (
+            f"package-amount input declares a fixed step: {tag}\n"
+            "A 24 g sachet is 0,024 kg and the browser will refuse to submit it."
+        )
+
+    js = html.split("<!-- SECTION_SEPARATOR -->")[2]
+    assignments = _STEP_ASSIGN_RE.findall(js)
+    assert assignments, "no .step assignment found — has pkgFieldsChanged changed shape?"
+    for expr in assignments:
+        # Whole numbers for a count, 'any' for everything else. A decimal literal here is
+        # the bug: it silently replaces the markup's step="any" before the operator types.
+        assert "'any'" in expr, (
+            f'.step is assigned {expr.strip()!r} — this overwrites step="any" on dialog '
+            "open and locks the field to that many decimals."
+        )
+        assert not re.search(r"'0\.\d+'", expr), (
+            f".step is assigned a decimal literal in {expr.strip()!r} — the 0,024 kg lock."
+        )

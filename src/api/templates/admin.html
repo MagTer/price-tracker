@@ -3827,7 +3827,15 @@ function pkgFieldsChanged(prefix) {
     const amountEl = document.getElementById(prefix + '-pkg-amount');
     const labelEl = document.getElementById(prefix + '-pkg-label');
     const spec = PKG_UNITS[chain.entryUnit];
-    amountEl.step = spec && spec.integer ? '1' : '0.01';
+    // 'any', NOT '0.01' — this line is what v0.45.0 missed when it widened the column to
+    // Numeric(12, 4) and put step="any" in the markup: it runs on every dialog open (via
+    // pkgSetEntryUnit) and overwrote the attribute, so the input was back to 2 decimals
+    // before the operator could type. A 24 g sachet is 0,024 kg, which the browser then
+    // rejected as a stepMismatch ("the two nearest valid values are 0.02 and 0.03") and
+    // refused to submit — while entering the SAME amount as 24 g went through, because
+    // 24 is a multiple of 0.01. The value was never wrong; the form would not let go of it.
+    // A count is still whole: '1' for st.
+    amountEl.step = spec && spec.integer ? '1' : 'any';
     if (!spec || !amountEl.value || chain.labelDirty) return;
     labelEl.value = spec.label(amountEl.value);
 }
