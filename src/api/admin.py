@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from dataclasses import asdict
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -85,7 +86,7 @@ from domain.schedule import (
     next_check_time_for_link,
 )
 from domain.service import PriceTrackerService, perform_price_check, price_history_rows
-from domain.stats import build_statistics
+from domain.stats import build_statistics, product_offer_occasions
 from domain.tenant import DEFAULT_TENANT_ID
 from domain.validation import data_quality
 from infra.db import async_session_factory
@@ -1750,6 +1751,56 @@ async def get_price_history(
     except Exception as e:
         LOGGER.exception("Failed to get price history for product %s", sanitize_log(product_id))
         raise HTTPException(status_code=500, detail="Failed to retrieve price history") from e
+
+
+@router.get("/products/{product_id}/offers")
+async def get_product_offers(
+    product_id: str,
+    days: int = 0,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Every campaign on this product in the period, with the verdict it earned AT THE TIME.
+
+    Its own endpoint rather than a field on /stats: that payload carries one row per
+    product for a page showing all of them, and hanging every product's campaign history
+    off it would grow the whole table for a view that reads one product at a time. The
+    modal already fetches per product, and this fits beside its price history.
+
+    `days=0` means since the beginning. Days rather than weeks because the modal draws the
+    chart and this table from the same window, and /products/{id}/prices takes days.
+
+    Args:
+        product_id: Product UUID.
+        days: Period in days; 0 = all history.
+        session: Database session.
+
+    Security:
+        Requires IAP header auth (X-Auth-Request-Email).
+    """
+    try:
+        product_uuid = uuid.UUID(product_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Ogiltigt format på product_id") from e
+
+    try:
+        # THE walk and THE verdict live in domain/stats.py, shared with the per-store
+        # "varav faktiskt billigast" counter — this route serializes and nothing else.
+        occasions = await product_offer_occasions(session, product_uuid, days=days or None)
+        return [
+            {
+                **asdict(occasion),
+                "checked_at": occasion.checked_at.isoformat(),
+                "alternative_seen_at": (
+                    occasion.alternative_seen_at.isoformat()
+                    if occasion.alternative_seen_at
+                    else None
+                ),
+            }
+            for occasion in occasions
+        ]
+    except Exception as e:
+        LOGGER.exception("Failed to get offer occasions for product %s", sanitize_log(product_id))
+        raise HTTPException(status_code=500, detail="Failed to retrieve offers") from e
 
 
 @router.post("/check/{product_store_id}")

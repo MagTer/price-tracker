@@ -81,6 +81,25 @@ def _effective(point: PricePoint) -> Decimal | None:
     return point.price_sek
 
 
+def was_cheapest(unit_price: Decimal | None, alternative: Decimal | None) -> bool | None:
+    """Was this offer the cheapest way to buy the product AT THAT MOMENT?
+
+    THE comparison behind both the per-store "varav faktiskt billigast" counter and the
+    per-product Pristillfällen list. It is a hair's worth of arithmetic and exactly the kind
+    that drifts when it is written twice: a `<` in one place and a `<=` in the other would
+    make the counter and the rows it summarises disagree about the same campaign.
+
+    A tie counts as cheapest — nothing else was a better buy.
+
+    None, never False, when there is nothing to compare against: an offer on a product whose
+    other links have no known price yet is UNJUDGED, and calling that "not cheapest" would
+    invent a loss out of a gap.
+    """
+    if unit_price is None or alternative is None:
+        return None
+    return unit_price <= alternative
+
+
 def _cheapest(current: dict[Any, Decimal]) -> tuple[Any, Decimal] | None:
     """The winning (link, kr/unit) among the links whose price is currently known.
 
@@ -102,6 +121,11 @@ class _ProductSeries:
 
     def __init__(self) -> None:
         self._current: dict[Any, Decimal] = {}
+        # When each link's carried value was OBSERVED. Carry-forward is the right model —
+        # a shelf keeps its price until we look again — but with weekly checks the price we
+        # judge a campaign against can be six days old, and a row that says "Willys låg 8 %
+        # under" without saying when it was last seen claims a precision we do not have.
+        self._seen_at: dict[Any, datetime | None] = {}
         self.baseline: Decimal | None = None  # value entering the period (carried forward)
         self.first: Decimal | None = None
         self.last: Decimal | None = None
@@ -110,10 +134,11 @@ class _ProductSeries:
         self.winner: Any = None
         self.stamps: set[datetime] = set()
 
-    def seed(self, link_id: Any, unit_price: Decimal) -> None:
+    def seed(self, link_id: Any, unit_price: Decimal, at: datetime | None = None) -> None:
         """A price observed BEFORE the period — it is what the shelf said when the period
         opened, so it forms the baseline rather than being thrown away."""
         self._current[link_id] = unit_price
+        self._seen_at[link_id] = at
 
     def close_seed(self) -> None:
         """Freeze what the period opened at, and make it the current value too.
@@ -130,6 +155,7 @@ class _ProductSeries:
 
     def add(self, at: datetime, link_id: Any, unit_price: Decimal) -> None:
         self._current[link_id] = unit_price
+        self._seen_at[link_id] = at
         self.stamps.add(at)
         best = _cheapest(self._current)
         if best is None:
@@ -145,14 +171,21 @@ class _ProductSeries:
         """Each link's latest known kr/unit — what every store is asking right now."""
         return dict(self._current)
 
-    def best_excluding(self, link_id: Any) -> Decimal | None:
-        """The cheapest kr/unit among the product's OTHER links, as of now in the walk.
+    def cheapest_other(self, link_id: Any) -> tuple[Any, Decimal, datetime | None] | None:
+        """The cheapest OTHER link as of now in the walk: which one, at what, seen when.
 
         This is what turns a discount percentage into a decision: a 20 % campaign that is
         still pricier per unit than another store's ordinary price is not a saving.
         """
         others = {k: v for k, v in self._current.items() if k != link_id}
         best = _cheapest(others)
+        if best is None:
+            return None
+        return best[0], best[1], self._seen_at.get(best[0])
+
+    def best_excluding(self, link_id: Any) -> Decimal | None:
+        """The value alone — kept for callers that only need the comparison."""
+        best = self.cheapest_other(link_id)
         return best[1] if best else None
 
     @property
@@ -253,7 +286,7 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
             continue
         value = unit_price_py(_effective(point), link.quantity)
         if value is not None:
-            series[link.product_id].seed(link_id, value)
+            series[link.product_id].seed(link_id, value, point.checked_at)
     for product_series in series.values():
         product_series.close_seed()
 
@@ -282,9 +315,10 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
             # Judged BEFORE this point is folded in, so "elsewhere" means the alternatives as
             # they stood — including this link's own previous price is meaningless here.
             alternative = product_series.best_excluding(link.link_id)
-            if value is not None and alternative is not None:
+            verdict = was_cheapest(value, alternative)
+            if verdict is not None:
                 stats["judged"] += 1
-                if value <= alternative:
+                if verdict:
                     stats["was_cheapest"] += 1
 
         if value is not None:
@@ -445,4 +479,143 @@ def _coverage(
     }
 
 
-__all__ = ["build_statistics"]
+@dataclass(frozen=True)
+class OfferOccasion:
+    """One campaign, and whether it was actually the cheapest way to buy the product THEN.
+
+    Every other judgement in this app is about now: ``deals.verdict`` compares links at this
+    moment, ``deals.timing`` compares this price with the product's own floor. This is the
+    only one about the PAST — the only place the tracker grades its own advice, and the only
+    place a store's own discount percentage can be answered ("−22 %, and Willys was still
+    8 % cheaper per kg that week").
+    """
+
+    checked_at: datetime
+    store_name: str
+    package_size: str | None
+    link_is_active: bool
+    price_sek: float | None
+    offer_price_sek: float
+    unit_price_sek: float | None
+    offer_type: str | None
+    offer_details: str | None
+    discount_percent: float | None
+    # The cheapest OTHER link as it stood at that moment, carried forward from its last
+    # observation — with that observation's date, because with weekly checks it can be six
+    # days old and the row must not imply we looked the same morning.
+    alternative_unit_price_sek: float | None
+    alternative_store: str | None
+    alternative_package_size: str | None
+    alternative_seen_at: datetime | None
+    # None = UNJUDGED (no other link had a known price yet), never False.
+    was_cheapest: bool | None
+
+
+async def product_offer_occasions(
+    session: AsyncSession, product_uuid: Any, *, days: int | None = None
+) -> list[OfferOccasion]:
+    """Every campaign on one product inside the period, newest first, each with its verdict.
+
+    Walks the SAME carry-forward machinery :func:`build_statistics` walks — ``_ProductSeries``
+    seeded with each link's last observation from before the window, points in time order,
+    the verdict taken BEFORE the point is folded in so "elsewhere" means the alternatives as
+    they stood. The verdict itself is :func:`was_cheapest`, shared with the per-store counter
+    so the rows and the number summarising them can never disagree.
+
+    **INACTIVE links are included, and that is deliberate (decided 2026-08-13).** The rest of
+    this module filters them out because "billigast" must not name a shelf you cannot buy
+    from — but this table is history, and a campaign that really ran at a butik we have since
+    stopped tracking really ran. It is the same reason ``deals.observed_spans`` counts
+    inactive links for the floor: what a product HAS cost is not a question about today's
+    shelves. A retired link is flagged rather than hidden (``link_is_active``), because a row
+    the reader cannot act on should say so.
+    """
+    now = _utc_now()
+    # DAYS, not weeks: the sibling route on this resource (/products/{id}/prices) takes
+    # days and the modal shows both together — a window that differed by a day between the
+    # chart and the table under it would put a campaign in one and not the other.
+    start = now - timedelta(days=days) if days else None
+
+    link_rows = (
+        await session.execute(
+            select(ProductStore, Store)
+            .join(Store, ProductStore.store_id == Store.id)
+            .where(ProductStore.product_id == product_uuid)
+        )
+    ).all()
+    if not link_rows:
+        return []
+
+    links = {
+        product_store.id: _Link(
+            link_id=product_store.id,
+            product_id=product_store.product_id,
+            store_name=link_store_name(product_store, store),
+            package_size=product_store.package_size,
+            quantity=product_store.package_quantity,
+            last_checked_at=product_store.last_checked_at,
+        )
+        for product_store, store in link_rows
+    }
+    active = {product_store.id: product_store.is_active for product_store, _ in link_rows}
+
+    points = (
+        (
+            await session.execute(
+                select(PricePoint)
+                .where(PricePoint.product_store_id.in_(links.keys()))
+                .order_by(PricePoint.checked_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    series = _ProductSeries()
+    occasions: list[OfferOccasion] = []
+    for point in points:
+        link = links[point.product_store_id]
+        value = unit_price_py(_effective(point), link.quantity)
+        # Points from before the window seed the comparison basis and are not themselves
+        # occasions: a campaign that ran before the period is not in the period.
+        if start is not None and point.checked_at < start:
+            if value is not None:
+                series.seed(link.link_id, value, point.checked_at)
+            continue
+
+        if point.offer_price_sek is not None:
+            other = series.cheapest_other(link.link_id)
+            alternative = links.get(other[0]) if other else None
+            discount = None
+            if point.price_sek:
+                discount = float((point.price_sek - point.offer_price_sek) / point.price_sek * 100)
+            occasions.append(
+                OfferOccasion(
+                    checked_at=point.checked_at,
+                    store_name=link.store_name,
+                    package_size=link.package_size,
+                    link_is_active=bool(active.get(link.link_id, True)),
+                    price_sek=_round(point.price_sek),
+                    offer_price_sek=float(point.offer_price_sek),
+                    unit_price_sek=_round(value),
+                    offer_type=point.offer_type,
+                    offer_details=point.offer_details,
+                    discount_percent=discount,
+                    alternative_unit_price_sek=_round(other[1]) if other else None,
+                    alternative_store=alternative.store_name if alternative else None,
+                    alternative_package_size=alternative.package_size if alternative else None,
+                    alternative_seen_at=other[2] if other else None,
+                    was_cheapest=was_cheapest(value, other[1] if other else None),
+                )
+            )
+
+        if value is not None:
+            series.add(point.checked_at, link.link_id, value)
+
+    # Newest first: the last campaign is the one you remember and the one worth checking
+    # against the current shelf.
+    occasions.reverse()
+    return occasions
+
+
+__all__ = ["OfferOccasion", "build_statistics", "product_offer_occasions", "was_cheapest"]

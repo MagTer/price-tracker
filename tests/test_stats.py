@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from domain.models import PricePoint, Product, ProductStore, Store
-from domain.stats import build_statistics
+from domain.stats import build_statistics, product_offer_occasions
 from domain.tenant import DEFAULT_TENANT_ID
 
 pytestmark = pytest.mark.integration
@@ -340,3 +340,115 @@ class TestStatsWire:
 
         assert all_time["period"]["weeks"] is None or all_time["period"]["weeks"] == 0
         assert narrowed["period"]["weeks"] == 4
+
+
+class TestOfferOccasions:
+    """Pristillfällen — the only judgement in this app about the PAST.
+
+    Everything else asks "is this the cheapest right now" (deals.verdict) or "is this cheap
+    for this product" (deals.timing). This asks "was the campaign we showed you actually the
+    best buy that week", which is the only feedback the tracker can give on its own advice.
+    """
+
+    async def test_a_campaign_is_judged_against_the_shelf_as_it_stood(self, db_session) -> None:
+        """The alternative is each OTHER link's price carried forward from its last
+        observation — not its price today, and not this link's own earlier price."""
+        ica, willys = await _store(db_session, "ica"), await _store(db_session, "willys")
+        coffee = await _product(db_session, "Bryggkaffe", unit="kg")
+        ica_link = await _link(db_session, coffee, ica, "0.45")
+        willys_link = await _link(db_session, coffee, willys, "0.5")
+
+        # Willys observed once, three weeks ago, and not since: 60,00 / 0,5 = 120,00 kr/kg.
+        await _point(db_session, willys_link, "60.00", days_ago=21)
+        # ICA runs a campaign a week later at 62,50 / 0,45 = 138,89 kr/kg — cheaper than its
+        # own ordinary price, and still dearer than the Willys price standing that week.
+        await _point(db_session, ica_link, "79.90", days_ago=14, offer="62.50")
+        await db_session.commit()
+
+        rows = await product_offer_occasions(db_session, coffee.id)
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.was_cheapest is False
+        assert row.unit_price_sek == pytest.approx(138.89)
+        assert row.alternative_unit_price_sek == pytest.approx(120.0)
+        assert row.alternative_store == "Willys"
+        # And WHEN that alternative was last seen, so the row cannot imply we looked the
+        # same morning: with weekly checks it can be six days old.
+        assert row.alternative_seen_at is not None
+
+    async def test_an_offer_with_nothing_to_compare_against_is_unjudged_not_lost(
+        self, db_session
+    ) -> None:
+        """None, never False: calling an unjudgeable campaign "not cheapest" invents a loss
+        out of a gap. It still appears — a row dropped here would not match the count."""
+        willys = await _store(db_session, "willys")
+        coffee = await _product(db_session, "Bryggkaffe", unit="kg")
+        only = await _link(db_session, coffee, willys, "0.5")
+        await _point(db_session, only, "79.90", days_ago=7, offer="59.90")
+        await db_session.commit()
+
+        rows = await product_offer_occasions(db_session, coffee.id)
+
+        assert len(rows) == 1
+        assert rows[0].was_cheapest is None
+        assert rows[0].alternative_unit_price_sek is None
+
+    async def test_a_retired_links_campaigns_stay_in_the_history(self, db_session) -> None:
+        """Decided 2026-08-13: the rest of stats.py filters inactive links because
+        "billigast" must not name a shelf you cannot buy from — but this table is history,
+        and a campaign that really ran really ran. Flagged, never hidden."""
+        ica = await _store(db_session, "ica")
+        coffee = await _product(db_session, "Bryggkaffe", unit="kg")
+        retired = await _link(db_session, coffee, ica, "0.45")
+        retired.is_active = False
+        await _point(db_session, retired, "79.90", days_ago=10, offer="62.50")
+        await db_session.commit()
+
+        rows = await product_offer_occasions(db_session, coffee.id)
+
+        assert len(rows) == 1
+        assert rows[0].link_is_active is False
+
+    async def test_campaigns_before_the_period_seed_the_comparison_but_are_not_rows(
+        self, db_session
+    ) -> None:
+        """A campaign that ran before the window is not in the window — but the price it
+        left behind is what the next campaign is judged against."""
+        ica, willys = await _store(db_session, "ica"), await _store(db_session, "willys")
+        coffee = await _product(db_session, "Bryggkaffe", unit="kg")
+        ica_link = await _link(db_session, coffee, ica, "0.45")
+        willys_link = await _link(db_session, coffee, willys, "0.5")
+
+        # Ten weeks back: outside a 4-week window. 50,00 / 0,5 = 100,00 kr/kg.
+        await _point(db_session, willys_link, "60.00", days_ago=70, offer="50.00")
+        await _point(db_session, ica_link, "79.90", days_ago=7, offer="62.50")
+        await db_session.commit()
+
+        rows = await product_offer_occasions(db_session, coffee.id, days=28)
+
+        assert len(rows) == 1
+        assert rows[0].store_name.startswith("ICA")
+        # Judged against the carried 100,00 kr/kg, which is what Willys' shelf still said.
+        assert rows[0].alternative_unit_price_sek == pytest.approx(100.0)
+        assert rows[0].was_cheapest is False
+
+    async def test_the_rows_and_the_per_store_counter_agree(self, db_session) -> None:
+        """The Gotcha-4 guard: both resolve through was_cheapest(), so the number on
+        Prisutveckling and the rows behind it cannot disagree about the same campaign."""
+        ica, willys = await _store(db_session, "ica"), await _store(db_session, "willys")
+        coffee = await _product(db_session, "Bryggkaffe", unit="kg")
+        ica_link = await _link(db_session, coffee, ica, "0.45")
+        willys_link = await _link(db_session, coffee, willys, "0.5")
+        await _point(db_session, willys_link, "60.00", days_ago=21)
+        await _point(db_session, ica_link, "79.90", days_ago=14, offer="62.50")
+        await _point(db_session, ica_link, "79.90", days_ago=7, offer="40.00")
+        await db_session.commit()
+
+        rows = await product_offer_occasions(db_session, coffee.id)
+        payload = await build_statistics(db_session)
+        ica_row = _store_row(payload, "ICA")
+
+        judged = [row for row in rows if row.was_cheapest is not None]
+        assert len(judged) == ica_row["offers_judged"]
+        assert sum(1 for row in judged if row.was_cheapest) == ica_row["offers_cheapest"]

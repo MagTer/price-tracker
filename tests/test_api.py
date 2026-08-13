@@ -1,7 +1,7 @@
 """Tests for FastAPI admin endpoints and auth."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -539,6 +539,18 @@ class TestAdminDashboard:
         assert "Snitt av observationerna" in r.text
         # Notation belongs in the caption, not in a legend row you could switch off.
         assert "Ringar är erbjudanden" in r.text
+
+    def test_the_modal_reads_one_window_for_everything_it_shows(self, client):
+        """The chart, the observation table and Pristillfällen all read HISTORY_DAYS. Two
+        windows would put a campaign in the table and not on the curve above it, which
+        reads as a rendering bug rather than as the off-by-one it is."""
+        r = client.get("/")
+        assert "const HISTORY_DAYS = 90;" in r.text
+        assert "'/prices?days=' + HISTORY_DAYS" in r.text
+        assert "'/offers?days=' + HISTORY_DAYS" in r.text
+        # The occasions are a nicety; losing them must not take the modal down.
+        assert "buildOfferOccasions" in r.text
+        assert "Kunde inte jämföras" in r.text
 
     def test_the_history_table_prints_swedish_money(self, client):
         """It was the one table in the portal that bypassed kr()/unitKr() and concatenated
@@ -1804,6 +1816,58 @@ class TestWatchesEndpoint:
         assert row["lowest_store"] == "Willys"
         assert row["lowest_seen_at"] is not None
         assert row["span_window_days"] == 84
+
+
+class TestProductOffersEndpoint:
+    """GET /products/{id}/offers — the modal's Pristillfällen table.
+
+    The walk and the verdict are domain/stats.py's and are covered against a real database
+    in tests/test_stats.py; what belongs here is the wiring and the HTTP contract.
+    """
+
+    def test_a_bad_uuid_is_a_400_not_a_500(self, client, mock_session):
+        r = client.get("/products/not-a-uuid/offers")
+        assert r.status_code == 400
+        assert "product_id" in r.json()["detail"]
+
+    def test_a_product_with_no_links_answers_empty(self, client, mock_session):
+        """Empty, not an error: a product nobody has linked yet simply has no campaigns,
+        and the modal must render its chart and history around that."""
+        mock_session.execute.side_effect = [_rows([])]
+
+        r = client.get("/products/" + str(uuid.uuid4()) + "/offers")
+
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_an_occasion_carries_its_verdict_and_the_shelf_it_was_judged_against(
+        self, client, mock_session
+    ):
+        """One campaign, one alternative link with a known price — the row the table is for."""
+        product, ica = _product(unit="kg"), _store()
+        willys = _store(name="Willys", slug="willys")
+        ica_link = _ps(product, ica, package_size="450 g", package_quantity="0.45")
+        willys_link = _ps(product, willys, package_size="500 g", package_quantity="0.5")
+        # Willys observed first at 145,80 kr/kg; then ICA's campaign at 138,89 kr/kg.
+        willys_point = _pp(willys_link, price="72.90")
+        ica_point = _pp(ica_link, price="79.90", offer="62.50")
+        willys_point.checked_at = CHECKED_AT - timedelta(days=2)
+
+        mock_session.execute.side_effect = [
+            _rows([(ica_link, ica), (willys_link, willys)]),
+            _scalars([willys_point, ica_point]),
+        ]
+
+        rows = client.get("/products/" + str(product.id) + "/offers").json()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["was_cheapest"] is True
+        assert row["unit_price_sek"] == pytest.approx(138.89)
+        assert row["alternative_store"] == "Willys"
+        assert row["alternative_unit_price_sek"] == pytest.approx(145.80)
+        assert row["alternative_seen_at"] is not None
+        assert row["link_is_active"] is True
 
 
 class TestUpdateWatch:

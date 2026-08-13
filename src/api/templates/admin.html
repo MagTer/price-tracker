@@ -523,6 +523,7 @@
             <canvas id="price-history-chart"></canvas>
         </div>
         <div id="price-history-caption" class="ph-caption"></div>
+        <div id="price-history-offers"></div>
         <div id="price-history-table"></div>
     </div>
 </div>
@@ -1364,6 +1365,51 @@ form { padding: 20px; }
 .ph-stat-note { font-size: 12px; color: var(--text-faint); }
 .ph-span { flex: 0 1 240px; min-width: 180px; margin-left: auto; }
 .ph-caption { padding: 0 20px 4px; font-size: 12px; color: var(--text-faint); }
+/* Pristillfällen open, observations folded: one is what the modal is for, the other is the
+   place to check an exact figure. */
+.ph-offers, .ph-observations { padding: 4px 20px 16px; }
+.ph-offers > summary, .ph-observations > summary {
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 8px 0;
+}
+.ph-count {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--neutral-chip-bg);
+    color: var(--neutral-chip-fg);
+    margin-left: 4px;
+}
+.ph-offers .ph-sub { font-size: 12.5px; font-weight: 400; color: var(--text-faint); }
+.ph-offer {
+    display: flex;
+    align-items: baseline;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--row-line);
+}
+.ph-offer:last-child { border-bottom: 0; }
+.ph-offer-when {
+    flex: 0 0 72px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.ph-offer-main { flex: 1 1 220px; min-width: 0; }
+.ph-offer-store { font-size: 14px; font-weight: 600; }
+.ph-pkg { font-weight: 400; color: var(--text-faint); }
+.ph-offer-verdict { font-size: 12.5px; margin-top: 2px; }
+.ph-offer-verdict.is-good { color: var(--success); font-weight: 600; }
+.ph-offer-verdict.is-bad { color: var(--warning-link); }
+.ph-offer-verdict.is-unknown { color: var(--text-faint); }
+.ph-offer-meta { font-size: 12px; color: var(--text-faint); margin-top: 3px; }
+.ph-offer-price { margin-left: auto; text-align: right; white-space: nowrap; }
+.ph-offer-paid { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ph-offer-unit { font-size: 12.5px; font-weight: 600; color: var(--success); }
 /* The chart gets a real height of its own: without one, Chart.js's responsive canvas
    collapses toward its default aspect and the graph reads as a cramped strip. */
 #price-history-chart-container { height: 420px; padding: 4px 20px 8px; }
@@ -1558,6 +1604,9 @@ form { padding: 20px; }
     .ph-span { margin-left: 0; flex: 1 1 100%; }
     .ph-stat-value { font-size: 19px; }
     #price-history-table { padding: 0 8px 16px; }
+    .ph-offers, .ph-observations { padding: 4px 8px 16px; }
+    /* The date leads its own line on a phone rather than squeezing the store name. */
+    .ph-offer-when { flex: 1 1 100%; }
 }
 <!-- SECTION_SEPARATOR -->
 // Dashboard scripts
@@ -4432,8 +4481,12 @@ function buildChartData(rows, mode) {
 
 let priceChart = null;
 let historyRows = [];
+let historyOffers = null;                // occasions from /offers; null = not loaded
 let historyFor = null;                   // { id, name, unit } of the product on screen
 let historyMode = 'unit';                // kr/unit is the default (QD-3)
+// ONE window for everything the modal shows. The chart, the observation table and the
+// campaign table all read it, so a row can never appear in one and be missing from another.
+const HISTORY_DAYS = 90;
 
 async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('modal-price-history').style.display = 'flex';
@@ -4442,15 +4495,26 @@ async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('price-history-title').textContent =
         productName ? 'Prishistorik – ' + productName : 'Prishistorik';
     historyFor = { id: productId, name: productName, unit: productUnit };
+    historyOffers = null;
     historyMode = 'unit';
     setHistoryModeButtons();
     try {
         // Fetched ONCE and cached. Toggling the mode re-renders from this cache — the two modes
         // are two readings of the same rows, not two questions for the server.
-        historyRows = await apiGet('/products/' + productId + '/prices?days=90');
+        // Both from the SAME window, in parallel: a campaign visible in the table but not
+        // on the curve above it would read as a rendering bug.
+        const [rows, offers] = await Promise.all([
+            apiGet('/products/' + productId + '/prices?days=' + HISTORY_DAYS),
+            // The occasions are a nicety, not the modal: a failure here must not take the
+            // chart and the history down with it.
+            apiGet('/products/' + productId + '/offers?days=' + HISTORY_DAYS).catch(() => null)
+        ]);
+        historyRows = rows;
+        historyOffers = offers;
         renderPriceHistory();
     } catch (err) {
         historyRows = [];
+        historyOffers = null;
         document.getElementById('price-history-table').innerHTML =
             '<p class="empty-state">Kunde inte ladda historik.</p>';
     }
@@ -4480,6 +4544,7 @@ function renderPriceHistory() {
         summaryDiv.innerHTML = '';
         legendDiv.innerHTML = '';
         captionDiv.textContent = '';
+        document.getElementById('price-history-offers').innerHTML = '';
         if (priceChart) { priceChart.destroy(); priceChart = null; }
         return;
     }
@@ -4487,7 +4552,13 @@ function renderPriceHistory() {
     // The strip reads kr/enhet in both modes on purpose: it answers "what does this product
     // cost", and the absolute price of a 450 g bag against a 500 g bag answers nothing.
     summaryDiv.innerHTML = historySummaryHtml(historyRows, historyFor ? historyFor.id : null, unit);
-    tableDiv.innerHTML = buildHistoryTable(historyRows, unit);
+    document.getElementById('price-history-offers').innerHTML =
+        buildOfferOccasions(historyOffers, unit);
+    // Collapsed: every observation is the chart's relief channel and the place to check one
+    // exact figure, not what the modal is opened for. The campaigns above it are.
+    tableDiv.innerHTML = '<details class="ph-observations"><summary>Alla observationer '
+        + `<span class="ph-count">${historyRows.length}</span></summary>`
+        + buildHistoryTable(historyRows, unit) + '</details>';
 
     if (window.Chart) {
         Chart.defaults.font.family = "'Inter', system-ui, -apple-system, sans-serif";
@@ -4679,6 +4750,81 @@ function buildHistoryLegend(chart) {
         + `<span class="ph-legend-swatch" style="background:${escapeHtml(ds.borderColor)}"></span>`
         + `${escapeHtml(ds.label)}</button>`
     ).join('');
+}
+
+// Pristillfällen — every campaign in the window, and whether it was actually the cheapest
+// way to buy the product AT THE TIME.
+//
+// It is the only view in this app that judges the PAST: the deal verdict compares links at
+// this moment and timing compares a price with the product's own floor, while this grades
+// the advice we already gave. It is also the only place a store's own discount percentage
+// gets an answer — "−22 %" beside "Willys låg ändå 8 % under den veckan" is the whole point,
+// and it is why the store's number and ours sit on the same row.
+//
+// Every field is READ from /products/{id}/offers; the verdict is domain/stats.was_cheapest,
+// shared with the per-store counter on Prisutveckling so the two can never disagree about
+// one campaign. Nothing here recomputes anything.
+function buildOfferOccasions(offers, unit) {
+    if (offers == null) return '';   // the fetch failed; the modal is still the modal
+    let html = '<details class="ph-offers" open><summary>Pristillfällen '
+        + `<span class="ph-count">${offers.length}</span>`
+        + '<span class="ph-sub"> — varje gång produkten varit på erbjudande, och om priset '
+        + 'då faktiskt var lägst per enhet</span></summary>';
+    if (!offers.length) {
+        return html + '<p class="empty-state">Inga erbjudanden i perioden.</p></details>';
+    }
+    for (const o of offers) {
+        const store = escapeHtml(o.store_name)
+            + (o.package_size ? ' <span class="ph-pkg">' + escapeHtml(o.package_size) + '</span>' : '')
+            // A row about a link nobody can buy from should say so rather than send the
+            // reader looking for a page we stopped tracking.
+            + (o.link_is_active === false
+                ? ' <span class="badge badge-muted">borttagen länk</span>' : '');
+
+        let verdict, cls;
+        if (o.was_cheapest === true) {
+            verdict = 'Lägst per ' + (unit || 'enhet') + ' den dagen';
+            cls = 'is-good';
+        } else if (o.was_cheapest === false) {
+            // The margin against what the shelf actually offered instead, plus WHEN that
+            // price was last seen: with weekly checks the alternative can be days old, and
+            // the row must not imply we looked the same morning.
+            const alt = [o.alternative_store, o.alternative_package_size].filter(Boolean).join(' ');
+            const pct = (o.alternative_unit_price_sek && o.unit_price_sek != null)
+                ? formatMargin((o.unit_price_sek - o.alternative_unit_price_sek)
+                    / o.alternative_unit_price_sek * 100)
+                : null;
+            verdict = 'Inte lägst — ' + (alt || 'en annan länk') + ' låg '
+                + (pct ? pct + ' under' : 'under')
+                + (o.alternative_seen_at ? ', sett ' + formatDay(o.alternative_seen_at) : '');
+            cls = 'is-bad';
+        } else {
+            // NEVER "inte lägst": no other link had a known price, which is a gap in what
+            // we watched, not a verdict against the campaign.
+            verdict = 'Kunde inte jämföras — ingen annan länk hade ett pris då';
+            cls = 'is-unknown';
+        }
+
+        const meta = [];
+        if (o.offer_type && o.offer_type !== 'kampanj') meta.push(o.offer_type);
+        if (o.price_sek != null) meta.push('ordinarie ' + kr(o.price_sek));
+        if (o.discount_percent) meta.push(Math.round(o.discount_percent) + ' % rabatt');
+        if (o.offer_details) meta.push(o.offer_details);
+
+        html += `<div class="ph-offer">
+            <div class="ph-offer-when">${escapeHtml(formatDay(o.checked_at))}</div>
+            <div class="ph-offer-main">
+                <div class="ph-offer-store">${store}</div>
+                <div class="ph-offer-verdict ${cls}">${escapeHtml(verdict)}</div>
+                ${meta.length ? `<div class="ph-offer-meta">${escapeHtml(meta.join(' · '))}</div>` : ''}
+            </div>
+            <div class="ph-offer-price">
+                <div class="ph-offer-paid">${escapeHtml(kr(o.offer_price_sek))}</div>
+                <div class="ph-offer-unit">${escapeHtml(unitKr(o.unit_price_sek, unit))}</div>
+            </div>
+        </div>`;
+    }
+    return html + '</details>';
 }
 
 function buildHistoryTable(rows, unit) {
