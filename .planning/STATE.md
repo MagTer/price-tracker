@@ -89,7 +89,35 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 - **MCP registration against the `nousresearch/hermes-agent` gateway** — see § GSD status. The
-  only open item in the whole plan.
+  only open item from the original plan.
+
+- **The per-product drill-in as a routed PAGE instead of the modal — proposed, sketched,
+  NOT decided (2026-08-13).** All the CONTENT exists and is shipped: the history modal has
+  the summary strip, the stepped per-link chart with campaign rings and the dashed mean, the
+  legend in its header, Pristillfällen and the folded observation table (v0.54.0, v0.55.0).
+  What is open is only the container.
+
+  What a page would add: a linkable URL (`#/utveckling/<product_id>`), a working back button,
+  a 280 px sidebar for Prisläge + a Bevaka card, and no scroll-inside-a-scroll on the phone.
+
+  **What it would NOT add, measured rather than assumed:** a bigger graph. `.modal-large` caps
+  at 960 px and the page's sidebar eats exactly what the wider container gains — at 1440 px
+  both give the chart ~890 px. The page only pulls ahead above ~1500 px. Do not sell this
+  change as "more room for the curve".
+
+  **The open question Magnus has not answered:** the sidebar and the page header would say
+  overlapping things (observationer appears in both; the span bar moves from the strip into a
+  Prisläge card). Either keep the strip and drop the Prisläge card — leaving a sidebar that
+  holds only Bevaka and does not earn its width — or move every figure into the sidebar and
+  let the header carry name + context. The second was recommended: one place per fact.
+
+  Cost: `currentPage()` must parse a sub-route (it treats the whole fragment as a page name,
+  which is exactly why the product filters live in `sessionStorage`); the three entry points
+  (Att köpa's product name, Produkter's Historik, Prisutveckling's rows) switch from opening
+  a modal to setting the hash; **the modal is then deleted**, or the drill-in exists twice;
+  the Bevaka card is a new write path (prefilled watch dialog — both target fields visible,
+  v0.27.0); and the two columns stack on the phone. About one release, lower risk than the
+  two before it because the content is already built and tested.
 - ~~`.env.template` still carries `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`~~ —
   **closed 2026-07-26.** It did, plus three dead `PRICE_PARSER_*` rows and a stale
   `mcp.<domain>` comment; it also lacked all 8 of the QUICKADD/SCHEDULER knobs. Rewritten
