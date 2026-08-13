@@ -6,9 +6,9 @@ current_phase: none
 current_phase_name: "GSD retired — see § GSD status"
 status: retired
 stopped_at: "GSD wound down 2026-07-26. Every phase is closed; ONE external follow-up remains (Hermes MCP registration). Do not resume the pipeline — CLAUDE.md is the living document."
-last_updated: "2026-07-26T00:00:00.000Z"
+last_updated: "2026-08-13T00:00:00.000Z"
 last_activity: 2026-08-13
-last_activity_desc: "v0.55.0: Pristillfällen — every campaign with the verdict it earned at the time, the only judgement in the app about the past. The walk already existed inside stats.py and threw the detail away. Before that, v0.54.0: the price-history modal got the design review's LOOK (summary strip, campaign rings, dashed mean, legend in the header) while keeping the stepped per-link curve its data actually supports. Before that, v0.53.3: a 0,024 kg package amount could not be saved (24 g could) — pkgFieldsChanged overwrote the markup's step=\"any\" with 0.01 on every dialog open, so the browser blocked the form; gated statically in both places. Before that, v0.53.2: the Monday email's third column became the span bar instead of the margin against another butik — cheaper than the next link says nothing about whether either price is good. Before that, v0.53.1: second pass on the same review — a best row stopped restating the heading (the margin still orders the list), the villkor and the product badge moved beside the name they belong to, and Fel & luckor became the only page that owns the gap to-do list (Produkter lost the Luckor chip; the counters scroll to their own sections; \"bara en kedja\" is a real list with a + Länk button). Before that, v0.53.0: a design review (theme: simplification) was adopted in two places — Bevakningar grouped by what the reader can do about each row, with the group that did not exist before (a target that cannot fire), and Prisutveckling's Lägst–högst cell as the span bar Att köpa already draws. What the review REJECTED is written down in CLAUDE.md's design-handoff bullet, which is the part a later session needs. Otherwise: GSD retired. This file is a decision log + open-items list, not a live pipeline. Product history since v0.13.0 lives in CLAUDE.md and git log — the old 3 000-character running commentary was deleted here on 2026-07-26 because it had become a list of stale 'deploy bump pending' claims contradicting the frontmatter. Latest decision: D-34 (three open levers closed on prod measurement: no WAF sidecar, curl_cffi proven, dead links handled by hand)."
+last_activity_desc: "v0.56.0: the per-product drill-in became addressable (#/<page>?produkt=<id>, back closes it, Escape closes the read-only dialogs). The routed PAGE the design review wanted was refused on a measurement: renderPage toggles .app-page visibility, so the document collapses and the scroll resets — returning from a product page would drop the reader at the top of Att köpa. Before that, v0.55.0: Pristillfällen — every campaign with the verdict it earned at the time, the only judgement in the app about the past. The walk already existed inside stats.py and threw the detail away. Before that, v0.54.0: the price-history modal got the design review's LOOK (summary strip, campaign rings, dashed mean, legend in the header) while keeping the stepped per-link curve its data actually supports. Before that, v0.53.3: a 0,024 kg package amount could not be saved (24 g could) — pkgFieldsChanged overwrote the markup's step=\"any\" with 0.01 on every dialog open, so the browser blocked the form; gated statically in both places. Before that, v0.53.2: the Monday email's third column became the span bar instead of the margin against another butik — cheaper than the next link says nothing about whether either price is good. Before that, v0.53.1: second pass on the same review — a best row stopped restating the heading (the margin still orders the list), the villkor and the product badge moved beside the name they belong to, and Fel & luckor became the only page that owns the gap to-do list (Produkter lost the Luckor chip; the counters scroll to their own sections; \"bara en kedja\" is a real list with a + Länk button). Before that, v0.53.0: a design review (theme: simplification) was adopted in two places — Bevakningar grouped by what the reader can do about each row, with the group that did not exist before (a target that cannot fire), and Prisutveckling's Lägst–högst cell as the span bar Att köpa already draws. What the review REJECTED is written down in CLAUDE.md's design-handoff bullet, which is the part a later session needs. Otherwise: GSD retired. This file is a decision log + open-items list, not a live pipeline. Product history since v0.13.0 lives in CLAUDE.md and git log — the old 3 000-character running commentary was deleted here on 2026-07-26 because it had become a list of stale 'deploy bump pending' claims contradicting the frontmatter. Latest decision: D-34 (three open levers closed on prod measurement: no WAF sidecar, curl_cffi proven, dead links handled by hand)."
 progress:
   total_phases: 6
   completed_phases: 6
@@ -93,33 +93,20 @@ Recent decisions affecting current work:
 - **MCP registration against the `nousresearch/hermes-agent` gateway** — see § GSD status. The
   only open item from the original plan.
 
-- **The per-product drill-in as a routed PAGE instead of the modal — proposed, sketched,
-  NOT decided (2026-08-13).** All the CONTENT exists and is shipped: the history modal has
-  the summary strip, the stepped per-link chart with campaign rings and the dashed mean, the
-  legend in its header, Pristillfällen and the folded observation table (v0.54.0, v0.55.0).
-  What is open is only the container.
+- ~~The per-product drill-in as a routed PAGE instead of the modal~~ — **decided and shipped
+  as something smaller, v0.56.0 (2026-08-13).** The page was refused on a cost the proposal
+  never counted: `renderPage` toggles `.app-page` visibility, the hidden page leaves the flow,
+  the document collapses and the scroll resets — so returning from a product page would drop
+  the reader at the TOP of Att köpa, the one list swept top to bottom standing in a shop. The
+  wins that were real (a pasteable URL, a working back button) turned out to be ONE mechanism
+  and about a hundred lines: `#/<page>?produkt=<id>`, opened by pushing a history entry.
+  Escape closes the read-only drill-ins too. The sidebar question the entry below used to ask
+  is moot — there is no sidebar. Details in CLAUDE.md's history-modal bullet, including why
+  the page also does not buy a bigger graph below ~1500 px.
 
-  What a page would add: a linkable URL (`#/utveckling/<product_id>`), a working back button,
-  a 280 px sidebar for Prisläge + a Bevaka card, and no scroll-inside-a-scroll on the phone.
-
-  **What it would NOT add, measured rather than assumed:** a bigger graph. `.modal-large` caps
-  at 960 px and the page's sidebar eats exactly what the wider container gains — at 1440 px
-  both give the chart ~890 px. The page only pulls ahead above ~1500 px. Do not sell this
-  change as "more room for the curve".
-
-  **The open question Magnus has not answered:** the sidebar and the page header would say
-  overlapping things (observationer appears in both; the span bar moves from the strip into a
-  Prisläge card). Either keep the strip and drop the Prisläge card — leaving a sidebar that
-  holds only Bevaka and does not earn its width — or move every figure into the sidebar and
-  let the header carry name + context. The second was recommended: one place per fact.
-
-  Cost: `currentPage()` must parse a sub-route (it treats the whole fragment as a page name,
-  which is exactly why the product filters live in `sessionStorage`); the three entry points
-  (Att köpa's product name, Produkter's Historik, Prisutveckling's rows) switch from opening
-  a modal to setting the hash; **the modal is then deleted**, or the drill-in exists twice;
-  the Bevaka card is a new write path (prefilled watch dialog — both target fields visible,
-  v0.27.0); and the two columns stack on the phone. About one release, lower risk than the
-  two before it because the content is already built and tested.
+  Note for whoever revisits this: Prisutveckling's rows were listed as a third entry point
+  into the drill-in. They never were one — only Att köpa's product name and Produkter's
+  Historik open it. Adding it there is a separate, one-line question.
 - ~~`.env.template` still carries `SMTP_*` rows instead of `RESEND_API_KEY`/`EMAIL_FROM`~~ —
   **closed 2026-07-26.** It did, plus three dead `PRICE_PARSER_*` rows and a stale
   `mcp.<domain>` comment; it also lacked all 8 of the QUICKADD/SCHEDULER knobs. Rewritten

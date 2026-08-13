@@ -511,3 +511,48 @@ def test_the_package_amount_field_never_narrows_below_the_stored_precision() -> 
         assert not re.search(r"'0\.\d+'", expr), (
             f".step is assigned a decimal literal in {expr.strip()!r} — the 0,024 kg lock."
         )
+
+
+_HISTORY_CLOSE_BUTTON_RE = re.compile(
+    r'<div class="modal" id="modal-price-history".*?<div class="modal-header">(.*?)</div>',
+    re.DOTALL,
+)
+
+
+def test_the_drill_in_is_opened_and_closed_only_through_the_hash() -> None:
+    """The URL is the drill-in's state; a second way in or out makes them disagree.
+
+    The price-history modal is addressable (`#/<page>?produkt=<id>`, v0.56.0) and opening it
+    pushes a history entry, which is what makes the browser's back button close it. Both
+    properties rest on ONE rule: the hash is the only state. Two ways this breaks silently —
+
+    (1) an entry point calling showPriceHistory() directly opens the modal with the address
+        bar still naming the page behind it, so back exits the app and the link cannot be
+        pasted to anyone;
+    (2) the × falling back to closeModal() hides the dialog while the entry it pushed stays
+        on the stack, so the URL names a product nobody is looking at and one back press
+        re-opens it.
+
+    Neither shows up in a runtime test of the endpoints — nothing reaches the API — and
+    neither looks wrong on screen at the moment it happens. Same both-places shape as the
+    package-step gate above: the markup half and the JS half are checked here together.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+
+    header = _HISTORY_CLOSE_BUTTON_RE.search(html)
+    assert header is not None, "price-history modal header not found — has the markup moved?"
+    assert "closePriceHistory()" in header.group(1), (
+        "the price-history modal's close button no longer calls closePriceHistory() — "
+        "hiding it with closeModal() leaves the pushed history entry and the ?produkt= hash "
+        "behind, so the URL names a product that is not on screen."
+    )
+
+    js = html.split("<!-- SECTION_SEPARATOR -->")[2]
+    call_sites = re.findall(r"showPriceHistory\(", js)
+    # Its own definition, plus the ONE call in syncHistoryToHash. An entry point must set
+    # the hash (openPriceHistory) and let the hashchange do the opening.
+    assert len(call_sites) == 2, (
+        f"showPriceHistory( appears {len(call_sites)} times, expected 2 (the definition and "
+        "the single call in syncHistoryToHash). An entry point that calls it directly opens "
+        "the drill-in without a URL and without a history entry — back then leaves the app."
+    )

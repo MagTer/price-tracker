@@ -501,7 +501,10 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3 id="price-history-title">Prishistorik</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-price-history')">&times;</button>
+            <!-- Not closeModal(): this dialog owns a history entry, and hiding it without
+                 unwinding that entry would leave the address bar naming a product nobody
+                 is looking at. -->
+            <button class="btn btn-sm" onclick="closePriceHistory()">&times;</button>
         </div>
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
              that has no honest answer: a smaller box always looks cheaper. In absolute mode
@@ -4488,6 +4491,64 @@ let historyMode = 'unit';                // kr/unit is the default (QD-3)
 // campaign table all read it, so a row can never appear in one and be missing from another.
 const HISTORY_DAYS = 90;
 
+// The drill-in is ADDRESSABLE — it lives at `#/<page>?produkt=<id>` (v0.56.0). It stays a
+// modal on purpose: a routed page of its own would toggle `.app-page` visibility, and the
+// hidden page leaving the flow collapses the document and resets the scroll — so returning
+// from a product would drop the reader at the TOP of Att köpa, which is the one list swept
+// from top to bottom standing in a shop. What the modal genuinely lacked was a URL and a
+// back button, and both are the same mechanism: opening it PUSHES a history entry, so the
+// browser's back closes it and the address bar names what is on screen.
+//
+// The hash is THE state. Nothing calls showPriceHistory directly — the entry points set the
+// hash and the hashchange opens the modal — because two ways in would let the URL and the
+// screen disagree, which is the whole failure this closes.
+function historyParamFromHash() {
+    const m = (location.hash || '').match(/[?&]produkt=([^&]*)/);
+    return m && m[1] ? decodeURIComponent(m[1]) : null;
+}
+
+// Was the entry we are sitting on pushed by US? Decides whether × goes BACK (the reader's
+// own two ways out must land in the same place) or rewrites the hash (a cold deep link has
+// nothing behind it, and history.back() would leave the app).
+let historyPushedByApp = false;
+
+function openPriceHistory(productId) {
+    if (!productId) return;
+    historyPushedByApp = true;
+    location.hash = '#/' + currentPage() + '?produkt=' + encodeURIComponent(productId);
+}
+
+function closePriceHistory() {
+    if (historyPushedByApp) history.back();
+    else location.hash = '#/' + currentPage();
+}
+
+// allDeals FIRST, then allProducts: Att köpa is the start page and may render before the
+// product list has ever loaded, and the deals wire carries name and unit already. A cold
+// deep link resolves from allProducts, which is why init awaits it before syncing.
+function historyMeta(productId) {
+    const deal = (allDeals || []).find(d => d.product_id === productId);
+    if (deal) return { name: deal.product_name, unit: deal.unit };
+    const product = (allProducts || []).find(p => p.id === productId);
+    if (product) return { name: product.name, unit: product.unit };
+    return { name: '', unit: null };
+}
+
+function syncHistoryToHash() {
+    const id = historyParamFromHash();
+    const modal = document.getElementById('modal-price-history');
+    const open = modal.style.display !== 'none';
+    if (id) {
+        // Re-entering the same product (a repeat click) must not refetch and reset the mode.
+        if (open && historyFor && historyFor.id === id) return;
+        const meta = historyMeta(id);
+        showPriceHistory(id, meta.name, meta.unit);
+    } else if (open) {
+        modal.style.display = 'none';
+        historyPushedByApp = false;
+    }
+}
+
 async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('modal-price-history').style.display = 'flex';
     // The product name lives in the modal HEADER, not in a chart-internal title: it must be
@@ -5458,7 +5519,7 @@ document.getElementById('products-table-container').addEventListener('click', (e
     if (action === 'links') {
         showProductLinks(id, product ? product.name : '', product ? product.unit : null);
     } else if (action === 'history') {
-        showPriceHistory(id, product ? product.name : '', product ? product.unit : null);
+        openPriceHistory(id);
     } else if (action === 'edit') {
         showEditProductModal(id);
     }
@@ -5501,11 +5562,7 @@ document.getElementById('deals-table-container').addEventListener('click', (e) =
     if (!btn) return;
     const action = btn.getAttribute('data-deal-action');
     if (action === 'gaps') { location.hash = '#/luckor'; return; }
-    const id = btn.getAttribute('data-id');
-    // allDeals, NOT allProducts: Att köpa is the start page and may render before the
-    // product list has ever loaded. The deals wire carries name and unit already.
-    const deal = (allDeals || []).find(d => d.product_id === id);
-    showPriceHistory(id, deal ? deal.product_name : '', deal ? deal.unit : null);
+    openPriceHistory(btn.getAttribute('data-id'));
 });
 
 // The offline card: tab strip, and the bridge button inside a rendered candidate row.
@@ -5647,7 +5704,11 @@ const SCOPE_PAGES = ['kopa', 'produkter'];
 const TAB_PAGES = ['kopa', 'produkter', 'utveckling'];
 
 function currentPage() {
-    const key = (location.hash || '').replace(/^#\/?/, '');
+    // Everything after "?" belongs to whatever the page opened on top of itself (today:
+    // the drill-in's produkt id). The page name is the part before it — without this split
+    // a deep link would fall through to the 'kopa' default and open the modal over the
+    // wrong list.
+    const key = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
     if (PAGES[key]) return key;
     if (PAGE_ALIASES[key]) return PAGE_ALIASES[key];
     return 'kopa';
@@ -5701,7 +5762,37 @@ document.getElementById('mobile-sheet').addEventListener('click', (e) => {
     if (e.target.id === 'mobile-sheet') e.target.classList.remove('open');
 });
 
-window.addEventListener('hashchange', renderPage);
+window.addEventListener('hashchange', () => {
+    renderPage();
+    // After renderPage: the drill-in sits ON a page, so the page under it must be right
+    // before the modal is opened over it.
+    syncHistoryToHash();
+});
+
+// Escape closes the READ-ONLY drill-ins only — the price history and the links panel.
+// Deliberately not every dialog: the form dialogs hold typed input, and a quick-add
+// confirm discarded by a stray keystroke costs a store fetch to rebuild. It acts on the
+// TOPMOST open modal, so Escape with "Länka butik" stacked over the links panel
+// (z-index 210) does nothing rather than closing the panel underneath it.
+const ESCAPABLE_MODALS = ['modal-price-history', 'modal-product-links'];
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    let top = null;
+    for (const el of document.querySelectorAll('.modal')) {
+        if (el.style.display === 'none' || !el.id) continue;
+        // Later in the DOM wins a z-index tie, which is what stacking does anyway.
+        if (!top || zIndexOf(el) >= zIndexOf(top)) top = el;
+    }
+    if (!top || !ESCAPABLE_MODALS.includes(top.id)) return;
+    if (top.id === 'modal-price-history') closePriceHistory();
+    else closeModal(top.id);
+});
+
+function zIndexOf(el) {
+    const value = Number(getComputedStyle(el).zIndex);
+    return isFinite(value) ? value : 0;
+}
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
@@ -5711,11 +5802,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     // and the server converts the civil date at Swedish midday.
     document.getElementById('panel-manual-date').value = new Date().toLocaleDateString('sv-SE');
     await loadStores();
-    loadProducts();
+    const productsLoaded = loadProducts();
     loadWatches();
     // loadStats covers /scheduler/status, /deals AND /stats. The latter two are loaded
     // up front, not lazily as Statistik once was: Att köpa's span bars, the silent-error
     // link and the sidebar's Fel & luckor badge all read from /stats, and the start page
     // must not render without them.
     loadStats();
+    // A pasted or bookmarked drill-in link opens on load. It WAITS for the product list:
+    // the modal's header is the only place the product is named, and "Prishistorik" with
+    // no name is what a race here would ship.
+    if (historyParamFromHash()) {
+        await productsLoaded;
+        syncHistoryToHash();
+    }
 });
