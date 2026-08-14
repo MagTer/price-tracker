@@ -99,6 +99,19 @@ Recent decisions affecting current work:
 - **MCP registration against the `nousresearch/hermes-agent` gateway** — see § GSD status. The
   only open item from the original plan.
 
+- **ICA:s måndagsfönster — flytta det före frukost?** Öppen fråga med mätning bakom sig, och
+  mätningen låg utanför repot i elva dagar innan den skrevs ned (2026-08-14): en engångsprobe
+  natten 2–3 augusti 2026 (`~/ica-natprobe/` på dev-boxen) visar att ICA byter priser strax
+  efter midnatt, inte på morgonen — Bregott Maxi 39,90 → 48,95 någon gång mellan söndag 22:30
+  och måndag 00:15, sedan stilla till 06:00. Fönstret 06–12 kan alltså kollas så sent som
+  klockan tolv, så måndagens erbjudanden kan saknas i köplistan vid frukost och veckomailet
+  går 12:00 per konstruktion. **Inte genomfört, med flit:** en av fyra produkter rörde sig
+  (n = 1 vecka), rörelsen var en kampanj som TOG SLUT (pris UPP) vilket inte bevisar att en ny
+  kampanj dyker upp samtidigt, och en 03:00-körning fick 404 på en produkt som svarade fint
+  06:00 — nattrafik kan möta en annan vägg. Vägen framåt är att köra proben bredare, inte att
+  resonera vidare. Underlaget och förbehållen står i CLAUDE.md:s schedule-punkt; rådata i
+  `~/ica-natprobe/results.jsonl` (utanför repot, städas när frågan är avgjord).
+
 - ~~The per-product drill-in as a routed PAGE instead of the modal~~ — **decided and shipped
   as something smaller, v0.56.0 (2026-08-13).** The page was refused on a cost the proposal
   never counted: `renderPage` toggles `.app-page` visibility, the hidden page leaves the flow,
@@ -160,7 +173,7 @@ escapeHtml quotes) was delivered across D-26, D-30 and D-31.
 
 ### Roadmap Evolution
 
-- Phase 04.1 inserted after Phase 4: Package data moves to the store link — package_size + package_quantity move Product -> ProductStore; unit stays on Product. Runs before Phase 5 (source-repo cleanup). Brief: .planning/SEED-package-data-moves-to-link.md (URGENT)
+- Phase 04.1 inserted after Phase 4: Package data moves to the store link — package_size + package_quantity move Product -> ProductStore; unit stays on Product. **Built, deployed and closed**; the "(URGENT)" and "runs before Phase 5" framing was the July 2026 queue, and Phase 5 itself is closed as obsolete. Original brief: .planning/SEED-package-data-moves-to-link.md (archive — the shape as built is CLAUDE.md § "The 04.1 shape")
 
 ## Deferred Items
 

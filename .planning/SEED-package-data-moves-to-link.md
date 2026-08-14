@@ -2,7 +2,12 @@
 
 **Decided:** 2026-07-13 (operator + agent, home-server session — brought here
 for a proper GSD phase in this repo: design → plan → build).
-**Status:** Ready to pick up. **DB is empty — no data rescue needed.**
+**Status: DONE — shipped as Phase 04.1, deployed, and live since July 2026.**
+This is the ORIGINAL BRIEF, kept for the reasoning behind the model; it is not a
+work item and "DB is empty — no data rescue needed" describes July 2026, not now
+(prod has ~100 links with history hanging off them). The shape as built, with the
+invariants that came out of it, is CLAUDE.md § "The 04.1 shape"; do not re-derive
+the model from this file.
 
 ## The decision
 

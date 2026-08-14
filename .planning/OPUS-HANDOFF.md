@@ -1,6 +1,11 @@
 # Kravställning: kvarvarande städ- och härdningsarbete (för Opus)
 
-**Skriven:** 2026-07-13 av Fable 5, efter djupanalys + autonom åtgärdssession.
+> **AVSLUTAD 2026-07-13 — alla åtta uppgifter är KLART-märkta nedan (D-30/D-31).**
+> Arkiv, inte en kölista. Två rader i "Ej i scope" är dessutom överspelade:
+> `gsd/v1.0-milestone` behöver ingen merge (den ligger helt inne i main, 0 egna
+> commits) och Phase 5 är stängd som obsolet — `ai-agent-platform` finns inte kvar
+> att städa. Det enda som fortfarande står öppet därifrån är Hermes-registreringen,
+> som lever i STATE.md § GSD status. Testsiffran "113 gröna" är från juli 2026.
 **Kontext:** Läs `.planning/STATE.md` (Decisions D-22..D-27) för vad som redan är gjort.
 **Arbetssätt:** Inget GSD-krav — men committa atomiskt per uppgift (conventional commits), kör `poetry run pytest` som gate efter varje uppgift (113 gröna vid handoff), och logga avslutade uppgifter i STATE.md. Rör INTE `.planning/quick/`-historik.
 
