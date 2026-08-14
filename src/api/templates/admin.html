@@ -248,9 +248,19 @@
     <div class="page-head">
         <div>
             <div class="page-title">Loggar</div>
+            <!-- The events/state distinction is the reason this page is not the place to
+                 hunt for a parser failure, and it was written down only in the code until
+                 v0.56.2 — so the reader was left to infer from an empty buffer that nothing
+                 was wrong. Stated here, with the way out, because the buffer's own volatility
+                 is the argument: a tier regression from Thursday is gone by Monday while the
+                 error itself is still running. Individual rows deliberately link nowhere —
+                 a log line has no identity, and resolving one back to a link would mean
+                 parsing its text (see findLink's comment on why name-matching is unsafe). -->
             <div class="page-sub">Vad appen faktiskt gjorde: vilken extraktionsväg vann,
                 modellbyten i kaskaden, blockerade hämtningar. Läses ur en minnesbuffert —
-                nollställs vid omstart.</div>
+                nollställs vid omstart. Här står <em>händelser</em>; det som fortfarande är
+                fel står som tillstånd på <a href="#/luckor">Fel &amp; luckor</a> och stannar
+                där tills en lyckad kontroll tar bort det.</div>
         </div>
         <div class="page-actions">
             <select id="log-level" class="search-input" onchange="loadLogs()">
@@ -1663,15 +1673,22 @@ function openModal(id) {
     if (!topmostModal()) modalOpener = document.activeElement;
     const modal = document.getElementById(id);
     modal.style.display = 'flex';
-    // The first FIELD, not simply the first focusable thing: the × sits in the header and
-    // therefore wins a plain DOM-order query, which lands the reader on "close" and makes
-    // Enter dismiss the dialog they just opened. Verified in a headless render — the naive
-    // selector really does focus the ×. Fall back to any control, then to the dialog itself,
-    // so focus is never left outside a dialog that claims aria-modal.
-    const field = modal.querySelector(
+    // The first VISIBLE FIELD, not simply the first focusable thing. Two traps, both found
+    // by rendering the page rather than reading it:
+    //   (1) the × sits in the header and wins a plain DOM-order query, which lands the reader
+    //       on "close" and makes Enter dismiss the dialog they just opened;
+    //   (2) :not([disabled]) does not mean visible. For a READER the links panel's first
+    //       button is "+ Länka butik", which .admin-only hides — .focus() on a display:none
+    //       element is a silent no-op, so focus stayed on <body>, OUTSIDE a dialog claiming
+    //       aria-modal="true". That is the exact harm this machinery exists to prevent, and
+    //       it appeared only in the role it was built for.
+    // Same offsetParent test the Tab trap uses, so both agree on what "in the dialog" means.
+    const shown = el => el.offsetParent !== null;
+    const pick = sel => [...modal.querySelectorAll(sel)].find(shown);
+    const field = pick(
         'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])'
     );
-    const target = field || modal.querySelector('button:not([disabled]), [href]');
+    const target = field || pick('button:not([disabled]), [href]');
     if (target) target.focus();
     else { modal.setAttribute('tabindex', '-1'); modal.focus(); }
 }
@@ -1685,6 +1702,16 @@ function releaseModalFocus() {
     }
     if (modalOpener && document.contains(modalOpener) && modalOpener !== document.body) {
         modalOpener.focus();
+        if (document.activeElement !== modalOpener) {
+            // The opener was inside the overflow menu, which closes while the dialog is up:
+            // a button in a collapsed <details> cannot take focus, and .focus() fails
+            // SILENTLY — measured, not assumed — dropping the reader back at the top of the
+            // document. Hand it to the menu's own summary, the visible control they actually
+            // came from. Detecting the failure beats enumerating its causes.
+            const menu = modalOpener.closest('details');
+            const summary = menu ? menu.querySelector('summary') : null;
+            if (summary) summary.focus();
+        }
     }
     modalOpener = null;
 }
@@ -3300,6 +3327,14 @@ async function loadStatistics() {
 
 // `ica_page → jsonld` says nothing to anyone who does not know the codebase. The consequence
 // is the designed part, and it is derived from the expected source — never invented per row.
+//
+// The raw pair itself is ADMIN-ONLY (v0.56.2). It was the last untranslated machine name left
+// in the interface — everything else on the wire (verdict, timing, outcome, store_slug) is
+// rendered in Swedish — and it was drawn in the row's alarm red at weight 600, so the loudest
+// word in the row was the one a reader cannot interpret, sitting above a sentence in plain
+// text that they can. It stays for the admin because it is the ONE pointer to which extractor
+// tier degraded, which is where the fix starts. Note this is noise control, not secrecy: the
+// values are in /stats, which every reader may GET by design.
 const TIER_IMPACT = {
     ica_page: 'kampanjer syns inte — ICA:s JSON-LD bär inga erbjudanden',
     willys_api: 'kampanjer och jfr-pris syns inte — Willys sida är en SPA utan pris i HTML',
@@ -3367,11 +3402,11 @@ function buildSilentErrors(counts, q) {
                 </div>
                 <div class="issue-right">
                     <div class="issue-impact">${escapeHtml(impact)}</div>
-                    <div class="source-swap">
+                    ${IS_ADMIN ? `<div class="source-swap">
                         <span class="source-chip">${escapeHtml(r.expected_source)}</span>
                         <span class="source-arrow">&#8594;</span>
                         <span class="source-chip is-actual">${escapeHtml(r.actual_source)}</span>
-                    </div>
+                    </div>` : ''}
                     <button class="action-btn" data-issue-action="open-link"
                         data-link-id="${escapeHtml(r.product_store_id || '')}"
                         data-product="${escapeHtml(r.product_name)}"
@@ -4211,7 +4246,14 @@ async function handleQuickAddPreview(e) {
         const p = await apiPost('/quick-add/preview', { url: url });
         if (p.already_tracked) {
             qaPreview = null;
-            status.textContent = 'URL:en bevakas redan (produkt: ' + p.already_tracked.product_name + ').';
+            // Telling the reader the link exists and then leaving them to find it by hand was
+            // the one dead end where the app already held the answer: the preview refuses
+            // BEFORE fetching (no page load, no LLM) and the refusal carries product_id, not
+            // just the name. The way out is the links panel — the same destination Fel &
+            // luckor's rows resolve to, because that is where a link's real actions live.
+            status.innerHTML = 'URL:en bevakas redan (produkt: '
+                + `<button type="button" class="basket-link" data-qa-tracked="${escapeHtml(p.already_tracked.product_id)}">`
+                + `${escapeHtml(p.already_tracked.product_name)}</button>).`;
             return;
         }
         qaPreview = p;
@@ -5655,6 +5697,21 @@ document.getElementById('basket-strip').addEventListener('click', (e) => {
     } else {
         location.hash = '#/luckor';
     }
+});
+
+// "URL:en bevakas redan" → the product's links panel. Closing quick-add FIRST is not
+// cosmetic: the panel would otherwise open under a dialog that is still on screen (the
+// stacking order is built for the reverse — #modal-link-store sits at z-index 210 ABOVE
+// the panel), and closing it first also hands the focus bookkeeping a clean state.
+// The name and unit come from allProducts, which is loaded because quick-add is reached
+// from Produkter; a stale list falls back to the name the server just gave us.
+document.getElementById('qa-status').addEventListener('click', async (e) => {
+    const target = e.target.closest('button[data-qa-tracked]');
+    if (!target) return;
+    const id = target.getAttribute('data-qa-tracked');
+    const product = (allProducts || []).find(p => p.id === id);
+    closeModal('modal-quick-add');
+    await showProductLinks(id, product ? product.name : target.textContent, product ? product.unit : null);
 });
 
 // Links-panel actions and column sorting. The store-printed column has no data-sort
