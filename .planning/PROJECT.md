@@ -1,5 +1,30 @@
 # Price Tracker
 
+> **HISTORICAL — this document describes the extraction milestone as it was scoped in
+> May 2026. It is not maintained, and where it conflicts with CLAUDE.md or STATE.md,
+> those win.** Read it for how the port was framed, not for what the product is.
+>
+> It is deliberately NOT being brought up to date: a second document tracking current
+> behaviour would drift from CLAUDE.md within a release, which is the same failure the
+> old `last_activity_desc` in STATE.md produced. Specifically stale, because each has
+> already been read as current at least once:
+>
+> - **Stores:** "ICA, Willys, Apotea, Med24, and Doz" — there are ten (add Kronans,
+>   Apohem, Rusta, Clas Ohlson, Lyko).
+> - **"Single-user (Magnus only)"** — since v0.29.0 there are two roles: one admin who
+>   writes, and every other Entra-authenticated identity as a reader.
+> - **`aiosmtplib` / SMTP** in Constraints — replaced by the Resend HTTP API (D-32).
+> - **`mcp.<domain>` subdomain**, recorded as "Locked" in Key Decisions below — superseded
+>   by **D-29**: the MCP is served at `price.<domain>/mcp/` behind a path-scoped un-gated
+>   router. The host is `price.<domain>`, never `prices.<domain>`.
+> - **The Active checklist** is entirely unticked although the milestone closed at 100 %
+>   (STATE.md § GSD status). Unticked here means "not tracked here", not "not built".
+> - **Out of Scope** forbids several things that were subsequently BUILT on purpose:
+>   retry/backoff (REL-01), rate limiting on the manual check path (the shared ledger,
+>   v0.14.0), price analytics (`domain/stats.py`, v0.36.0), a structured ICA extractor
+>   (v0.43.0) and a real confidence floor (D-23). Those boundaries expired with the port
+>   doctrine — see CLAUDE.md § Conventions.
+
 ## What This Is
 
 Standalone Swedish grocery and pharmacy price tracker — extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, and Doz; exposes its capabilities to the agent platform via an MCP server; runs behind an upstream Identity-Aware Proxy (separate edge-stack repo) that terminates Entra OIDC and forwards `X-Auth-Request-Email`. Single-user (Magnus only).
@@ -92,7 +117,7 @@ The `priser` skill in the agent platform routes through MCP today — this repo'
 | Drop `price_tracker_` table prefix | Single-purpose app — no naming conflicts | — Pending |
 | Keep cascading deletes as-is | Behavioral parity during extraction; revisit later | — Pending |
 | Email backend pluggable (SMTP via aiosmtplib OR AWS SES) | Decide concrete backend during Phase 2 implementation | — Pending |
-| Mount path for MCP (`/mcp` on same app vs separate Traefik subdomain) | Decide during Phase 4 | Locked 2026-05-04 — dedicated `mcp.<domain>` subdomain (per-host IAP bypass cleaner than per-path) |
+| Mount path for MCP (`/mcp` on same app vs separate Traefik subdomain) | Decide during Phase 4 | ~~Locked 2026-05-04 — dedicated `mcp.<domain>` subdomain (per-host IAP bypass cleaner than per-path)~~ **SUPERSEDED by D-29 (2026-07-13, STATE.md): no subdomain.** The lock assumed IAP bypass is per HOST; with Traefik `forwardAuth` it is per ROUTER, so a path-scoped un-gated router on `price.<domain>` suffices — saving a DNS record, a cert and an operator step. Live at `price.<domain>/mcp/` |
 | Auth topology: in-app OIDC vs upstream IAP header trust | OIDC client + session cookies in this repo couples it tightly to Entra; IAP terminates OIDC once at the edge and forwards email header — multiple backend apps share one OIDC client | Locked 2026-05-02 (D-17) — IAP header trust; drops `fastapi-azure-auth` + `pyjwt` from this repo |
 | Edge proxy / portal stack repo | Belongs out of the price-tracker extraction milestone; separate codebase, separate concerns (TLS, OIDC, routing, dashboard); ingress is operated within Dokploy's managed scope, not a standalone hosting target | Locked 2026-05-02 (D-18) — Traefik + oauth2-proxy + Homepage; reassessed 2026-07-06 (D-20) — managed within Dokploy's scope, not a hand-built stack on a standalone VM |
 

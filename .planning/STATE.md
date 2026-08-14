@@ -20,7 +20,8 @@ progress:
 # Project State
 
 > **GSD is retired for this repo (2026-07-26).** This file is no longer a live pipeline —
-> it is (a) the **decision log** (D-19…D-32, referenced by name from CLAUDE.md) and (b) the
+> it is (a) the **decision log** (D-19…D-34, referenced by name from CLAUDE.md — extend the
+> range when you add one, or the index stops finding the newest entries) and (b) the
 > **open-items list** below. Everything about how the product currently works lives in
 > **CLAUDE.md**, which is maintained. Do not "resume" a phase from here, and do not mirror
 > product changes into this file — that duplication is exactly what made the old
@@ -54,7 +55,12 @@ maintained through ordinary releases (see CLAUDE.md § Releasing), not through G
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
+**The numbered decisions live HERE, in this list — not in PROJECT.md.** That GSD boilerplate
+("Decisions are logged in PROJECT.md Key Decisions table") stood here until 2026-08-14 and was
+false: PROJECT.md's table holds none of D-19…D-34, stopped being updated in 2026-07, and still
+records the `mcp.<domain>` subdomain as "Locked" — a decision D-29 below supersedes. A reader
+sent there for the decision log gets the opposite of the current one.
+
 Recent decisions affecting current work:
 
 - Initialization: Single-user (Magnus-only) auth with `tenant_id` UUID column kept for future
