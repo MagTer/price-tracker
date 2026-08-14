@@ -556,3 +556,120 @@ def test_the_drill_in_is_opened_and_closed_only_through_the_hash() -> None:
         "the single call in syncHistoryToHash). An entry point that calls it directly opens "
         "the drill-in without a URL and without a history entry — back then leaves the app."
     )
+
+
+_MODAL_OPEN_RE = re.compile(r'<div class="modal" id="([^"]+)"([^>]*)>')
+_LABEL_RE = re.compile(
+    r"<label([^>]*)>((?:(?!</label>).)*?)</label>(\s*)(<[a-z]+\b[^>]*>)?", re.DOTALL
+)
+
+
+def _served_markup(html: str) -> str:
+    """The markup halves of the template — everything BEFORE the script fragment.
+
+    admin.html is three fragments (markup, CSS, script) and the markup is fragment 0, not 1.
+    Getting that index wrong is not a loud failure: the gate then scans a chunk with no
+    dialogs and no labels in it, finds nothing to complain about, and passes for the wrong
+    reason. Written as a slice so the fragment layout, not a magic index, is what it tracks.
+    """
+    return "".join(html.split("<!-- SECTION_SEPARATOR -->")[:-1])
+
+
+def _markup_ids(html: str) -> set[str]:
+    """Every id in the SERVED markup — the script half's template literals are not DOM ids."""
+    return set(re.findall(r'\bid="([^"]+)"', _served_markup(html)))
+
+
+def test_every_dialog_carries_its_semantics() -> None:
+    """A dialog without role/aria-modal/aria-labelledby is an anonymous div to a reader.
+
+    The app has a READER role — the household members the Entra gate lets in — and v0.29.0
+    exists because one of them actually logged in. This is the population that most often
+    needs the semantics, and none of it is visible on screen, so nothing about the page
+    looks wrong when it rots: the dialog simply stops announcing itself.
+
+    aria-labelledby is checked against the markup's real ids because a typo'd reference is
+    WORSE than none — the reader announces an unnamed dialog either way, but the attribute
+    claims the name is handled.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    ids = _markup_ids(html)
+    modals = _MODAL_OPEN_RE.findall(html)
+    assert modals, "no .modal elements found — has the markup moved?"
+
+    for modal_id, attrs in modals:
+        assert 'role="dialog"' in attrs, f'{modal_id} is missing role="dialog"'
+        assert 'aria-modal="true"' in attrs, f'{modal_id} is missing aria-modal="true"'
+        labelled = re.search(r'aria-labelledby="([^"]+)"', attrs)
+        assert labelled, f"{modal_id} is missing aria-labelledby"
+        assert labelled.group(1) in ids, (
+            f"{modal_id} points aria-labelledby at {labelled.group(1)!r}, which no element "
+            "in the markup carries — the dialog announces itself as unnamed."
+        )
+
+
+def test_every_form_label_is_attached_to_its_control() -> None:
+    """A label that is merely NEXT to its input names nothing.
+
+    Two valid shapes, and both are accepted here: an explicit `for=` resolving to a real id,
+    or the control nested INSIDE the label (implicit association, which is how the checkbox
+    rows are written). What fails is the third shape — a bare <label> followed by a control —
+    because it looks identical on screen and leaves the field unnamed in a screen reader.
+    """
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    markup = _served_markup(html)
+    ids = _markup_ids(html)
+
+    unattached: list[str] = []
+    for attrs, text, _gap, following in _LABEL_RE.findall(markup):
+        if re.search(r"<(input|select|textarea)\b", text):
+            continue  # wrapping label — associated by nesting
+        for_attr = re.search(r'\bfor="([^"]+)"', attrs)
+        if for_attr:
+            assert for_attr.group(1) in ids, (
+                f"label for={for_attr.group(1)!r} points at no element in the markup"
+            )
+            continue
+        # A caption for a composite widget is fine as long as the widget claims it.
+        if following and "aria-labelledby" in following:
+            continue
+        if following and re.match(r"<(input|select|textarea)\b", following):
+            unattached.append(re.sub(r"\s+", " ", text).strip()[:40])
+
+    assert not unattached, (
+        "these labels sit beside a control without naming it (add for=, or nest the "
+        f"control inside the label): {unattached}"
+    )
+
+
+def test_a_dialog_is_only_ever_opened_through_open_modal() -> None:
+    """aria-modal="true" hides everything outside the dialog from assistive tech.
+
+    That makes focus placement part of the contract, not a nicety: a dialog shown by setting
+    `display` directly leaves focus on the button behind it, which the reader can no longer
+    describe or reach. openModal() is the one place that shows a dialog AND moves focus, and
+    closeModal()/syncHistoryToHash hand it back. Ten call sites used to do it by hand.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    direct = re.findall(r"getElementById\('(modal-[a-z-]+)'\)\.style\.display\s*=\s*'flex'", js)
+    assert not direct, (
+        f"these dialogs are shown without openModal(), so focus stays outside them: {direct}"
+    )
+
+
+def test_the_toast_timer_is_cleared_before_it_is_reset() -> None:
+    """Without clearTimeout, a second toast inherits the FIRST one's deadline.
+
+    Measured shape of the bug: toast A at t=0 sets a 3 s timer; toast B at t=2 s replaces the
+    text but not the timer, so B is wiped after one second. The longer the message the more
+    likely it is the one cut short — which is exactly backwards, and it hit the import
+    summary ("Import klar: N skapade, M bevakningar"), one of the few toasts carrying counts
+    a reader cannot recover anywhere else.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    body = re.search(r"function showToast\([^)]*\)\s*\{(.*?)\n\}", js, re.DOTALL)
+    assert body is not None, "showToast not found — has it been renamed?"
+    assert "clearTimeout" in body.group(1), (
+        "showToast no longer clears the pending timer: the next toast will be cut short by "
+        "the previous one's deadline."
+    )

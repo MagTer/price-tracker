@@ -84,23 +84,23 @@
                      onkeydown="if(event.key==='Enter'){event.preventDefault();saveManualPricePanel();}">
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Produkt</label>
+                            <label for="panel-manual-product">Produkt</label>
                             <select id="panel-manual-product" class="form-input"
                                     onchange="panelManualProductChanged()"></select>
                         </div>
                         <div class="form-group">
-                            <label>Länk (butik och förpackning)</label>
+                            <label for="panel-manual-link">Länk (butik och förpackning)</label>
                             <select id="panel-manual-link" class="form-input"></select>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Pris du betalar (kr)</label>
+                            <label for="panel-manual-price">Pris du betalar (kr)</label>
                             <input type="number" step="0.01" min="0" id="panel-manual-price"
                                    class="form-input" placeholder="t.ex. 109">
                         </div>
                         <div class="form-group">
-                            <label>Ordinarie pris (kr)</label>
+                            <label for="panel-manual-regular">Ordinarie pris (kr)</label>
                             <input type="number" step="0.01" min="0" id="panel-manual-regular"
                                    class="form-input"
                                    placeholder="tomt = inget erbjudande, bara ett noterat pris">
@@ -108,11 +108,11 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Datum</label>
+                            <label for="panel-manual-date">Datum</label>
                             <input type="date" id="panel-manual-date" class="form-input">
                         </div>
                         <div class="form-group">
-                            <label>Villkor</label>
+                            <label for="panel-manual-note">Villkor</label>
                             <input type="text" id="panel-manual-note" class="form-input"
                                    maxlength="255" placeholder="t.ex. Förbokning via Facebook">
                         </div>
@@ -138,7 +138,7 @@
             <input type="text" id="product-search" placeholder="Sök namn, varumärke…" class="search-input">
             <!-- ONE primary button. Snabbtillägg is the 95 % path; the manual form and the
                  backup plumbing are real but rare, so they live behind the overflow. -->
-            <button class="btn btn-primary admin-only" onclick="showQuickAddModal()">&#9889; Snabbtillägg</button>
+            <button class="btn btn-primary admin-only" onclick="showQuickAddModal()"><span aria-hidden="true">&#9889;</span> Snabbtillägg</button>
             <details class="menu">
                 <summary class="btn" title="Fler åtgärder">&#8943;</summary>
                 <div class="menu-items">
@@ -190,7 +190,7 @@
                 <option value="26">Senaste 26 veckorna</option>
                 <option value="52">Senaste året</option>
             </select>
-            <button class="btn" onclick="loadStatistics()">&#8635; Uppdatera</button>
+            <button class="btn" onclick="loadStatistics()"><span aria-hidden="true">&#8635;</span> Uppdatera</button>
         </div>
     </div>
     <div id="stats-container">
@@ -259,7 +259,7 @@
                 <option value="ERROR">Endast fel</option>
                 <option value="DEBUG">Allt (debug)</option>
             </select>
-            <button class="btn" onclick="loadLogs()">&#8635; Uppdatera</button>
+            <button class="btn" onclick="loadLogs()"><span aria-hidden="true">&#8635;</span> Uppdatera</button>
         </div>
     </div>
     <div id="logs-container">
@@ -269,24 +269,24 @@
 
 
 <!-- Create Product Modal -->
-<div class="modal" id="modal-create-product" style="display:none;">
+<div class="modal" id="modal-create-product" role="dialog" aria-modal="true" aria-labelledby="create-product-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Ny produkt</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-create-product')">&times;</button>
+            <h3 id="create-product-title">Ny produkt</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-create-product')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-create-product" onsubmit="handleCreateProduct(event)">
             <div class="form-group">
-                <label>Namn *</label>
-                <input type="text" name="name" required class="form-input">
+                <label for="create-product-name">Namn *</label>
+                <input id="create-product-name" type="text" name="name" required class="form-input">
             </div>
             <div class="form-group">
-                <label>Varumärke</label>
-                <input type="text" name="brand" class="form-input">
+                <label for="create-product-brand">Varumärke</label>
+                <input id="create-product-brand" type="text" name="brand" class="form-input">
             </div>
             <div class="form-group">
-                <label>Kategori</label>
-                <select name="category" class="form-input"><!--CATEGORY_OPTIONS--></select>
+                <label for="create-product-category">Kategori</label>
+                <select id="create-product-category" name="category" class="form-input"><!--CATEGORY_OPTIONS--></select>
             </div>
             <!-- The product is the abstract GOOD, so all it declares is the unit its
                  variants are compared in (st / liter / kg — models.py's canonical set).
@@ -296,7 +296,7 @@
                  phase — three pack sizes used to be three unrelated products with no
                  grouping key, so nothing could be compared per roll. -->
             <div class="form-group">
-                <label>Enhet</label>
+                <label for="product-unit">Enhet</label>
                 <select name="unit" id="product-unit" class="form-input">
                     <option value="">— ingen —</option>
                     <option value="st">st (styck)</option>
@@ -315,28 +315,28 @@
 <!-- Edit Product Modal — identity fields only. Unit is shown but LOCKED: it is the
      scale of every link's amount and the whole kr/unit history, so changing it would
      misscale them all. Changing unit = delete the product and recreate it. -->
-<div class="modal" id="modal-edit-product" style="display:none;">
+<div class="modal" id="modal-edit-product" role="dialog" aria-modal="true" aria-labelledby="edit-product-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Redigera produkt</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-edit-product')">&times;</button>
+            <h3 id="edit-product-title">Redigera produkt</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-product')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-edit-product" onsubmit="handleEditProduct(event)">
             <input type="hidden" id="edit-product-id">
             <div class="form-group">
-                <label>Namn *</label>
+                <label for="edit-product-name">Namn *</label>
                 <input type="text" id="edit-product-name" required class="form-input">
             </div>
             <div class="form-group">
-                <label>Varumärke</label>
+                <label for="edit-product-brand">Varumärke</label>
                 <input type="text" id="edit-product-brand" class="form-input">
             </div>
             <div class="form-group">
-                <label>Kategori</label>
+                <label for="edit-product-category">Kategori</label>
                 <select id="edit-product-category" class="form-input"><!--CATEGORY_OPTIONS--></select>
             </div>
             <div class="form-group">
-                <label>Enhet — kan inte ändras</label>
+                <label for="edit-product-unit">Enhet — kan inte ändras</label>
                 <input type="text" id="edit-product-unit" class="form-input" disabled>
                 <div class="best-link">Alla länkars mängder och hela prishistoriken är uttryckta i
                     enheten. Fel enhet? Ta bort produkten och skapa om den.</div>
@@ -359,15 +359,15 @@
      EDITABLE fields and posts the confirmation to /quick-add. The confirm step is
      deliberate: it is where "ny produkt" vs "ny länk på befintlig produkt" gets decided,
      and the human check on a wrong extraction (preview shows, never writes). -->
-<div class="modal" id="modal-quick-add" style="display:none;">
+<div class="modal" id="modal-quick-add" role="dialog" aria-modal="true" aria-labelledby="quick-add-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Snabbtillägg från URL</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-quick-add')">&times;</button>
+            <h3 id="quick-add-title">Snabbtillägg från URL</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-quick-add')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-quick-add-url" onsubmit="handleQuickAddPreview(event)">
             <div class="form-group">
-                <label>Produkt-URL *</label>
+                <label for="qa-url">Produkt-URL *</label>
                 <input type="url" name="url" id="qa-url" required class="form-input" placeholder="https://…">
             </div>
             <div class="form-actions">
@@ -377,13 +377,13 @@
         <div id="qa-status" class="loading" style="display:none;"></div>
         <form id="form-quick-add-confirm" onsubmit="handleQuickAddConfirm(event)" style="display:none;">
             <div class="form-group">
-                <label>Butik</label>
+                <label for="qa-store-name">Butik</label>
                 <input type="text" id="qa-store-name" class="form-input" disabled>
             </div>
             <!-- Prefilled from the URL's /stores/<id>/ segment when the chain (ICA) prices
                  per butik; empty for nationally-priced chains. Always editable. -->
             <div class="form-group">
-                <label>Butiksetikett</label>
+                <label for="qa-store-label">Butiksetikett</label>
                 <input type="text" id="qa-store-label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
@@ -397,24 +397,24 @@
                 </label>
             </div>
             <div class="form-group">
-                <label>Produkt *</label>
+                <label for="qa-product-select">Produkt *</label>
                 <select id="qa-product-select" class="form-input" onchange="qaProductChoiceChanged()"></select>
             </div>
             <div id="qa-new-product-fields">
                 <div class="form-group">
-                    <label>Namn *</label>
+                    <label for="qa-name">Namn *</label>
                     <input type="text" id="qa-name" class="form-input">
                 </div>
                 <div class="form-group">
-                    <label>Varumärke</label>
+                    <label for="qa-brand">Varumärke</label>
                     <input type="text" id="qa-brand" class="form-input">
                 </div>
                 <div class="form-group">
-                    <label>Kategori</label>
+                    <label for="qa-category">Kategori</label>
                     <select id="qa-category" class="form-input"><!--CATEGORY_OPTIONS--></select>
                 </div>
                 <div class="form-group">
-                    <label>Enhet</label>
+                    <label for="qa-unit">Enhet</label>
                     <select id="qa-unit" class="form-input" onchange="qaUnitChanged()">
                         <option value="">— ingen —</option>
                         <option value="st">st (styck)</option>
@@ -425,12 +425,12 @@
             </div>
             <div class="form-group">
                 <label id="qa-pkg-amount-label">Mängd i förpackningen</label>
-                <div class="pkg-entry-units" id="qa-pkg-entry-units"></div>
+                <div class="pkg-entry-units" id="qa-pkg-entry-units" role="group" aria-labelledby="qa-pkg-amount-label"></div>
                 <input type="number" step="any" id="qa-pkg-amount" class="form-input"
                        placeholder="t.ex. 24" oninput="pkgFieldsChanged('qa')">
             </div>
             <div class="form-group">
-                <label>Mängdetikett</label>
+                <label for="qa-pkg-label">Mängdetikett</label>
                 <input type="text" id="qa-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('qa')">
             </div>
@@ -447,27 +447,27 @@
 </div>
 
 <!-- Link Store Modal -->
-<div class="modal" id="modal-link-store" style="display:none;">
+<div class="modal" id="modal-link-store" role="dialog" aria-modal="true" aria-labelledby="link-store-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Länka till butik</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-link-store')">&times;</button>
+            <h3 id="link-store-title">Länka till butik</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-link-store')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-link-store" onsubmit="handleLinkStore(event)">
             <input type="hidden" name="product_id" id="link-product-id">
             <div class="form-group">
-                <label>Butik *</label>
+                <label for="link-store-select">Butik *</label>
                 <select name="store_id" id="link-store-select" required class="form-input"></select>
             </div>
             <div class="form-group">
-                <label>Produkt-URL *</label>
-                <input type="url" name="store_url" required class="form-input" placeholder="https://...">
+                <label for="link-store-store-url">Produkt-URL *</label>
+                <input id="link-store-store-url" type="url" name="store_url" required class="form-input" placeholder="https://...">
             </div>
             <!-- Per-butik display name for chains that price per physical store (ICA).
                  Empty = the chain name. Shown everywhere the link's store name appears. -->
             <div class="form-group">
-                <label>Butiksetikett</label>
-                <input type="text" name="store_label" class="form-input"
+                <label for="link-store-store-label">Butiksetikett</label>
+                <input id="link-store-store-label" type="text" name="store_label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — skiljer butiker i samma kedja">
             </div>
             <!-- NO schedule fields: a new link inherits the store's check schedule.
@@ -479,12 +479,12 @@
                  its pack size is known (D-02), and the first scrape autofills it. -->
             <div class="form-group">
                 <label id="link-pkg-amount-label">Mängd i förpackningen</label>
-                <div class="pkg-entry-units" id="link-pkg-entry-units"></div>
+                <div class="pkg-entry-units" id="link-pkg-entry-units" role="group" aria-labelledby="link-pkg-amount-label"></div>
                 <input type="number" step="any" id="link-pkg-amount" class="form-input"
                        placeholder="t.ex. 24" oninput="pkgFieldsChanged('link')">
             </div>
             <div class="form-group">
-                <label>Mängdetikett</label>
+                <label for="link-pkg-label">Mängdetikett</label>
                 <input type="text" name="package_size" id="link-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('link')">
             </div>
@@ -497,14 +497,14 @@
 </div>
 
 <!-- Price History Modal -->
-<div class="modal" id="modal-price-history" style="display:none;">
+<div class="modal" id="modal-price-history" role="dialog" aria-modal="true" aria-labelledby="price-history-title" style="display:none;">
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3 id="price-history-title">Prishistorik</h3>
             <!-- Not closeModal(): this dialog owns a history entry, and hiding it without
                  unwinding that entry would leave the address bar naming a product nobody
                  is looking at. -->
-            <button class="btn btn-sm" onclick="closePriceHistory()">&times;</button>
+            <button class="btn btn-sm" onclick="closePriceHistory()" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
              that has no honest answer: a smaller box always looks cheaper. In absolute mode
@@ -535,7 +535,7 @@
      One row per LINK: package label, price, and the COMPUTED kr/unit, sortable. This is
      what answers "which Lambi pack is cheapest per roll, across pack sizes and stores" —
      a question the old one-row-per-product table structurally could not ask. -->
-<div class="modal" id="modal-product-links" style="display:none;">
+<div class="modal" id="modal-product-links" role="dialog" aria-modal="true" aria-labelledby="product-links-title" style="display:none;">
     <div class="modal-content modal-large">
         <!-- "Länka butik" lives HERE, not on the product row: the decision needs the list of
              butiker the product already has, which is exactly what this panel shows. -->
@@ -544,7 +544,7 @@
             <div class="header-actions">
                 <button type="button" class="btn btn-sm btn-primary admin-only"
                         id="links-add-btn" onclick="addLinkFromPanel()">+ Länka butik</button>
-                <button class="btn btn-sm" onclick="closeModal('modal-product-links')">&times;</button>
+                <button class="btn btn-sm" onclick="closeModal('modal-product-links')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
             </div>
         </div>
         <div id="product-links-table"></div>
@@ -553,28 +553,28 @@
 
 <!-- Edit Packaging Modal — how a "needs amount" link gets its number and how a
      mismatch with the page gets resolved. Same chain as the link dialog. -->
-<div class="modal" id="modal-edit-packaging" style="display:none;">
+<div class="modal" id="modal-edit-packaging" role="dialog" aria-modal="true" aria-labelledby="edit-packaging-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Redigera länk</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-edit-packaging')">&times;</button>
+            <h3 id="edit-packaging-title">Redigera länk</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-packaging')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-edit-packaging" onsubmit="handleEditPackaging(event)">
             <input type="hidden" id="edit-pkg-link-id">
             <div class="form-group">
                 <label id="edit-pkg-amount-label">Mängd i förpackningen</label>
-                <div class="pkg-entry-units" id="edit-pkg-entry-units"></div>
+                <div class="pkg-entry-units" id="edit-pkg-entry-units" role="group" aria-labelledby="edit-pkg-amount-label"></div>
                 <input type="number" step="any" id="edit-pkg-amount" class="form-input"
                        placeholder="t.ex. 24" oninput="pkgFieldsChanged('edit')">
             </div>
             <div class="form-group">
-                <label>Mängdetikett</label>
+                <label for="edit-pkg-label">Mängdetikett</label>
                 <input type="text" name="package_size" id="edit-pkg-label" class="form-input"
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('edit')">
             </div>
             <!-- Per-butik display name (ICA prices per physical butik). Empty = chain name. -->
             <div class="form-group">
-                <label>Butiksetikett</label>
+                <label for="edit-store-label">Butiksetikett</label>
                 <input type="text" id="edit-store-label" class="form-input"
                        placeholder="t.ex. ICA Maxi Sandviken — tomt = kedjans namn">
             </div>
@@ -583,7 +583,7 @@
                  watched product). Saving a changed schedule reschedules next_check_at
                  server-side (PUT /frequency), so it is only sent when actually changed. -->
             <div class="form-group">
-                <label>Kontrollschema</label>
+                <label for="edit-schedule-mode">Kontrollschema</label>
                 <select id="edit-schedule-mode" class="form-input" onchange="editScheduleModeChanged()">
                     <option value="" id="edit-schedule-standard-opt">Butikens standard</option>
                     <option value="custom">Eget schema för länken</option>
@@ -591,8 +591,8 @@
             </div>
             <div id="edit-schedule-custom" style="display:none;">
                 <div class="form-group">
-                    <label>Kontrolldagar (körs på förmiddagen)</label>
-                    <div class="pkg-entry-units" id="edit-weekdays">
+                    <label id="edit-weekdays-label">Kontrolldagar (körs på förmiddagen)</label>
+                    <div class="pkg-entry-units" id="edit-weekdays" role="group" aria-labelledby="edit-weekdays-label">
                         <label><input type="checkbox" value="0"> mån</label>
                         <label><input type="checkbox" value="1"> tis</label>
                         <label><input type="checkbox" value="2"> ons</label>
@@ -603,7 +603,7 @@
                     </div>
                 </div>
                 <div class="form-group" id="edit-frequency-group">
-                    <label>Kontrollfrekvens (timmar — gäller utan valda dagar)</label>
+                    <label for="edit-frequency">Kontrollfrekvens (timmar — gäller utan valda dagar)</label>
                     <input type="number" id="edit-frequency" value="72" min="72" max="240" class="form-input">
                 </div>
             </div>
@@ -624,22 +624,22 @@
                         förbokning via Facebook. Rör inte "Senast kollad" och räknas inte som
                         en kontroll; däremot blir det produktens lägstanotering om det är lägre.</p>
                     <div class="form-group">
-                        <label>Pris du betalar (kr)</label>
+                        <label for="manual-price">Pris du betalar (kr)</label>
                         <input type="number" step="0.01" min="0" id="manual-price"
                                class="form-input" placeholder="t.ex. 109">
                     </div>
                     <div class="form-group">
-                        <label>Ordinarie pris (kr)</label>
+                        <label for="manual-regular">Ordinarie pris (kr)</label>
                         <input type="number" step="0.01" min="0" id="manual-regular"
                                class="form-input"
                                placeholder="tomt = ingen kampanj, bara ett noterat pris">
                     </div>
                     <div class="form-group">
-                        <label>Datum</label>
+                        <label for="manual-date">Datum</label>
                         <input type="date" id="manual-date" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Villkor</label>
+                        <label for="manual-note">Villkor</label>
                         <input type="text" id="manual-note" class="form-input" maxlength="255"
                                placeholder="t.ex. Förbokning via Facebook">
                     </div>
@@ -661,19 +661,19 @@
 </div>
 
 <!-- Create Watch Modal -->
-<div class="modal" id="modal-create-watch" style="display:none;">
+<div class="modal" id="modal-create-watch" role="dialog" aria-modal="true" aria-labelledby="create-watch-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Ny prisbevakning</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-create-watch')">&times;</button>
+            <h3 id="create-watch-title">Ny prisbevakning</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-create-watch')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-create-watch" onsubmit="handleCreateWatch(event)">
             <div class="form-group">
-                <label>Produkt *</label>
+                <label for="watch-product-select">Produkt *</label>
                 <select name="product_id" id="watch-product-select" required class="form-input"></select>
             </div>
             <div class="form-group">
-                <label>E-post *</label>
+                <label for="watch-email">E-post *</label>
                 <input type="email" name="email_address" id="watch-email" required class="form-input">
             </div>
             <div class="form-group">
@@ -682,12 +682,12 @@
                 </label>
             </div>
             <div class="form-group">
-                <label>Prisfallströskel (%)</label>
-                <input type="number" name="price_drop_threshold_percent" class="form-input">
+                <label for="edit-watch-price-drop-threshold-percent">Prisfallströskel (%)</label>
+                <input id="edit-watch-price-drop-threshold-percent" type="number" name="price_drop_threshold_percent" class="form-input">
             </div>
             <div class="form-group">
-                <label>Mål för jämförpris (kr)</label>
-                <input type="number" step="0.01" name="unit_price_target_sek" class="form-input">
+                <label for="edit-watch-unit-price-target-sek">Mål för jämförpris (kr)</label>
+                <input id="edit-watch-unit-price-target-sek" type="number" step="0.01" name="unit_price_target_sek" class="form-input">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Skapa bevakning</button>
@@ -697,20 +697,20 @@
     </div>
 </div>
 
-<div class="modal" id="modal-edit-watch" style="display:none;">
+<div class="modal" id="modal-edit-watch" role="dialog" aria-modal="true" aria-labelledby="edit-watch-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Redigera bevakning</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-edit-watch')">&times;</button>
+            <h3 id="edit-watch-title">Redigera bevakning</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-edit-watch')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-edit-watch" onsubmit="handleEditWatch(event)">
             <input type="hidden" id="edit-watch-id">
             <div class="form-group">
-                <label>Produkt</label>
+                <label for="edit-watch-product">Produkt</label>
                 <input type="text" id="edit-watch-product" class="form-input" disabled>
             </div>
             <div class="form-group">
-                <label>E-post *</label>
+                <label for="edit-watch-email">E-post *</label>
                 <input type="email" id="edit-watch-email" required class="form-input">
             </div>
             <div class="form-group">
@@ -719,16 +719,16 @@
                 </label>
             </div>
             <div class="form-group">
-                <label>Prisfallströskel (%)</label>
+                <label for="edit-watch-drop">Prisfallströskel (%)</label>
                 <input type="number" id="edit-watch-drop" class="form-input">
             </div>
             <div class="form-group">
-                <label>Mål för jämförpris (<span id="edit-watch-unit-label">kr/st</span>)</label>
+                <label for="edit-watch-unit-target">Mål för jämförpris (<span id="edit-watch-unit-label">kr/st</span>)</label>
                 <input type="number" step="0.01" id="edit-watch-unit-target" class="form-input">
                 <small class="form-hint">Lämna tomt för att ta bort målet.</small>
             </div>
             <div class="form-group">
-                <label>Absolut målpris (kr)</label>
+                <label for="edit-watch-target">Absolut målpris (kr)</label>
                 <input type="number" step="0.01" id="edit-watch-target" class="form-input">
                 <small class="form-hint">Gäller hela förpackningen oavsett storlek — jämförpriset ovan är oftast det du vill styra på. Tomt = inget mål.</small>
             </div>
@@ -741,23 +741,23 @@
 </div>
 
 <!-- Import Modal -->
-<div class="modal" id="modal-import" style="display:none;">
+<div class="modal" id="modal-import" role="dialog" aria-modal="true" aria-labelledby="import-title" style="display:none;">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Importera data</h3>
-            <button class="btn btn-sm" onclick="closeModal('modal-import')">&times;</button>
+            <h3 id="import-title">Importera data</h3>
+            <button class="btn btn-sm" onclick="closeModal('modal-import')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
         </div>
         <form id="form-import" onsubmit="handleImport(event)">
             <div class="form-group">
-                <label>Läge</label>
-                <select name="mode" class="form-input">
+                <label for="import-mode">Läge</label>
+                <select id="import-mode" name="mode" class="form-input">
                     <option value="merge">Sammanfoga</option>
                     <option value="replace">Ersätt</option>
                 </select>
             </div>
             <div class="form-group">
-                <label>JSON-fil *</label>
-                <input type="file" name="file" accept="application/json" required class="form-input">
+                <label for="import-file">JSON-fil *</label>
+                <input id="import-file" type="file" name="file" accept="application/json" required class="form-input">
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Importera</button>
@@ -1624,15 +1624,74 @@ let allDeals = [];
 let watchesCache = [];
 let schedulerStatus = null;
 
+// The toast is the ONLY feedback several actions get, so its timer is load-bearing.
+// Two bugs lived in the old three-line version: (1) the timeout was never cleared, so a
+// second toast inherited the FIRST one's deadline — "Import klar: 12 skapade, 3
+// bevakningar" two seconds after a save vanished after one, and the longer the message
+// the likelier it was to be the one cut short; (2) 3 s is a fixed budget for a variable
+// sentence. The dwell now scales with reading time and an error gets longer than a
+// success — a confirmation you missed is an annoyance, a failure you missed is a wrong
+// belief about your own data.
+let toastTimer = null;
+
+function toastDwellMs(message, type) {
+    const reading = 1400 + message.length * 70;      // ~14 characters a second, plus a beat
+    return Math.min(type === 'error' ? 12000 : 9000, Math.max(3000, reading));
+}
+
 function showToast(message, type='success') {
     const toast = document.getElementById('toast');
+    clearTimeout(toastTimer);
+    // Blank it first: role="status" only announces a CHANGE, so an identical message
+    // twice in a row (two saves of the same row) would be silent to a screen reader.
+    toast.textContent = '';
     toast.textContent = message;
     toast.className = 'shared-toast ' + type;
-    setTimeout(() => { toast.className = 'shared-toast'; }, 3000);
+    toastTimer = setTimeout(() => { toast.className = 'shared-toast'; }, toastDwellMs(message, type));
+}
+
+// THE way a dialog is opened. It exists because aria-modal="true" makes a promise the
+// markup alone cannot keep: everything outside the dialog is hidden from assistive tech,
+// so focus has to BE inside it. Ten call sites used to set display directly, which left
+// focus on the button behind a dialog the reader could no longer reach.
+let modalOpener = null;
+
+function openModal(id) {
+    // Only remember the opener for the FIRST dialog in a stack: "Länka butik" opens over
+    // the links panel, and overwriting the opener there would send focus back into a
+    // panel that is itself about to close.
+    if (!topmostModal()) modalOpener = document.activeElement;
+    const modal = document.getElementById(id);
+    modal.style.display = 'flex';
+    // The first FIELD, not simply the first focusable thing: the × sits in the header and
+    // therefore wins a plain DOM-order query, which lands the reader on "close" and makes
+    // Enter dismiss the dialog they just opened. Verified in a headless render — the naive
+    // selector really does focus the ×. Fall back to any control, then to the dialog itself,
+    // so focus is never left outside a dialog that claims aria-modal.
+    const field = modal.querySelector(
+        'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])'
+    );
+    const target = field || modal.querySelector('button:not([disabled]), [href]');
+    if (target) target.focus();
+    else { modal.setAttribute('tabindex', '-1'); modal.focus(); }
+}
+
+function releaseModalFocus() {
+    if (topmostModal()) return;             // a dialog is still open underneath — leave it
+    // Focus must LEAVE the hidden dialog first. A focused element inside a display:none
+    // subtree keeps the focus ring in a place the reader cannot see or tab out of.
+    if (document.activeElement && document.activeElement.closest('.modal')) {
+        document.activeElement.blur();
+    }
+    if (modalOpener && document.contains(modalOpener) && modalOpener !== document.body) {
+        modalOpener.focus();
+    }
+    modalOpener = null;
 }
 
 function closeModal(id) {
     document.getElementById(id).style.display = 'none';
+    releaseModalFocus();
 }
 
 // A 403 body is NOT ours to show. The ingress `entra-auth-errors` middleware swaps the
@@ -3890,7 +3949,7 @@ async function loadWatches() {
 }
 
 function showCreateProductModal() {
-    document.getElementById('modal-create-product').style.display = 'flex';
+    openModal('modal-create-product');
 }
 
 // --- Packaging field chain (amount -> auto-suggested label) — D-11 ---
@@ -4023,7 +4082,7 @@ function showEditProductModal(id) {
     document.getElementById('edit-product-brand').value = p.brand || '';
     document.getElementById('edit-product-category').value = p.category || '';
     document.getElementById('edit-product-unit').value = p.unit || '— ingen —';
-    document.getElementById('modal-edit-product').style.display = 'flex';
+    openModal('modal-edit-product');
 }
 
 async function handleEditProduct(e) {
@@ -4090,7 +4149,7 @@ function showLinkStoreModal(productId, productUnit) {
     select.innerHTML = allStores.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
     document.getElementById('link-product-id').value = productId;
     pkgInitChain('link', productUnit, '', '');
-    document.getElementById('modal-link-store').style.display = 'flex';
+    openModal('modal-link-store');
 }
 
 async function handleLinkStore(e) {
@@ -4136,7 +4195,7 @@ function showQuickAddModal() {
     const status = document.getElementById('qa-status');
     status.style.display = 'none';
     status.textContent = '';
-    document.getElementById('modal-quick-add').style.display = 'flex';
+    openModal('modal-quick-add');
 }
 
 async function handleQuickAddPreview(e) {
@@ -4546,11 +4605,14 @@ function syncHistoryToHash() {
     } else if (open) {
         modal.style.display = 'none';
         historyPushedByApp = false;
+        // The hash is what closes this dialog, so the focus handoff belongs HERE and not
+        // in closePriceHistory — back-button, ×, and Escape all arrive through this branch.
+        releaseModalFocus();
     }
 }
 
 async function showPriceHistory(productId, productName, productUnit) {
-    document.getElementById('modal-price-history').style.display = 'flex';
+    openModal('modal-price-history');
     // The product name lives in the modal HEADER, not in a chart-internal title: it must be
     // there even when the chart has no data to draw.
     document.getElementById('price-history-title').textContent =
@@ -5083,7 +5145,7 @@ async function showProductLinks(productId, productName, productUnit) {
     linkSort = { column: null, direction: 'asc' };
     document.getElementById('product-links-title').textContent =
         productName ? 'Länkar — ' + productName : 'Länkar';
-    document.getElementById('modal-product-links').style.display = 'flex';
+    openModal('modal-product-links');
     document.getElementById('product-links-table').innerHTML = '<div class="loading">Laddar länkar…</div>';
     try {
         productLinks = await apiGet('/products/' + productId + '/links');
@@ -5142,7 +5204,7 @@ function showEditPackagingModal(productStoreId) {
     // sv-SE renders YYYY-MM-DD, which is what <input type="date"> wants. The browser's own
     // day is the right one here: the person typing is standing in the same timezone.
     document.getElementById('manual-date').value = new Date().toLocaleDateString('sv-SE');
-    document.getElementById('modal-edit-packaging').style.display = 'flex';
+    openModal('modal-edit-packaging');
 }
 
 // Record a price a human saw. Validated twice on purpose — the server refuses an inverted
@@ -5310,7 +5372,7 @@ async function loadExport() {
 }
 
 function showImportModal() {
-    document.getElementById('modal-import').style.display = 'flex';
+    openModal('modal-import');
 }
 
 async function handleImport(e) {
@@ -5342,7 +5404,7 @@ function showCreateWatchModal() {
         const headerEmail = document.getElementById('user-email');
         if (headerEmail) emailField.value = headerEmail.textContent.trim();
     }
-    document.getElementById('modal-create-watch').style.display = 'flex';
+    openModal('modal-create-watch');
 }
 
 async function handleCreateWatch(e) {
@@ -5384,7 +5446,7 @@ function openEditWatch(id) {
         w.unit_price_target_sek != null ? w.unit_price_target_sek : '';
     document.getElementById('edit-watch-target').value =
         w.target_price_sek != null ? w.target_price_sek : '';
-    document.getElementById('modal-edit-watch').style.display = 'flex';
+    openModal('modal-edit-watch');
 }
 
 async function handleEditWatch(e) {
@@ -5778,21 +5840,53 @@ const ESCAPABLE_MODALS = ['modal-price-history', 'modal-product-links'];
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    const top = topmostModal();
+    if (!top || !ESCAPABLE_MODALS.includes(top.id)) return;
+    if (top.id === 'modal-price-history') closePriceHistory();
+    else closeModal(top.id);
+});
+
+// THE "which dialog is the user in" question — Escape, the Tab trap and the focus
+// handoff all have to agree on the answer, or one of them acts on a dialog the reader
+// is not looking at.
+function topmostModal() {
     let top = null;
     for (const el of document.querySelectorAll('.modal')) {
         if (el.style.display === 'none' || !el.id) continue;
         // Later in the DOM wins a z-index tie, which is what stacking does anyway.
         if (!top || zIndexOf(el) >= zIndexOf(top)) top = el;
     }
-    if (!top || !ESCAPABLE_MODALS.includes(top.id)) return;
-    if (top.id === 'modal-price-history') closePriceHistory();
-    else closeModal(top.id);
-});
+    return top;
+}
 
 function zIndexOf(el) {
     const value = Number(getComputedStyle(el).zIndex);
     return isFinite(value) ? value : 0;
 }
+
+// Tab stays inside the open dialog. This is not decoration on top of aria-modal="true" —
+// it is what makes that attribute honest: aria-modal tells a screen reader to ignore
+// everything OUTSIDE the dialog, so a Tab that walks out lands the user on controls their
+// reader can no longer describe. The two ship together or neither should.
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const top = topmostModal();
+    if (!top) return;
+    const focusable = [...top.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), ' +
+        'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter(el => el.offsetParent !== null);   // skip what is display:none inside the dialog
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !top.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+});
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
