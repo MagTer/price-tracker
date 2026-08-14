@@ -3,7 +3,7 @@
 
 **Price Tracker** — standalone Swedish grocery and pharmacy price tracker, originally extracted from the `ai-agent-platform` monolith at `/home/magnus/dev/ai-agent-platform`. Tracks prices at ICA, Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta, Clas Ohlson, and Lyko; exposes its capabilities to the agent platform via an MCP server. Single-**owner**: one admin (Magnus) who may change anything, and read-only access for everyone else the Entra gate authenticates (v0.29.0 — → Auth bullet); one tenant of data either way. Entra ID is enforced at the upstream Traefik + auth-middleware ingress (managed via Dokploy), not inside this app.
 
-**Status (2026-08-11): the extraction is done and this is a live product.** It is deployed in prod. Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **856 passing** (that total includes 81 Postgres integration tests; with no DB reachable they skip cleanly and you get `775 passed, 81 skipped`). No local Postgres is needed to run the integration tier — `docker run --rm -e POSTGRES_USER=price_tracker -e POSTGRES_PASSWORD=price_tracker -e POSTGRES_DB=price_tracker -p 55432:5432 postgres:16` plus `TEST_DATABASE_URL` pointed at it runs all of it, and that is how a schema change should be verified before it is tagged.
+**Status (2026-08-13): the extraction is done and this is a live product.** It is deployed in prod. Phase 04.1 — package data moved from `Product` to `ProductStore` — is built, verified, and deployed. Test suite: **857 passing** (that total includes 81 Postgres integration tests; with no DB reachable they skip cleanly and you get `776 passed, 81 skipped`). A number here rots exactly like a pinned version does — the authority is the last green CI run (`gh run view "$(gh run list --workflow=ci.yml --limit=1 --json databaseId -q '.[0].databaseId')" --log | grep passed`), which prints both figures. No local Postgres is needed to run the integration tier — `docker run --rm -e POSTGRES_USER=price_tracker -e POSTGRES_PASSWORD=price_tracker -e POSTGRES_DB=price_tracker -p 55432:5432 postgres:16` plus `TEST_DATABASE_URL` pointed at it runs all of it, and that is how a schema change should be verified before it is tagged.
 
 **Deploy state: DO NOT state it from this file — read it, every time, with the one command below.** No pinned version is recorded here on purpose. A written-down version is wrong the moment Magnus bumps, and a stale one has already been repeated back to him as fact ("prod runs v0.32.1" when prod was four releases further on, at v0.36.0) — an assertion about someone else's system that costs them trust in every other claim in the same message. **Magnus bumps the pin himself, directly in the GitHub web UI** (commits read "Update price-tracker image to version X"), so the deployment truth is the home-server repo's file, not this machine and not a memory of it:
 
@@ -11,7 +11,11 @@
 # WHAT PROD IS PINNED TO — the authority. No SSH, no clone, works from anywhere.
 gh api repos/MagTer/home-server/contents/compose/dokploy-apps/price-tracker/docker-compose.yml \
   --jq '.content' | tr -d '\n' | base64 -d | grep 'image: ghcr.io'
-git tag | tail -1   # the newest tag HERE — the gap between the two is what is undeployed
+# The newest tag HERE — the gap between the two is what is undeployed. `--sort=v:refname` is
+# NOT optional: git tag sorts LEXICALLY, so v0.9.0 sorts after every v0.1x–v0.5x tag and a
+# bare `git tag | tail -1` answers v0.9.0 no matter how far the repo has come. That is the
+# stale-version error this whole paragraph exists to prevent, handed to you by its own recipe.
+git tag --sort=v:refname | tail -1
 ```
 
 `ssh magnus@192.168.10.223 "sudo docker inspect price-tracker --format '{{.Config.Image}}'"` answers what the container is actually RUNNING, which is the check worth making when a deploy is suspected to have not landed. Backup export checked against the live instance (on v0.26.0): 15 products / 38 links / 41 history rows, 38 KB, format 1.1. Deploying is that one-line bump in `compose/dokploy-apps/price-tracker/docker-compose.yml` — that repo is not this repo, do not edit it from here, and the release is not live until the bump lands.
@@ -84,7 +88,7 @@ Changing a stack component is a real decision — discuss it first. Everything b
 
 - **Language/runtime:** Python 3.12
 - **Web:** FastAPI + uvicorn
-- **DB:** PostgreSQL via SQLAlchemy 2.0 (asyncio) + Alembic. **Tests run against real Postgres, not SQLite** — the models use `postgresql.UUID` and `JSONB`, which aiosqlite cannot compile. `tests/conftest.py` drops and recreates a throwaway `price_tracker_test` database; if no DB is reachable, the integration tier skips cleanly. (`aiosqlite` is still declared in `pyproject.toml` but no code imports it — vestigial, safe to remove.)
+- **DB:** PostgreSQL via SQLAlchemy 2.0 (asyncio) + Alembic. **Tests run against real Postgres, not SQLite** — the models use `postgresql.UUID` and `JSONB`, which aiosqlite cannot compile. `tests/conftest.py` drops and recreates a throwaway `price_tracker_test` database; if no DB is reachable, the integration tier skips cleanly. (`aiosqlite` was dropped from `pyproject.toml` in v0.51.0 — do not re-add it to make a test run without Postgres; it cannot compile these models.)
 - **HTTP client:** **curl_cffi** for store fetches (Chrome TLS/JA3 + h2 impersonation; env `FETCHER_TRANSPORT=httpx` flips back), httpx everywhere else (OpenRouter, Resend) and as the fallback — with **HTTP/2 enabled** (`httpx[http2]` → `h2`). See the fetcher and transport bullets: the fingerprint is a bot-detection concern, not a performance choice
 - **Email:** Resend HTTP API (`https://api.resend.com/emails`) — same provider as the source platform; no SMTP (D-32)
 - **LLM:** OpenRouter direct at `https://openrouter.ai/api/v1` (OpenAI-compatible) — no LiteLLM proxy

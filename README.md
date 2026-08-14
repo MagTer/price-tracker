@@ -226,15 +226,20 @@ docker compose down -v
 docker compose up -d postgres
 
 # 3. Start the app: its command runs `alembic upgrade head`, which now executes the
-#    rewritten 0001 against an empty database and re-seeds the stores.
+#    rewritten 0001 against an empty database, applies every revision stacked on top
+#    of it, and re-seeds the stores.
 docker compose up -d
 
 # 4. VERIFY — do not skip; the failure this guards against is silent.
-docker compose exec app alembic current   # must print: 0001_initial (head)
-docker compose exec app alembic check     # must print: No new upgrade operations detected.
+#    `current` must print the CURRENT head, which moves with every new revision — read it
+#    off the chain (`alembic heads`), never off this README. It was 0001_initial when this
+#    section was written and is 0011_package_precision as of v0.45.0.
+docker compose exec app alembic heads      # the revision the next line must match
+docker compose exec app alembic current    # must print that revision, marked (head)
+docker compose exec app alembic check      # must print: No new upgrade operations detected.
 ```
 
-`alembic current` printing `0001_initial (head)` on its own proves nothing (a stale DB prints the
+`alembic current` printing the head revision on its own proves nothing (a stale DB prints the
 same thing) — it is `alembic check` that proves the live schema matches the ORM. If `check` reports
 operations, the volume was not actually dropped.
 

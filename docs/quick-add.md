@@ -105,9 +105,13 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 - **A chain changes its offer day (or a new chain has one):** update the Store row's
   `check_weekdays` (JSONB list, 0=Monday — Willys is `[0, 4]`), seeded in migration
   `0005_store_schedule`. Every inheriting link follows automatically; the scheduler
-  checks listed days förmiddag (06–12 spread) and retries a FAILED weekday check after
-  24 h instead of waiting a week. Resolution rule: `domain/schedule.py` — the ONE
-  definition, used by scheduler and admin API alike.
+  checks listed days förmiddag (06–12, the slot STRATIFIED across the store's links on
+  that weekday since v0.39.0) and retries a FAILED weekday check in the NEXT morning's
+  window (`schedule.next_morning_retry`) instead of waiting a week. Never `now + 24h`:
+  that kept the clock time the failure happened at, so a link that failed at 12:01
+  retried at 12:01 forever — outside the window the schedule exists to hold it in.
+  Resolution rule: `domain/schedule.py` — the ONE definition, used by scheduler and
+  admin API alike.
 - **Better title parsing:** extend the regexes in `quickadd.parse_package_from_name`
   (currently `ml|kg|l|g|st` amounts and `pack|st|rullar|tabletter|kapslar|påsar` counts).
 - **MCP:** quick-add is deliberately UI-only for now. If the agent platform should add
