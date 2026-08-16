@@ -86,7 +86,7 @@ markers = [
 # greenlet and h2), i.e. checking against libraries that never ship.
 #
 # Import resolution is ALL this buys, and the number below is not a bug count.
-# Project-wide pyright reports 144 errors (2026-08-16), overwhelmingly the pre-2.0
+# Project-wide pyright reports 143 errors (2026-08-16), overwhelmingly the pre-2.0
 # `Column()` declarations: it sees the Python type where the code uses a
 # class-level column expression, so `.is_not()` on a Decimal and `.desc()` on a
 # datetime read as errors. No switch fixes that — `typeCheckingMode = "basic"` was
@@ -103,8 +103,10 @@ venv = ".venv"
 # `ignore` silences diagnostics without touching file selection, so it cannot
 # reintroduce this. Measured 2026-08-16, after shipping the broken form.
 # Contents: deliberate throwaways importing playwright, which is not a dependency
-# and should not become one. `scripts/` is deliberately NOT listed — pyright caught
-# verify_phase2.py calling a service method that no longer exists.
+# and should not become one. Nothing else is silenced, and the one project-wide
+# find pyright has made is why: scripts/verify_phase2.py called a service method
+# that no longer exists, and that directory was deleted rather than ignored
+# (2026-08-16). A silenced directory is where such a leftover would have kept sitting.
 ignore = ["docs/spikes"]
 
 [build-system]
