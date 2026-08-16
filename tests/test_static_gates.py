@@ -557,6 +557,21 @@ def test_the_drill_in_is_opened_and_closed_only_through_the_hash() -> None:
         "the drill-in without a URL and without a history entry — back then leaves the app."
     )
 
+    # Each way IN is a rendered attribute plus a delegated handler that reads it, written far
+    # apart in the file. Half of that pair is a button that looks exactly like the working one
+    # and does nothing when clicked — nothing on screen says so, and no runtime test reaches
+    # it: the drill-in is pure client-side, so the endpoints stay green either way.
+    entry_points = (("data-deal-action", "Att köpa"), ("data-stats-product", "Prisutveckling"))
+    for attribute, page in entry_points:
+        assert f'{attribute}="' in js, (
+            f"{page}'s product name no longer renders {attribute} — the drill-in has lost "
+            "an entry point."
+        )
+        assert f"closest('button[{attribute}" in js, (
+            f"nothing handles {attribute} clicks any more, so {page}'s product name is a "
+            "button that does nothing. It must reach openPriceHistory (never showPriceHistory)."
+        )
+
 
 _MODAL_OPEN_RE = re.compile(r'<div class="modal" id="([^"]+)"([^>]*)>')
 _LABEL_RE = re.compile(

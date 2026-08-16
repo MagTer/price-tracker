@@ -931,8 +931,12 @@
    the zones pack from the left when the row wraps, stranding the price in mid-row with a
    few hundred pixels of nothing to its right. */
 .deal-right { margin-left: auto; display: flex; align-items: flex-start; gap: 18px; }
-.deal-name {
-    font-size: 16px;
+/* THE affordance that opens the price-history drill-in: a product name that is a real
+   button. Att köpa and Prisutveckling share the rule so the same gesture looks the same on
+   both pages — only the type size differs, since one sits in a card row and the other in a
+   table that sets its own. Declared once here rather than twice: two copies drift, and a
+   name that stops looking clickable on one page is invisible until someone stops clicking. */
+.deal-name, .stats-name {
     font-weight: 600;
     color: var(--text);
     background: none;
@@ -942,7 +946,9 @@
     text-align: left;
     cursor: pointer;
 }
-.deal-name:hover { color: var(--primary); text-decoration: underline; }
+.deal-name { font-size: 16px; }
+.stats-name { font-size: inherit; }
+.deal-name:hover, .stats-name:hover { color: var(--primary); text-decoration: underline; }
 .is-unknown .deal-name { color: var(--neutral-chip-fg); }
 .deal-pkg { font-weight: 400; color: var(--text-faint); font-size: 16px; }
 /* Name, förpackning and the offer's own villkor on one baseline. The villkor sat at the
@@ -3168,6 +3174,11 @@ function statsSpanHtml(r) {
         + '</div>';
 }
 
+// The product NAME opens the price-history drill-in, exactly as on Att köpa. This table is
+// the one place in the app that states a product moved N % over a period, and the obvious
+// next question — moved how, and when — is what the modal answers; it read as a dead end
+// because the row named a product and led nowhere. Only the name is a target: the rest of
+// the row carries sortable numbers, and a whole-row click would fight the column headers.
 function buildStatsProducts(data) {
     const rows = statsSort.column
         ? sortRows(data.products, statsSort.column, statsSort.direction)
@@ -3193,7 +3204,7 @@ function buildStatsProducts(data) {
         const span = statsSpanHtml(r);
         const where = [r.cheapest_store, r.cheapest_package].filter(Boolean).join(' · ');
         html += `<tr>
-            <td><div style="font-weight:600">${escapeHtml(r.name)}</div>${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
+            <td><div><button type="button" class="stats-name" data-stats-product="${escapeHtml(r.product_id)}" title="Visa prishistorik">${escapeHtml(r.name)}</button></div>${r.brand ? '<div class="best-link">' + escapeHtml(r.brand) + '</div>' : ''}</td>
             <td class="num-col" style="font-weight:600; white-space:nowrap">${escapeHtml(unitKr(r.current_unit_price, r.unit))}</td>
             <td class="num-col" style="font-weight:600">${changeCell(r.change_pct)}</td>
             <td class="stats-span best-link col-secondary">${span}</td>
@@ -5737,8 +5748,14 @@ document.getElementById('product-links-table').addEventListener('click', (e) => 
     }
 });
 
-// Statistics table sorting — re-renders from the cached payload, no refetch.
+// Statistics: the product name opens the drill-in, and the column headers sort — both
+// delegated from the container, which is re-rendered wholesale on every sort and refetch.
 document.getElementById('stats-container').addEventListener('click', (e) => {
+    const nameBtn = e.target.closest('button[data-stats-product]');
+    if (nameBtn) {
+        openPriceHistory(nameBtn.getAttribute('data-stats-product'));
+        return;
+    }
     const th = e.target.closest('th[data-stats-sort]');
     if (!th) return;
     const column = th.getAttribute('data-stats-sort');
@@ -5837,8 +5854,20 @@ function currentPage() {
     return 'kopa';
 }
 
+// What page the reader was last placed on. The per-page fetches below key on a CHANGE of
+// this, not on the hashchange that called renderPage: the drill-in lives in the hash too
+// (`#/utveckling?produkt=<id>`), so opening and closing it fires two hashchanges without
+// ever leaving the page. Ungated, each of those re-ran /stats — the heaviest query in the
+// app — to repaint a table the modal is sitting on top of, and the modal's own two fetches
+// then queued behind it. Nothing looked wrong; it was just slow at the moment a reader
+// clicks. Arriving from another page still refetches, which is what "fresh on each visit"
+// was for.
+let renderedPage = null;
+
 function renderPage() {
     const page = currentPage();
+    const arrived = page !== renderedPage;
+    renderedPage = page;
     for (const el of document.querySelectorAll('.app-page')) {
         el.classList.toggle('active', el.getAttribute('data-page') === page);
     }
@@ -5861,8 +5890,8 @@ function renderPage() {
     // without polling. Prisutveckling and Fel & luckor re-fetch /stats on each visit
     // too: in a long-lived tab their numbers would otherwise silently age until the
     // manual ↻ — the pages render immediately from memory, then repaint fresh.
-    if (page === 'loggar') loadLogs();
-    if (page === 'utveckling' || page === 'luckor') loadStatistics();
+    if (arrived && page === 'loggar') loadLogs();
+    if (arrived && (page === 'utveckling' || page === 'luckor')) loadStatistics();
 }
 
 document.getElementById('mobile-tabs').addEventListener('click', (e) => {
