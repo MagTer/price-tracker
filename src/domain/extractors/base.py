@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from domain.result import PriceExtractionResult, ProductMetadata
+
+
+# THE reader of schema.org blocks out of raw HTML. It had grown two independent copies
+# (parser.py's identity-signal scan and jsonld.py's Product walk) before a third store
+# needed one — the Gotcha-4 shape, on a pattern where a drifting copy fails by finding
+# NOTHING and reading exactly like "this page has no JSON-LD".
+LDJSON_BLOCK_RE = re.compile(
+    r"""<script[^>]*type\s*=\s*["']application/ld\+json["'][^>]*>(.*?)</script>""",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def format_sek(amount: Decimal) -> str:

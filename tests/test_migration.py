@@ -119,8 +119,8 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
 
 
 async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
-    """The 0001 seed survived the in-place rewrite; 0003/0004/0007/0008/0010 added Kronans,
-    Apohem, Rusta, Clas Ohlson and Lyko."""
+    """The 0001 seed survived the in-place rewrite; 0003/0004/0007/0008/0010/0012 added
+    Kronans, Apohem, Rusta, Clas Ohlson, Lyko and JYSK."""
     slugs = (await db_session.execute(select(Store.slug).order_by(Store.slug))).scalars().all()
     assert list(slugs) == [
         "apohem",
@@ -128,6 +128,7 @@ async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
         "clasohlson",
         "doz",
         "ica",
+        "jysk",
         "kronans",
         "lyko",
         "med24",

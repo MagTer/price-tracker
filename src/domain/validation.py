@@ -44,6 +44,7 @@ EXPECTED_SOURCE: dict[str, str] = {
     "ica": "ica_page",
     "rusta": "rusta_page",
     "lyko": "lyko_page",
+    "jysk": "jysk_page",
     "willys": "willys_api",
 }
 

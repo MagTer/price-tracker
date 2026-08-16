@@ -27,15 +27,10 @@ from decimal import Decimal, InvalidOperation
 from html import unescape
 from typing import Any
 
-from domain.extractors.base import format_sek
+from domain.extractors.base import LDJSON_BLOCK_RE, format_sek
 from domain.result import PriceExtractionResult
 
 logger = logging.getLogger(__name__)
-
-_LDJSON_RE = re.compile(
-    r"<script[^>]*type\s*=\s*[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
-    re.IGNORECASE | re.DOTALL,
-)
 
 _OUT_OF_STOCK_MARKERS = ("OutOfStock", "SoldOut", "Discontinued")
 
@@ -155,7 +150,7 @@ class JsonLdExtractor:
 
     def _find_product(self, html: str) -> dict[str, Any] | None:
         """Return the first schema.org Product node found in any JSON-LD block."""
-        for match in _LDJSON_RE.finditer(html):
+        for match in LDJSON_BLOCK_RE.finditer(html):
             raw = match.group(1).strip()
             try:
                 data = json.loads(raw)

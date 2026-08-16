@@ -2171,7 +2171,11 @@ const EMPTY_PRODUCT_FILTERS = {
 // men INTE från sin egen: en ICA-märkt produkt utan ICA-länk är en verklig lucka.
 const STORE_OWN_BRANDS = {
     ica: ['ICA', 'ICA Basic', 'ICA Selection', 'ICA Gott liv', 'ICA I Love Eco'],
-    willys: ['Garant', 'Eldorado', 'Såklart', 'Fixa']
+    willys: ['Garant', 'Eldorado', 'Såklart', 'Fixa'],
+    // JYSK sells house brands almost exclusively — the ones seen on live product pages so
+    // far. Without them a JYSK-branded towel sits at the top of "Saknar Willys" forever as
+    // a gap that can never be closed, which is what this table exists to prevent.
+    jysk: ['JYSK', 'KRONBORG']
 };
 let productFilters = Object.assign({}, EMPTY_PRODUCT_FILTERS);
 

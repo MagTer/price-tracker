@@ -11,10 +11,11 @@ from html import unescape
 import httpx
 
 from domain.categories import PRODUCT_CATEGORIES, normalize_category
-from domain.extractors.base import HtmlPriceExtractor, PriceExtractor
+from domain.extractors.base import LDJSON_BLOCK_RE, HtmlPriceExtractor, PriceExtractor
 from domain.extractors.clasohlson import ClasOhlsonExtractor
 from domain.extractors.ica import IcaExtractor
 from domain.extractors.jsonld import JsonLdExtractor
+from domain.extractors.jysk import JyskExtractor
 from domain.extractors.lyko import LykoExtractor
 from domain.extractors.rusta import RustaExtractor
 from domain.extractors.willys_api import WillysApiExtractor
@@ -83,10 +84,7 @@ def _to_int(value: object) -> int | None:
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _META_TAG_RE = re.compile(r"<meta\b[^>]*?>", re.IGNORECASE)
 _ATTR_RE = re.compile(r"""([\w:-]+)\s*=\s*("[^"]*"|'[^']*')""")
-_LDJSON_RE = re.compile(
-    r"""<script[^>]*type\s*=\s*["']application/ld\+json["'][^>]*>(.*?)</script>""",
-    re.IGNORECASE | re.DOTALL,
-)
+_LDJSON_RE = LDJSON_BLOCK_RE
 # The identity signals of a page live in its <head> and <script> tags, which the
 # fetcher's visible-text extraction strips out. For a JS SPA (ICA, Willys) that leaves
 # the LLM fallback with almost nothing — it returns all-nulls on a real product. So when
@@ -148,8 +146,10 @@ _API_EXTRACTORS: dict[str, WillysApiExtractor] = {"willys": WillysApiExtractor()
 # THE registry of store-HTML extractors — stores whose PAGE carries richer structure than
 # their JSON-LD (Rusta and Lyko: window.CURRENT_PAGE hydration state; ICA: the
 # __QUERY_INITIAL_STATE__ react-query state, whose promotions and jämförpris the JSON-LD
-# never carries; Clas Ohlson: the BEM price markup — Rusta/Lyko/Clas Ohlson hide the
-# ordinarie at a rea from JSON-LD, which carries only the current price). Same sharing
+# never carries; Clas Ohlson and JYSK: the price markup — Rusta/Lyko/Clas Ohlson/JYSK hide
+# the ordinarie at a rea from JSON-LD, which carries only the current price, and JYSK also
+# publishes multi-variant products as a ProductGroup the generic Product walk never finds).
+# Same sharing
 # contract as _API_EXTRACTORS, one tier further down the ladder: these parse the
 # already-fetched page and never make an HTTP call of their own, which is why they need
 # no ledger slot and can never raise StoreBlockedError.
@@ -158,6 +158,7 @@ _HTML_EXTRACTORS: dict[str, HtmlPriceExtractor] = {
     "clasohlson": ClasOhlsonExtractor(),
     "lyko": LykoExtractor(),
     "ica": IcaExtractor(),
+    "jysk": JyskExtractor(),
 }
 
 
