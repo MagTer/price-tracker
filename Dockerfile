@@ -3,6 +3,19 @@
 # --- Builder stage ---
 FROM python:3.12-slim AS builder
 
+# POETRY_VIRTUALENVS_IN_PROJECT below is load-bearing and must NOT be dropped in
+# favour of the repo's poetry.toml, which states the same thing: that file is not
+# copied into this stage (only pyproject.toml and poetry.lock are — see below), so
+# poetry cannot read it here. Without the variable poetry installs into its cache
+# and `COPY --from=builder /app/.venv` finds nothing. The failure is loud — the
+# build dies on that COPY — but the cause is three lines away from the symptom.
+# POETRY_VERSION is the hub of a three-way pin and this comment is the only place
+# that names all of it. Bump ALL THREE together, or the one you miss resolves a
+# different poetry than the other two:
+#   here (the image)                    .github/workflows/ci.yml (env POETRY_VERSION)
+#   home-server scripts/bootstrap-dev.sh §6 (uv tool install, the dev seat)
+# The seat is in another repo on purpose — it provisions the machine, not the app —
+# so nothing here can verify it; that is why it is written down rather than checked.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

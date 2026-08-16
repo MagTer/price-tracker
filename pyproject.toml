@@ -71,6 +71,42 @@ markers = [
     "integration: needs a real Postgres (see tests/conftest.py). Skips cleanly when none is reachable; select with -m integration, exclude with -m 'not integration'.",
 ]
 
+[tool.pyright]
+# Editor/LSP only — pyright is a gate nowhere (not in .github/, not in .claude/).
+# It exists so the language server finds the venv: without it every third-party
+# import reads as an error and nothing else in the file is legible. pyright does
+# NOT auto-detect ./.venv — measured 2026-08-16.
+#   poetry install     # creates ./.venv from poetry.lock — see poetry.toml
+# `poetry.toml` pins in-project venvs for this repo, so the path below holds for a
+# fresh clone with no machine setup and no CI step: one declaration, not a setting
+# each environment has to remember. Build it with POETRY, not uv — uv reads
+# [project].dependencies but neither the lock nor poetry's dev group, so it resolves
+# fresh inside the version ranges. Done that way once, 31 packages landed on versions
+# the lock does not carry (cryptography a whole major apart, 50 vs 49, plus alembic,
+# greenlet and h2), i.e. checking against libraries that never ship.
+#
+# Import resolution is ALL this buys, and the number below is not a bug count.
+# Project-wide pyright reports 144 errors (2026-08-16), overwhelmingly the pre-2.0
+# `Column()` declarations: it sees the Python type where the code uses a
+# class-level column expression, so `.is_not()` on a Decimal and `.desc()` on a
+# datetime read as errors. No switch fixes that — `typeCheckingMode = "basic"` was
+# measured at 145 of 146 before docs/spikes was silenced, i.e. it changes nothing.
+# The fix is `Mapped[...]` in models.py, the typing task this port deferred. Treat a
+# per-file run as the useful unit; the project total is a backlog, not a report.
+venvPath = "."
+venv = ".venv"
+# `ignore`, NOT `exclude`, and the difference is a trap that costs minutes per run:
+# pyright applies its default exclusions (**/node_modules, **/__pycache__, **/.*)
+# ONLY while `exclude` is unset. Setting it replaces them, and since `.venv` starts
+# with a dot it then gets analysed as source — 3000 files, 192 MB. A run that took
+# ~4.5 s stopped finishing at all, and the language server inherits the same job.
+# `ignore` silences diagnostics without touching file selection, so it cannot
+# reintroduce this. Measured 2026-08-16, after shipping the broken form.
+# Contents: deliberate throwaways importing playwright, which is not a dependency
+# and should not become one. `scripts/` is deliberately NOT listed — pyright caught
+# verify_phase2.py calling a service method that no longer exists.
+ignore = ["docs/spikes"]
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"

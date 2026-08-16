@@ -66,9 +66,7 @@ jobs:
           key: venv-${{ runner.os }}-py312-${{ hashFiles('poetry.lock') }}
 
       - name: Install dependencies
-        run: |
-          poetry config virtualenvs.in-project true
-          poetry install --with dev --no-interaction --no-ansi
+        run: poetry install --with dev --no-interaction --no-ansi
 
       - name: Lint (ruff check)
         run: poetry run ruff check src tests
