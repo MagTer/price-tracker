@@ -201,10 +201,13 @@ class WillysApiExtractor:
         price_value = data.get("priceValue")
         price_sek = Decimal(str(price_value)) if price_value is not None else None
 
-        # Parse compare price. Formats seen: "33,29 kr", "33.29 kr",
-        # "33,29 kr/kg", "12,50 kr/st" — grab the leading amount and drop any
-        # unit suffix so "/kg" etc. never reaches Decimal. Group separators must be
-        # stripped BEFORE the decimal swap: "1 234,50" under a bare [\d.,]+ matched
+        # Parse compare price. What this endpoint actually returns is a bare amount —
+        # "33,29 kr" / "33.29 kr", with the measure in the separate `comparePriceUnit`
+        # field (verified on six live products 2026-08-17). This comment used to also
+        # claim "33,29 kr/kg" and "12,50 kr/st" were "formats seen"; they were not, and
+        # believing it is what cost the measure below. The suffix strip stays anyway —
+        # it is free and a unit reaching Decimal would be a hard failure. Group separators
+        # must be stripped BEFORE the decimal swap: "1 234,50" under a bare [\d.,]+ matched
         # only the "1", a confident wrong number the validator then flagged.
         store_unit_price_sek: Decimal | None = None
         comparison_unit: str | None = None
@@ -220,11 +223,29 @@ class WillysApiExtractor:
                     logger.debug("Could not parse compare price: %s", compare_price_str)
             else:
                 logger.debug("Could not parse compare price: %s", compare_price_str)
-            # The measure the jämförpris is printed in ("kr/kg" → "/kg"), kept as
-            # evidence for the validator: without it a kr/kg jämförpris on a product
-            # compared per styck is an UN-CLEARABLE red flag on Fel & luckor — the
-            # string was in hand all along and was thrown away.
-            unit_match = re.search(r"/\s*(\w+)", text)
+        # The measure the jämförpris is printed in, kept as evidence for the validator and
+        # as the label the links panel puts on the figure: without it a kr/kg jämförpris on
+        # a product compared per styck is an UN-CLEARABLE red flag on Fel & luckor.
+        #
+        # `comparePriceUnit` is a FIELD, and reading it out of the comparePrice string was
+        # the bug (measured on the live API 2026-08-17, six products): Willys never puts the
+        # unit in that string. It is always a bare "97,78 kr" while `comparePriceUnit` says
+        # "kg" or "l" beside it. So the suffix regex never once matched and every Willys
+        # point ever written carried no measure — invisible until the first Willys product
+        # whose printed measure differs from its product unit (Lasagnette Dinnerkit, kr/kg
+        # against a kit compared per styck: printed 97.78 vs computed 26.40, a 73 % "error"
+        # in red on Fel & luckor with both numbers correct). The old comment claimed to have
+        # SEEN "33,29 kr/kg" from this endpoint; nothing in the response supports that, so
+        # the suffix stays only as a fallback and is no longer the primary reading.
+        #
+        # Normalized to the printed "/kg" shape rather than the bare token, because that is
+        # what pricing.PRINTED_MEASURE_MARKERS matches and what every stored row holds —
+        # a bare "kg" would match no marker and read as "no measure recorded".
+        unit_field = data.get("comparePriceUnit")
+        if isinstance(unit_field, str) and unit_field.strip():
+            comparison_unit = f"/{unit_field.strip().lower()}"
+        elif compare_price_str:
+            unit_match = re.search(r"/\s*(\w+)", str(compare_price_str))
             if unit_match:
                 comparison_unit = f"/{unit_match.group(1).lower()}"
 

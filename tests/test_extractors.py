@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from domain.extractors.willys_api import WillysApiExtractor
+from domain.pricing import printed_measure
 from domain.result import PriceExtractionResult, StoreBlockedError
 
 
@@ -252,6 +253,54 @@ class TestParseResponse:
         result = extractor._parse_response(data)
         assert result.store_unit_price_sek == Decimal("33.29")
         assert result.raw_response["comparison_unit"] == "/kg"
+
+    def test_the_measure_comes_from_its_own_field_not_from_the_price_string(self) -> None:
+        """The live shape: a BARE "97,78 kr" with the measure in `comparePriceUnit`.
+
+        This is what Willys actually returns — verified on six products 2026-08-17, all of
+        them bare — so the suffix regex above never once matched in prod and every Willys
+        point ever written carried no measure. Invisible until a Willys product whose
+        printed measure differs from its product unit: Lasagnette Dinnerkit, kr/kg against
+        a kit compared per styck, printed 97.78 vs computed 26.40 — a 73 % "error" drawn in
+        red on Fel & luckor with both numbers correct, and drawn as "97,78 kr/st".
+        """
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 26.40,
+            "comparePrice": "97,78 kr",
+            "comparePriceUnit": "kg",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert result.store_unit_price_sek == Decimal("97.78")
+        # Normalized to the printed "/kg" shape: a bare "kg" matches no marker in
+        # pricing.PRINTED_MEASURE_MARKERS and would read as "no measure recorded".
+        assert result.raw_response["comparison_unit"] == "/kg"
+
+    def test_the_measure_field_carries_litres_too(self) -> None:
+        """Willys writes "l", which must resolve to the product unit `liter`."""
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 23.90,
+            "comparePrice": "92,56 kr",
+            "comparePriceUnit": "l",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert result.raw_response["comparison_unit"] == "/l"
+        assert printed_measure(result.raw_response) == "liter"
+
+    def test_no_measure_recorded_when_neither_field_nor_suffix_has_one(self) -> None:
+        """Absence stays absence — the validator must be able to tell unknown from equal."""
+        extractor = _make_extractor()
+        data: dict[str, object] = {
+            "priceValue": 49.90,
+            "comparePrice": "33,29 kr",
+            "outOfStock": False,
+        }
+        result = extractor._parse_response(data)
+        assert "comparison_unit" not in result.raw_response
+        assert printed_measure(result.raw_response) is None
 
     def test_parse_compare_price_with_group_separator(self) -> None:
         """ "1 234,50 kr/kg": the bare [\\d.,]+ match stopped at the space and recorded
