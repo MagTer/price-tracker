@@ -688,3 +688,27 @@ def test_the_toast_timer_is_cleared_before_it_is_reset() -> None:
         "showToast no longer clears the pending timer: the next toast will be cut short by "
         "the previous one's deadline."
     )
+
+
+def test_the_stores_printed_jfr_pris_is_never_labelled_with_the_products_unit() -> None:
+    """ "Butiken anger" is in the STORE's measure, and unitKr() labels with the PRODUCT's.
+
+    ICA prints toalettpapper in kr/kg while the product is counted in styck, so rendering
+    that cell with unitKr() would print "63,20 kr/st" — a wrong measure stated with
+    confidence, which is worse than the bare number it replaced. storeSaysKr() takes the
+    measure from the wire (`store_unit_price_unit`, read by pricing.printed_measure) and
+    falls back to bare kronor when no extractor recorded one.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    assert "function storeSaysKr(" in js, "storeSaysKr is gone — how is the cell rendered now?"
+
+    cell = re.search(r'<td class="store-says">(.*?)</td>', js, re.DOTALL)
+    assert cell is not None, "the store-says cell is gone — has the links table changed shape?"
+    assert "storeSaysKr(" in cell.group(1), (
+        "the store-says cell no longer renders through storeSaysKr, so the store's own "
+        "measure is either missing or taken from the product's unit."
+    )
+    assert "unitKr(" not in cell.group(1), (
+        "the store-says cell uses unitKr(), which labels with the PRODUCT's comparison unit "
+        "— that states the wrong measure for every store printing in another one."
+    )

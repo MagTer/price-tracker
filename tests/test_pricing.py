@@ -10,6 +10,7 @@ from domain.pricing import (
     MAX_PACKAGE_QUANTITY,
     apply_scrape_to_link,
     normalize_amount,
+    printed_measure,
     quantity_mismatch,
     scraped_quantity_from,
     unit_price_expr,
@@ -195,3 +196,45 @@ def test_quantity_mismatch_true_only_when_both_present_and_unequal() -> None:
     assert quantity_mismatch(agreeing) is False
     assert quantity_mismatch(unscraped) is False
     assert quantity_mismatch(unset) is False
+
+
+# --- printed_measure: the store's OWN measure for its printed jämförpris ----------------
+#
+# Two callers with opposite purposes read this (validation vetoes a comparison, the links
+# payload labels the figure), so a wrong answer here is either a false silent-error row or
+# a row claiming ICA's kr/kg is kr/st.
+
+
+def test_printed_measure_reads_the_codes_the_extractors_actually_record() -> None:
+    """The real shapes: ICA's dotted `unit_price_unit`, Willys/Rusta's slashed one."""
+    assert printed_measure({"unit_price_unit": "fop.price.per.kg"}) == "kg"
+    assert printed_measure({"unit_price_unit": "fop.price.per.st"}) == "st"
+    assert printed_measure({"comparison_unit": "/kg"}) == "kg"
+    assert printed_measure({"comparison_unit": "kr/st"}) == "st"
+
+
+def test_printed_measure_prefers_the_longer_litre_marker_over_bare_l() -> None:
+    """ "/l" is a substring of "/liter" — order in the marker table is load-bearing.
+
+    ICA's real codes carry a suffix ("…per.litre.without.deposit"), so a table that matched
+    "/l" first would still answer "liter" here by luck; what it would get wrong is nothing
+    observed yet — which is exactly why the ordering is asserted rather than trusted.
+    """
+    assert printed_measure({"unit_price_unit": "fop.price.per.litre.without.deposit"}) == "liter"
+    assert printed_measure({"comparison_unit": "/liter"}) == "liter"
+    assert printed_measure({"comparison_unit": "kr/l"}) == "liter"
+
+
+def test_printed_measure_is_none_when_nothing_recorded_a_measure() -> None:
+    """None means UNKNOWN, never "same as the product's".
+
+    Most stores record no code at all (Willys with no comparison unit in the API payload,
+    the JSON-LD pharmacies), and a caller must be able to tell that apart from a positive
+    reading: validation keeps judging on unknown, the UI stays silent on it.
+    """
+    assert printed_measure(None) is None
+    assert printed_measure({}) is None
+    assert printed_measure({"source": "jsonld"}) is None
+    assert printed_measure("not a dict") is None
+    assert printed_measure({"unit_price_unit": 42}) is None
+    assert printed_measure({"comparison_unit": "per.piece"}) is None

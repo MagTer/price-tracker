@@ -64,6 +64,7 @@ from domain.pricing import (
     as_float,
     effective_price,
     normalize_amount,
+    printed_measure,
     quantity_mismatch,
     rounded_unit_price,
     unit_price_py,
@@ -263,10 +264,15 @@ def _link_payload(
         "offer_price_sek": (as_float(latest_price.offer_price_sek) if latest_price else None),
         # COMPUTED from the link's own quantity (D-03) — the comparable number.
         "unit_price_sek": rounded_unit_price(effective_price(latest_price), ps.package_quantity),
-        # What the STORE printed (D-05) — display only, never sorted on.
+        # What the STORE printed (D-05) — display only, never sorted on. The measure rides
+        # WITH it: that figure is in the store's own unit, not the product's, so a bare
+        # number beside our kr/enhet is two units stacked in one row saying nothing about
+        # which is which. None = the extractor recorded no code; the UI then stays silent
+        # rather than labelling it with the product's unit, which would be a false claim.
         "store_unit_price_sek": (
             as_float(latest_price.store_unit_price_sek) if latest_price else None
         ),
+        "store_unit_price_unit": (printed_measure(latest_price.raw_data) if latest_price else None),
         "in_stock": latest_price.in_stock if latest_price else None,
         # D-02's visible flag: a link may be saved without an amount, but it is never
         # SILENTLY blank.

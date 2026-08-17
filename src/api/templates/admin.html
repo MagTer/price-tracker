@@ -1792,6 +1792,17 @@ function unitKr(value, unit) {
     return value == null ? DASH : formatSek(value) + ' ' + unitPriceHeading(unit);
 }
 
+// The store's OWN printed jämförpris, in the store's OWN measure — which is why unitKr()
+// must never be used for it: that labels with the PRODUCT's comparison unit, so ICA's
+// kr/kg on a product counted in styck would render "kr/st" and state the wrong measure
+// with confidence. The measure comes from the wire (`store_unit_price_unit`, read off the
+// extractor's own code by pricing.printed_measure); when no extractor recorded one the
+// figure stays bare, because silence is honest and a guessed unit is not.
+function storeSaysKr(value, measure) {
+    if (value == null) return DASH;
+    return formatSek(value) + (measure ? ' ' + unitPriceHeading(measure) : ' kr');
+}
+
 function formatPct(value, decimals = 1) {
     if (value == null) return DASH;
     const sign = value < 0 ? '\u2212' : '+';
@@ -5156,7 +5167,7 @@ function buildLinksTable(rows, unit) {
             <td>${pkg}</td>
             <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
             <td>${unitCell}</td>
-            <td class="store-says">${r.store_unit_price_sek != null ? escapeHtml(r.store_unit_price_sek) + ' kr' : '&#8212;'}</td>
+            <td class="store-says">${escapeHtml(storeSaysKr(r.store_unit_price_sek, r.store_unit_price_unit))}</td>
             <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}
                 <div class="best-link">${escapeHtml(cadenceLabel(r))}</div></td>
             ${IS_ADMIN ? `<td>

@@ -30,6 +30,7 @@ from domain.pricing import (
     apply_scrape_to_link,
     as_float,
     effective_price,
+    printed_measure,
     quantity_mismatch,
     rounded_unit_price,
     unit_price_expr,
@@ -469,8 +470,16 @@ class PriceTrackerService:
                             "offer_price_sek": (
                                 as_float(price_point.offer_price_sek) if price_point else None
                             ),
+                            # D-05, plus the measure it is printed in: the store's own
+                            # unit, not the product's. Without it the links panel stacks
+                            # ICA's kr/kg beside our kr/st as two bare numbers. None =
+                            # no code recorded; the UI stays silent rather than labelling
+                            # it with the product's unit, which would be a false claim.
                             "store_unit_price_sek": (
                                 as_float(price_point.store_unit_price_sek) if price_point else None
+                            ),
+                            "store_unit_price_unit": (
+                                printed_measure(price_point.raw_data) if price_point else None
                             ),
                             "unit_price_sek": rounded_unit_price(
                                 effective, product_store.package_quantity

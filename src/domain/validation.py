@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.models import CheckAttempt, PricePoint, Product, ProductStore, Store, link_store_name
+from domain.pricing import printed_measure
 
 # The best tier per store slug — what extraction_source SHOULD say on a healthy check.
 # Only stores whose extractor answers whenever the page is healthy belong here (see the
@@ -58,40 +59,9 @@ ABSOLUTE_TOLERANCE_SEK = Decimal("0.10")
 # SAME measure — the exact trap models.py documents on store_unit_price_sek ("kr/rulle vs
 # kr/pack vs kr/100g"). ICA prints toalettpapper in kr/KG while the product's unit is st
 # (rulle): printed 63.20 vs computed 6.81, both correct, ~89 % "deviation" — the false
-# alarm the first Fel & luckor survey was full of. The measure code rides raw_data when an
-# extractor captured one (ICA `unit_price_unit`, Rusta `comparison_unit`); each marker maps
-# to the Product.unit value it denotes. Substring match on purpose: ICA's codes vary in
-# suffix ("fop.price.per.litre.without.deposit").
-_PRINTED_MEASURE_MARKERS: list[tuple[str, str]] = [
-    ("per.kg", "kg"),
-    ("/kg", "kg"),
-    ("per.litre", "liter"),
-    ("/liter", "liter"),
-    ("per.st", "st"),
-    ("/st", "st"),
-    # Last on purpose: "/l" is a substring of "/liter", so the longer marker must get
-    # first shot; any "/l…" suffix a Swedish store prints is a litre measure.
-    ("/l", "liter"),
-]
-
-
-def _printed_measure(raw_data: Any) -> str | None:
-    """The measure the store's printed jämförpris is in, as a Product.unit value.
-
-    None means UNKNOWN, not "same": only a positively recognised, different measure may
-    veto the comparison — an unknown code must keep judging, or the check goes blind for
-    every store whose extractor records no measure (Willys, the JSON-LD pharmacies).
-    """
-    if not isinstance(raw_data, dict):
-        return None
-    code = raw_data.get("unit_price_unit") or raw_data.get("comparison_unit")
-    if not isinstance(code, str):
-        return None
-    lowered = code.lower()
-    for marker, unit in _PRINTED_MEASURE_MARKERS:
-        if marker in lowered:
-            return unit
-    return None
+# alarm the first Fel & luckor survey was full of. Reading that measure off raw_data lives
+# in pricing.printed_measure, which the links panel also uses to LABEL the printed figure;
+# a second copy here would let the row's label and this veto disagree about one number.
 
 
 async def data_quality(session: AsyncSession) -> dict[str, Any]:
@@ -212,7 +182,7 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
             continue
         # A printed figure in a DIFFERENT measure than the product's unit contradicts
         # nothing — kr/kg against kr/rulle is two true statements about one shelf.
-        measure = _printed_measure(raw_data)
+        measure = printed_measure(raw_data)
         if measure is not None and measure != unit:
             continue
         candidates = [price / quantity]

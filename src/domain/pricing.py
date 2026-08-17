@@ -34,6 +34,27 @@ PKG_UNITS: dict[str, tuple[str, Decimal]] = {
 # listings comparable.
 CANONICAL_UNITS: tuple[str, ...] = ("st", "liter", "kg")
 
+# The measure a store's PRINTED jämförpris is in, as recorded by the extractors that capture
+# one (ICA `unit_price_unit`, Willys/Rusta `comparison_unit` — both stashed in
+# PricePoint.raw_data). Each marker maps to the Product.unit value it denotes, so a printed
+# figure can be compared with — or labelled beside — a computed kr/enhet without the two
+# silently being in different measures ("kr/rulle vs kr/pack vs kr/100g", the trap
+# models.py documents on store_unit_price_sek).
+#
+# Substring match on purpose: ICA's codes vary in suffix
+# ("fop.price.per.litre.without.deposit").
+PRINTED_MEASURE_MARKERS: list[tuple[str, str]] = [
+    ("per.kg", "kg"),
+    ("/kg", "kg"),
+    ("per.litre", "liter"),
+    ("/liter", "liter"),
+    ("per.st", "st"),
+    ("/st", "st"),
+    # Last on purpose: "/l" is a substring of "/liter", so the longer marker must get
+    # first shot; any "/l…" suffix a Swedish store prints is a litre measure.
+    ("/l", "liter"),
+]
+
 # Upper bound of a Numeric(12, 4) column. A hallucinated 1e30 from the LLM must be rejected
 # here and yield None — not surface as a DataError at flush inside the scheduler tick, where
 # the per-product `except Exception` would swallow it and count it as a failed check.
@@ -224,6 +245,34 @@ def apply_scrape_to_link(
     if link.package_quantity != scraped:
         return f"page says {scraped}, you have {link.package_quantity}"
 
+    return None
+
+
+def printed_measure(raw_data: Any) -> str | None:
+    """The measure a store's printed jämförpris is in, as a Product.unit value.
+
+    THE reader of that code — it has two callers with opposite purposes and must not be
+    written twice: domain/validation.py uses it to VETO a comparison between the printed and
+    the computed kr/enhet (kr/kg against kr/rulle is two true statements about one shelf,
+    not a contradiction), and the links payload uses it to LABEL the printed figure so a
+    reader can see the same thing. The two disagreeing would put "63,20 kr/kg" in a row the
+    validator was meanwhile judging as kr/st.
+
+    None means UNKNOWN, never "same as ours": most stores record no code at all (Willys
+    without a comparison unit, the JSON-LD pharmacies), so a caller must decide what to do
+    with an absent measure rather than be handed a guess. Validation keeps judging on
+    unknown — going blind there would be worse than a rare false alarm; the UI stays silent
+    on unknown — a label naming the wrong measure is worse than no label.
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    code = raw_data.get("unit_price_unit") or raw_data.get("comparison_unit")
+    if not isinstance(code, str):
+        return None
+    lowered = code.lower()
+    for marker, unit in PRINTED_MEASURE_MARKERS:
+        if marker in lowered:
+            return unit
     return None
 
 

@@ -387,6 +387,73 @@ async def test_scraped_quantity_conflict_is_flagged_not_adopted(
     assert rows[0]["unit_price_sek"] == pytest.approx(5.83)  # ranked on intent, not evidence
 
 
+async def test_link_rows_carry_the_measure_the_store_printed_its_jfr_pris_in(
+    db_session: AsyncSession, session_factory
+) -> None:
+    """The printed jämförpris rides with the MEASURE it is printed in (D-05).
+
+    This is the pair the links panel puts in one row: our computed kr/st beside ICA's own
+    kr/kg. Without the measure the cell renders both as bare kronor, which is two different
+    units stacked in one column with nothing saying which is which — and unitKr() cannot
+    supply it, because that labels with the PRODUCT's unit and would print ICA's kr/kg as
+    "kr/st". None must survive as None: most stores record no code at all, and the UI's rule
+    is silence on unknown rather than a guessed label.
+    """
+    ica = await _store(db_session, "ica")
+    apotea = await _store(db_session, "apotea")
+    lambi = await _lambi(db_session)  # unit="st" — deliberately NOT the printed measure
+
+    labelled = _link(lambi, ica, "https://handlaprivatkund.ica.se/lambi-24p", Decimal("24"), "24-p")
+    unlabelled = _link(lambi, apotea, "https://www.apotea.se/lambi-8p", Decimal("8"), "8-p")
+    db_session.add_all([labelled, unlabelled])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            PricePoint(
+                product_store_id=labelled.id,
+                price_sek=Decimal("139.90"),
+                store_unit_price_sek=Decimal("63.20"),
+                in_stock=True,
+                checked_at=_now(),
+                raw_data={"source": "ica_page", "unit_price_unit": "fop.price.per.kg"},
+            ),
+            PricePoint(
+                product_store_id=unlabelled.id,
+                price_sek=Decimal("59.90"),
+                store_unit_price_sek=Decimal("7.49"),
+                in_stock=True,
+                checked_at=_now(),
+                raw_data={"source": "jsonld"},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    rows = await PriceTrackerService(session_factory).get_links_for_product(str(lambi.id))
+    by_slug = {row["store_slug"]: row for row in rows}
+
+    assert by_slug["ica"]["store_unit_price_sek"] == pytest.approx(63.20)
+    assert by_slug["ica"]["store_unit_price_unit"] == "kg"
+    assert by_slug["ica"]["unit_price_sek"] == pytest.approx(5.83)  # ours, in kr/st
+    assert by_slug["apotea"]["store_unit_price_sek"] == pytest.approx(7.49)
+    assert by_slug["apotea"]["store_unit_price_unit"] is None
+
+
+async def test_a_link_with_no_price_point_has_no_printed_measure(
+    db_session: AsyncSession, session_factory
+) -> None:
+    """The measure is read off the latest point, so no point means no measure — not a crash."""
+    willys = await _store(db_session, "willys")
+    lambi = await _lambi(db_session)
+    db_session.add(_link(lambi, willys, "https://www.willys.se/lambi-24p", Decimal("24"), "24-p"))
+    await db_session.commit()
+
+    rows = await PriceTrackerService(session_factory).get_links_for_product(str(lambi.id))
+    assert rows[0]["store_unit_price_sek"] is None
+    assert rows[0]["store_unit_price_unit"] is None
+
+
 async def test_the_tests_never_touch_the_dev_database(db_engine) -> None:
     """The fixture CREATE-DROPs its database, so it had better be the throwaway one (T-04.1-24)."""
     assert db_engine.url.database == "price_tracker_test"
