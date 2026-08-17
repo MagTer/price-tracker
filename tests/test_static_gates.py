@@ -690,6 +690,38 @@ def test_the_toast_timer_is_cleared_before_it_is_reset() -> None:
     )
 
 
+def test_quick_add_rekeys_the_package_amount_instead_of_carrying_it_across_units() -> None:
+    """An amount entered in one canonical unit must not survive a change to another.
+
+    pkgInitChain takes the amount as an ARGUMENT, so a call site that reads the field back
+    and passes it through carries 0,27 — parsed as kg out of a "…270g" title — into a
+    product counted in `st`, where it means 0,27 STYCK. Nothing server-side sees it: the
+    quick-add form never submits, because pkgFieldsChanged sets step="1" for a count and the
+    browser refuses with "the two nearest valid values are 0 and 1". That is v0.53.3's shape
+    — a correct rule delivered as an unreadable message — and it sits on the normal path for
+    a one-size product, where the title says 270 g and the product compares per styck.
+
+    Both call sites are the pair: qaUnitChanged is the operator switching Enhet on a NEW
+    product, qaProductChoiceChanged is them attaching the link to an EXISTING product whose
+    unit differs. Fixing one leaves the other doing it, and no runtime test can see either —
+    the form errors in the browser, not in the API.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    assert "function pkgRekeyUnit(" in js, "pkgRekeyUnit is gone — has the re-key moved?"
+
+    for name in ("qaUnitChanged", "qaProductChoiceChanged"):
+        body = re.search(rf"function {name}\([^)]*\)\s*\{{(.*?)\n\}}", js, re.DOTALL)
+        assert body is not None, f"{name} not found — has it been renamed?"
+        assert "pkgRekeyUnit(" in body.group(1), (
+            f"{name} no longer re-keys through pkgRekeyUnit, so the amount survives a change "
+            "of canonical unit and the form silently refuses to submit."
+        )
+        assert "pkgInitChain(" not in body.group(1), (
+            f"{name} calls pkgInitChain directly again — that is the shape that carries the "
+            "old unit's amount across. Go through pkgRekeyUnit."
+        )
+
+
 def test_the_stores_printed_jfr_pris_is_never_labelled_with_the_products_unit() -> None:
     """ "Butiken anger" is in the STORE's measure, and unitKr() labels with the PRODUCT's.
 

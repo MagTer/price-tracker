@@ -4104,6 +4104,35 @@ function pkgInitChain(prefix, productUnit, amount, label) {
     pkgSetEntryUnit(prefix, units.length ? units[0] : (productUnit || ''));
 }
 
+// Re-key an OPEN dialog's package fields to a different product unit — the case where the
+// amount already on screen was entered in the OLD unit and cannot survive the change.
+//
+// pkgInitChain takes the amount as an argument, so a caller that reads the field back and
+// passes it through carries 0,27 (parsed as kg from a "…270g" title) into a product counted
+// in `st`, where it means 0,27 STYCK. Nothing catches that server-side; what catches it is
+// pkgFieldsChanged setting step="1" for a count, after which the browser refuses to submit
+// with "the two nearest valid values are 0 and 1" — v0.53.3's exact shape, a correct rule
+// delivered as an unreadable message that reads as an arbitrary GUI lock. And it sits on the
+// normal path for a one-size product (title says 270 g, the product compares per styck).
+//
+// The LABEL survives when the operator wrote it: "270 g" describes the package truthfully
+// whatever unit the product is compared in, and package_size is free text that never enters
+// arithmetic. An auto-suggested label goes with the amount that generated it. labelDirty is
+// carried across rather than re-derived, so an auto-label does not latch by surviving.
+//
+// A no-op when the canonical unit is unchanged — that also keeps an unrelated re-render from
+// snapping the operator's entry-unit choice (g, ml) back to the canonical first button.
+function pkgRekeyUnit(prefix, productUnit) {
+    const chain = pkgChain(prefix);
+    const spec = PKG_UNITS[chain.entryUnit];
+    const current = spec ? spec.canonical : chain.entryUnit;
+    if (current === (productUnit || '')) return;
+    const wasDirty = chain.labelDirty;
+    const label = wasDirty ? document.getElementById(prefix + '-pkg-label').value : '';
+    pkgInitChain(prefix, productUnit, '', label);
+    chain.labelDirty = wasDirty;
+}
+
 // The amount normalized into the product's canonical unit. Empty stays NULL — a link is
 // saveable before its pack size is known (D-02). The server re-validates (> 0) regardless;
 // this arithmetic is a convenience, never a source of truth.
@@ -4341,21 +4370,17 @@ function qaExistingUnit(id) {
 // entered in the unit of the product it will belong to.
 function qaProductChoiceChanged() {
     const id = document.getElementById('qa-product-select').value;
-    const amount = document.getElementById('qa-pkg-amount').value;
-    const label = document.getElementById('qa-pkg-label').value;
     if (id) {
         document.getElementById('qa-new-product-fields').style.display = 'none';
-        pkgInitChain('qa', qaExistingUnit(id) || '', amount, label);
+        pkgRekeyUnit('qa', qaExistingUnit(id) || '');
     } else {
         document.getElementById('qa-new-product-fields').style.display = '';
-        pkgInitChain('qa', document.getElementById('qa-unit').value, amount, label);
+        pkgRekeyUnit('qa', document.getElementById('qa-unit').value);
     }
 }
 
 function qaUnitChanged() {
-    pkgInitChain('qa', document.getElementById('qa-unit').value,
-        document.getElementById('qa-pkg-amount').value,
-        document.getElementById('qa-pkg-label').value);
+    pkgRekeyUnit('qa', document.getElementById('qa-unit').value);
 }
 
 async function handleQuickAddConfirm(e) {
