@@ -201,6 +201,12 @@ async def unit_price_mismatches(session: AsyncSession) -> list[dict[str, Any]]:
                 "store_name": link_store_name(link, store),
                 "package_size": link.package_size,
                 "unit": unit,
+                # The measure the PRINTED figure is in — None when no extractor recorded
+                # one, which is most of them. A reported row has it either equal to `unit`
+                # or unknown (a positively different measure is vetoed above), and the UI
+                # must be able to tell those apart: labelling an unknown measure with the
+                # product's unit is how "97,78 kr/kg" came to be drawn as "97,78 kr/st".
+                "printed_unit": measure,
                 "printed_unit_price_sek": float(printed.quantize(Decimal("0.01"))),
                 "computed_unit_price_sek": float(best.quantize(Decimal("0.01"))),
                 "deviation_pct": float((deviation / printed * 100).quantize(Decimal("0.1"))),

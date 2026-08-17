@@ -3455,7 +3455,7 @@ function buildSilentErrors(counts, q) {
                 </div>
                 <div class="issue-right">
                     <div class="mismatch-nums">
-                        <div>butiken skriver <b>${escapeHtml(unitKr(m.printed_unit_price_sek, m.unit))}</b></div>
+                        <div>butiken skriver <b>${escapeHtml(storeSaysKr(m.printed_unit_price_sek, m.printed_unit))}</b></div>
                         <div>vi räknar <b>${escapeHtml(unitKr(m.computed_unit_price_sek, m.unit))}</b></div>
                     </div>
                     <div class="deviation">${escapeHtml(formatMargin(m.deviation_pct))}</div>

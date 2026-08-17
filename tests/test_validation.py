@@ -273,6 +273,57 @@ class TestUnitPriceMismatches:
 
         assert len(rows) == 1
         assert rows[0]["package_size"] == "450 g"
+        assert rows[0]["printed_unit"] == "kg"
+
+    @pytest.mark.asyncio
+    async def test_a_row_says_when_it_does_not_know_the_printed_measure(self, db_session) -> None:
+        """`printed_unit` is None when nothing recorded one — and that must reach the UI.
+
+        A reported row's measure is either equal to the product's unit or UNKNOWN (a
+        positively different one is vetoed), and the two are not interchangeable on
+        screen: Fel & luckor drew the printed figure with the PRODUCT's unit, so a Willys
+        kr/kg jämförpris on a kit compared per styck was rendered "97,78 kr/st" — the
+        wrong measure stated with confidence, in the row whose whole claim is that the
+        two numbers disagree.
+        """
+        willys = await _store(db_session, "willys")
+        product = await _product(db_session, "Middagskit", unit="st")
+        link = await _link(db_session, product, willys, "1", package_size="1 st")
+        db_session.add(
+            _point(link, "26.40", "97.78", raw_data={"source": "willys_api"}),
+        )
+        await db_session.flush()
+
+        rows = await unit_price_mismatches(db_session)
+
+        assert len(rows) == 1
+        assert rows[0]["unit"] == "st"
+        assert rows[0]["printed_unit"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_willys_point_that_records_its_measure_is_vetoed(self, db_session) -> None:
+        """The other half of the same prod bug: the measure was AVAILABLE and unread.
+
+        Same numbers as the row above — Lasagnette Dinnerkit, printed 97.78 kr/kg against
+        26.40 kr/st computed. Willys publishes "kg" in `comparePriceUnit`, a field the
+        extractor ignored while parsing the unit out of `comparePrice`, which never carries
+        one. With the measure recorded the row is not a finding at all: two correct numbers
+        in two different measures.
+        """
+        willys = await _store(db_session, "willys")
+        product = await _product(db_session, "Middagskit", unit="st")
+        link = await _link(db_session, product, willys, "1", package_size="1 st")
+        db_session.add(
+            _point(
+                link,
+                "26.40",
+                "97.78",
+                raw_data={"source": "willys_api", "comparison_unit": "/kg"},
+            )
+        )
+        await db_session.flush()
+
+        assert await unit_price_mismatches(db_session) == []
 
     @pytest.mark.asyncio
     async def test_unrecognised_measure_code_still_judges(self, db_session) -> None:

@@ -744,3 +744,21 @@ def test_the_stores_printed_jfr_pris_is_never_labelled_with_the_products_unit() 
         "the store-says cell uses unitKr(), which labels with the PRODUCT's comparison unit "
         "— that states the wrong measure for every store printing in another one."
     )
+
+    # The SECOND place a store's printed figure is drawn, and the one that shipped the bug
+    # in prod: Fel & luckor's mismatch row. The first version of this gate covered only the
+    # links panel and this row was left labelling with m.unit — it drew a Willys kr/kg as
+    # "97,78 kr/st" on the very page whose job is to name what is wrong. Both halves or
+    # neither: a rule that holds in one of two renderings of one number is not a rule.
+    mismatch = re.search(r"butiken skriver <b>\$\{([^}]*(?:\}[^}]*)*?)\}</b>", js)
+    assert mismatch is not None, "the mismatch row's printed figure is gone — has it moved?"
+    assert "storeSaysKr(" in mismatch.group(1), (
+        "Fel & luckor's 'butiken skriver' no longer renders through storeSaysKr. It must "
+        "use the row's own printed_unit, which is None when nothing recorded a measure — "
+        "labelling that with the product's unit is the bug this row exists to report."
+    )
+    assert "m.unit" not in mismatch.group(1), (
+        "Fel & luckor's 'butiken skriver' labels the STORE's figure with the PRODUCT's "
+        "unit (m.unit). Use m.printed_unit — the two are only equal when a measure was "
+        "actually recorded, which is the minority of rows."
+    )
