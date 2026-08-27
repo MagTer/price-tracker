@@ -179,7 +179,7 @@ class TestPriceNotifier:
 
         # Should have basic structure — and say honestly that there is nothing to buy.
         assert "<!DOCTYPE html>" in html
-        assert "Veckans inköpslista" in html
+        assert "Inköpslista" in html
         assert "Inga köpvärda erbjudanden" in html
         assert "Dina bevakade produkter" not in html
 
@@ -621,8 +621,9 @@ class TestPriceNotifier:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_send_weekly_summary_success(self) -> None:
-        """Test send_weekly_summary with successful send."""
+    async def test_send_buy_list_success(self) -> None:
+        """The subject NAMES the day: there are two of these a week since v0.59.0, and two
+        mails sharing one subject read as a duplicate in the inbox."""
         mock_service = MockEmailService(should_succeed=True)
         notifier = PriceNotifier(email_service=mock_service)
 
@@ -631,10 +632,12 @@ class TestPriceNotifier:
             {"name": "Smor", "lowest_price": Decimal("29.90"), "store_name": "Coop"}
         ]
 
-        result = await notifier.send_weekly_summary(
+        monday = datetime(2026, 2, 16, 11, 0, 0)  # 12:00 Europe/Stockholm
+        result = await notifier.send_buy_list(
             to_email="user@example.com",
             deals=deals,
             watched_products=watched,
+            now=monday,
         )
 
         assert result is True
@@ -642,7 +645,7 @@ class TestPriceNotifier:
 
         sent_msg = mock_service.sent_messages[0]
         assert sent_msg.to == ["user@example.com"]
-        assert "Veckans inköpslista" in sent_msg.subject
+        assert sent_msg.subject == "Inköpslista måndag – Prisspaning"
         assert "Mjolk" in sent_msg.html_body
         assert "Smor" in sent_msg.html_body
 

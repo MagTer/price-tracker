@@ -104,7 +104,7 @@ async def find_deals(store_type: str | None = None) -> str:
     Every row carries the VERDICT (is this the cheapest way to buy the product per
     unit, against its other tracked links) and the TIMING (is this a good moment,
     against the product's own cheapest observed kr/unit) — the same two judgements
-    the portal's buy list and the weekly email are built on. The store's discount
+    the portal's buy list and the buy-list email are built on. The store's discount
     percentage ranks nothing.
 
     Args:

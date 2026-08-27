@@ -122,9 +122,10 @@ class _ProductSeries:
     def __init__(self) -> None:
         self._current: dict[Any, Decimal] = {}
         # When each link's carried value was OBSERVED. Carry-forward is the right model —
-        # a shelf keeps its price until we look again — but with weekly checks the price we
-        # judge a campaign against can be six days old, and a row that says "Willys låg 8 %
-        # under" without saying when it was last seen claims a precision we do not have.
+        # a shelf keeps its price until we look again — but a link is checked twice a week at
+        # best, so the price we judge a campaign against can be days old, and a row that
+        # says "Willys låg 8 % under" without saying when it was last seen claims a
+        # precision we do not have.
         self._seen_at: dict[Any, datetime | None] = {}
         self.baseline: Decimal | None = None  # value entering the period (carried forward)
         self.first: Decimal | None = None
@@ -501,7 +502,7 @@ class OfferOccasion:
     offer_details: str | None
     discount_percent: float | None
     # The cheapest OTHER link as it stood at that moment, carried forward from its last
-    # observation — with that observation's date, because with weekly checks it can be six
+    # observation — with that observation's date, because at two checks a week it can be
     # days old and the row must not imply we looked the same morning.
     alternative_unit_price_sek: float | None
     alternative_store: str | None

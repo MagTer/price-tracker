@@ -142,14 +142,15 @@ class PriceNotifier:
         result = await self._email_service.send(message)
         return result.success
 
-    async def send_weekly_summary(
+    async def send_buy_list(
         self,
         to_email: str,
         deals: list[DealRow],
         watched_products: list[dict[str, str | Decimal | None]],
         data_quality: dict[str, Any] | None = None,
+        now: datetime | None = None,
     ) -> bool:
-        """Send the weekly buy-list email.
+        """Send THE buy-list email — one per check day, not one per week (v0.59.0).
 
         `deals` is the pre-filtered buy list (BEST + UNKNOWN, and not a POOR moment, both
         from domain/deals.py) —
@@ -157,11 +158,20 @@ class PriceNotifier:
         presentation, not judgement. `data_quality` is domain/validation.py's judgement,
         rendered only when something is wrong — a green validator earns no inbox space.
 
+        The subject NAMES the day it was sent, because there is more than one now: two
+        mails a week sharing one subject read as a duplicate in the inbox, and the day is
+        also the reader's shortcut to how fresh the list is.
+
         Returns:
             True if email was sent successfully.
         """
-        subject = "Veckans inköpslista – Prisspaning"
-        html_body = self._build_summary_html(deals, watched_products, data_quality=data_quality)
+        if now is None:
+            now = datetime.now(UTC).replace(tzinfo=None)
+        weekday = _SWEDISH_WEEKDAYS[now.replace(tzinfo=UTC).astimezone(STORE_TIMEZONE).weekday()]
+        subject = f"Inköpslista {weekday} – Prisspaning"
+        html_body = self._build_summary_html(
+            deals, watched_products, now=now, data_quality=data_quality
+        )
 
         message = EmailMessage(
             to=[to_email],
@@ -356,7 +366,7 @@ class PriceNotifier:
         verdict_cell = span_cell
         if verdict:
             verdict_cell += f'<div style="margin-top: 5px;">{verdict}</div>'
-        # The MOMENT, when it is a poor one. The scheduler filters these out of the weekly
+        # The MOMENT, when it is a poor one. The scheduler filters these out of the
         # buy list, so this is the same defensive honesty the WORSE wording gets: a caller
         # that does not filter must not have the row read as an unqualified recommendation.
         if deal.timing == TIMING_POOR and deal.seen_cheaper_pct is not None:
@@ -494,7 +504,7 @@ class PriceNotifier:
         if deal.verdict == DEAL_BEST:
             return ""
         if deal.verdict == DEAL_WORSE:
-            # The scheduler filters WORSE out of the weekly email, but _ranked_store_groups
+            # The scheduler filters WORSE out of the buy-list email, but _ranked_store_groups
             # keeps them defensively for any caller that does not — and that caller must
             # get the honest sentence, not the UNKNOWN wording for a row that IS comparable.
             margin = abs(deal.savings_per_unit_sek or 0.0)
@@ -516,7 +526,7 @@ class PriceNotifier:
         now: datetime | None = None,
         data_quality: dict[str, Any] | None = None,
     ) -> str:
-        """Build HTML for the weekly buy-list email — one section per butik."""
+        """Build HTML for the buy-list email — one section per butik."""
         if now is None:
             now = datetime.now(UTC).replace(tzinfo=None)
 
@@ -537,7 +547,7 @@ class PriceNotifier:
                 <tbody>{rows}</tbody>
             </table>"""
         else:
-            deals_html = "<p>Inga köpvärda erbjudanden den här veckan.</p>"
+            deals_html = "<p>Inga köpvärda erbjudanden just nu.</p>"
 
         # Build watched products section
         watched_html = ""
@@ -623,8 +633,8 @@ class PriceNotifier:
         <head><meta charset="UTF-8"></head>
         <body style="font-family: Arial, sans-serif; max-width: 600px;
                      margin: 0 auto; padding: 20px;">
-            <h2 style="color: #1e3a5f;">Veckans inköpslista</h2>
-            <p>Det här är värt att köpa den här veckan — ett avsnitt per butik.
+            <h2 style="color: #1e3a5f;">Inköpslista</h2>
+            <p>Det här är värt att köpa nu — ett avsnitt per butik.
                Stapeln visar var priset ligger mellan det lägsta och det högsta
                jämförpriset produkten noterats till de senaste {_SPAN_WEEKS} veckorna.</p>
             {deals_html}

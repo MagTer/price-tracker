@@ -21,6 +21,13 @@ v0.33.0 behaviour) silently meant 08–14 Swedish summer time (07–13 winter), 
 hour at every DST change, and judged "which weekday is it" by a clock whose Monday
 starts at 02:00 Swedish summer time — wrong night for any window near midnight.
 
+The buy-list email's days are DERIVED from the same columns (``summary_weekdays`` +
+``summary_slot``, v0.59.0): the mail goes out on the days something is actually checked,
+at the end of that day's förmiddag window. It used to be hardcoded to Monday while stores
+checked on cadences of their own, which is how a Rusta campaign that ended on the Sunday
+reached the Monday inbox — the email was making a freshness claim only ICA and Willys
+could keep.
+
 Scheduler and admin API must BOTH compute next-check through this module — the admin
 endpoint's former private copy of the weekday arithmetic is exactly the Gotcha-4 drift
 pattern this file exists to prevent. Never write a second definition.
@@ -30,6 +37,7 @@ from __future__ import annotations
 
 import random
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
@@ -46,6 +54,10 @@ MORNING_START_HOUR = 6
 MORNING_END_HOUR = 12
 
 STORE_TIMEZONE = ZoneInfo("Europe/Stockholm")
+
+# Used only when NO active link runs on a weekday (an all-interval instance): the buy
+# list still has to arrive, and Monday is the day it always arrived on.
+SUMMARY_FALLBACK_WEEKDAYS: list[int] = [0]
 
 
 def _local(naive_utc: datetime) -> datetime:
@@ -125,20 +137,76 @@ def next_check_time(
     return target
 
 
-def weekly_summary_slot(now: datetime) -> date | None:
-    """The local Monday date a weekly summary is due for, from naive-UTC ``now`` — else None.
+def local_date(now: datetime) -> date:
+    """The Swedish civil date of a naive-UTC instant — the summary's own dedup key.
 
-    Due from the END of the förmiddag window on Mondays, Swedish wall-clock: both weekly
-    chains (ICA, Willys) check Monday mornings, so 12:00 local is the first moment "veckans
-    priser" are actually in. The date returned is the LOCAL Monday — the sender's dedup key —
-    because a UTC date flips at 01:00/02:00 Swedish, the same off-by-a-day the v0.33.0
-    civil-time move fixed for the check window. (The old rule was "Monday 14:00" applied
-    directly on naive UTC: 15/16 Swedish depending on DST, drifting an hour twice a year.)
+    A UTC date flips at 01:00/02:00 Swedish, so anything that reasons about "which day is
+    it" for a Swedish reader has to ask this, not ``now.date()``.
+    """
+    return _local(now).date()
+
+
+def summary_slot(now: datetime, weekdays: Sequence[int]) -> date | None:
+    """The local date a buy-list summary is due for, from naive-UTC ``now`` — else None.
+
+    Due from the END of the förmiddag window (12:00 Swedish) on each day something is
+    checked: that is the first moment the day's checks are actually in. ``weekdays`` comes
+    from :func:`summary_weekdays` and is THE link between the two — before v0.59.0 this
+    function hardcoded Monday while the stores checked on schedules of their own, so an
+    interval-mode store's row in the Monday email could be two days old (measured: 36 % of
+    interval-link Mondays over 48 h). A dead Rusta rea shipped that way on 2026-08-24.
+
+    The date returned is the LOCAL one — the sender's dedup key — because a UTC date flips
+    at 01:00/02:00 Swedish, the same off-by-a-day the v0.33.0 civil-time move fixed for the
+    check window. (The rule before that was "Monday 14:00" applied directly on naive UTC:
+    15/16 Swedish depending on DST, drifting an hour twice a year.)
     """
     local_now = _local(now)
-    if local_now.weekday() != 0 or local_now.hour < MORNING_END_HOUR:
+    if local_now.weekday() not in set(weekdays) or local_now.hour < MORNING_END_HOUR:
         return None
     return local_now.date()
+
+
+async def summary_weekdays(session: AsyncSession) -> list[int]:
+    """THE days the buy-list email goes out: the days some link is actually checked.
+
+    Derived, never configured, and that is the point. The email's implicit claim is "this
+    is what the shelves said this morning"; the only thing that can make it true is the
+    check schedule, so the mail's rhythm is READ off the schedule rather than assumed
+    beside it. Configuring it separately is what produced the bug this function exists to
+    close — a Monday-only email over stores that checked on their own drifting cadence.
+
+    The union runs over every ACTIVE link's effective schedule (link override, else store
+    default), so a link tightened by hand earns its own mail day, and a store with no links
+    contributes nothing. Interval-mode links contribute nothing either: they have no
+    weekday, which is exactly why they were the ones arriving stale.
+
+    An empty union means nothing anywhere runs on a weekday — an all-interval instance.
+    That falls back to Monday rather than to silence: a tracker that never mails is a worse
+    answer than one that mails on the traditional day.
+    """
+    from sqlalchemy import select
+
+    from domain.models import ProductStore, Store
+
+    result = await session.execute(
+        select(
+            ProductStore.check_weekdays,
+            ProductStore.check_frequency_hours,
+            Store.check_weekdays,
+            Store.check_frequency_hours,
+        )
+        .join(Store, ProductStore.store_id == Store.id)
+        .where(ProductStore.is_active.is_(True))
+    )
+    days: set[int] = set()
+    for link_days, link_frequency, store_days, store_frequency in result.all():
+        weekdays, _ = effective_schedule(
+            _ScheduleRow(link_days, link_frequency),
+            _ScheduleRow(store_days, store_frequency),
+        )
+        days.update(weekdays)
+    return sorted(days) or list(SUMMARY_FALLBACK_WEEKDAYS)
 
 
 def next_morning_retry(now: datetime) -> datetime:
@@ -179,10 +247,11 @@ def _at_morning(local_day: datetime, slot: tuple[int, int] | None = None) -> dat
     ) + timedelta(seconds=int(offset))
 
 
-# Carries one sibling row of the store through effective_schedule without loading the ORM
-# entity — weekday_slot reads three columns off up to ~60 rows, nothing more.
+# Carries one row of schedule columns through effective_schedule without loading the ORM
+# entity — weekday_slot and summary_weekdays both read two or four columns off up to a
+# hundred rows, nothing more.
 @dataclass
-class _SiblingSchedule:
+class _ScheduleRow:
     check_weekdays: list[int] | None
     check_frequency_hours: int | None
 
@@ -220,7 +289,7 @@ async def weekday_slot(
         row_id
         for row_id, link_weekdays, link_frequency in result.all()
         if target_weekday
-        in effective_schedule(_SiblingSchedule(link_weekdays, link_frequency), store)[0]
+        in effective_schedule(_ScheduleRow(link_weekdays, link_frequency), store)[0]
     ]
     siblings.sort(key=str)
     if link_id not in siblings:

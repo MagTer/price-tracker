@@ -278,7 +278,7 @@ class DealResponse(BaseModel):
     savings_per_unit_sek: float | None
     # THE second judgement, in TIME rather than in space ("good" / "poor" / "unknown"):
     # how this price stands against the product's own cheapest OBSERVED kr/unit. A campaign
-    # can be the cheapest shelf today and still a poor moment — the portal and the weekly
+    # can be the cheapest shelf today and still a poor moment — the portal and the buy-list
     # email demote "poor" out of the buy list, and say by how much and where it was seen.
     timing: str
     seen_cheaper_pct: float | None
@@ -291,7 +291,7 @@ class DealResponse(BaseModel):
     # What the store said about the shelf on this latest point. Marked, never hidden.
     in_stock: bool
     # True when the floor was set by a hand-recorded price (a one-off förbokning): the
-    # weekly email keeps such "poor" rows — a price no shelf carries again must not
+    # buy-list email keeps such "poor" rows — a price no shelf carries again must not
     # silence twelve weeks of genuine campaigns.
     floor_is_manual: bool
 

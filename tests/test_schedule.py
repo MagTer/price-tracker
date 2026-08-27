@@ -10,21 +10,28 @@ import random
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import select
 
+from domain.models import Product, ProductStore, Store
 from domain.schedule import (
     MORNING_END_HOUR,
     MORNING_START_HOUR,
     STORE_TIMEZONE,
+    SUMMARY_FALLBACK_WEEKDAYS,
     effective_schedule,
     is_inherited,
+    local_date,
     next_check_time,
     next_morning_retry,
+    summary_slot,
+    summary_weekdays,
     weekday_slot,
-    weekly_summary_slot,
 )
+from domain.tenant import DEFAULT_TENANT_ID
 
 
 @dataclass
@@ -343,41 +350,125 @@ class TestSwedishWallClock:
         assert in_morning_window(nxt)
 
 
-class TestWeeklySummarySlot:
-    """The weekly summary is due Monday from the END of the förmiddag window, Swedish
-    wall-clock — the first moment the week's Monday checks (ICA and Willys both) are in.
-    The old rule was "Monday 14:00" applied on naive UTC: 15/16 Swedish depending on DST."""
+class TestSummarySlot:
+    """The buy-list summary is due from the END of the förmiddag window, Swedish
+    wall-clock, on each day something is checked — the first moment that morning's checks
+    are in. Monday was hardcoded until v0.59.0 while the stores checked on cadences of
+    their own; the days now come from summary_weekdays. The rule before v0.33.0 was
+    "Monday 14:00" applied on naive UTC: 15/16 Swedish depending on DST."""
+
+    DAYS = [0, 4]  # mån + fre, what every store runs since v0.59.0
 
     def test_due_from_noon_swedish_winter(self):
         # Winter (CET, UTC+1): 11:00 UTC == 12:00 local.
         monday = datetime(2026, 2, 16, 11, 0, 0)
         assert monday.weekday() == 0
-        assert weekly_summary_slot(monday) == monday.date()
+        assert summary_slot(monday, self.DAYS) == monday.date()
 
     def test_not_due_before_noon_swedish_winter(self):
-        assert weekly_summary_slot(datetime(2026, 2, 16, 10, 59, 0)) is None
+        assert summary_slot(datetime(2026, 2, 16, 10, 59, 0), self.DAYS) is None
 
     def test_due_from_noon_swedish_summer(self):
         # Summer (CEST, UTC+2): 10:00 UTC == 12:00 local — an hour EARLIER in UTC.
-        assert weekly_summary_slot(datetime(2026, 7, 27, 10, 0, 0)) == datetime(2026, 7, 27).date()
+        assert summary_slot(datetime(2026, 7, 27, 10, 0, 0), self.DAYS) == (
+            datetime(2026, 7, 27).date()
+        )
 
     def test_not_due_before_noon_swedish_summer(self):
-        assert weekly_summary_slot(datetime(2026, 7, 27, 9, 59, 0)) is None
+        assert summary_slot(datetime(2026, 7, 27, 9, 59, 0), self.DAYS) is None
 
-    def test_not_due_on_other_weekdays(self):
+    def test_due_on_a_second_check_day(self):
+        """THE change: Friday is a mail day because Friday is a check day. Under the old
+        Monday-only rule this list went out three days after Rusta's rea had been seen."""
+        friday = datetime(2026, 2, 20, 11, 0, 0)  # 12:00 local
+        assert friday.weekday() == 4
+        assert summary_slot(friday, self.DAYS) == friday.date()
+
+    def test_not_due_on_a_day_nothing_is_checked(self):
         tuesday = datetime(2026, 2, 17, 15, 0, 0)
         assert tuesday.weekday() == 1
-        assert weekly_summary_slot(tuesday) is None
+        assert summary_slot(tuesday, self.DAYS) is None
+
+    def test_a_monday_only_schedule_still_mails_only_on_mondays(self):
+        """The days follow the schedule in BOTH directions — narrowing it narrows the mail."""
+        friday = datetime(2026, 2, 20, 11, 0, 0)
+        assert summary_slot(friday, [0]) is None
 
     def test_swedish_monday_night_is_not_utc_monday(self):
         """Monday 23:30 UTC is Tuesday 00:30 in Sweden — no longer Monday, no summary.
         The weekday is judged by the SWEDISH clock, same rule as the check window."""
         monday_2330_utc = datetime(2026, 2, 16, 23, 30, 0)
         assert monday_2330_utc.weekday() == 0  # UTC still says Monday...
-        assert weekly_summary_slot(monday_2330_utc) is None  # ...Sweden says Tuesday
+        assert summary_slot(monday_2330_utc, self.DAYS) is None  # ...Sweden says Tuesday
 
-    def test_slot_is_the_local_monday_date(self):
+    def test_slot_is_the_local_date(self):
         """Late Monday evening local: the slot is that Monday — the sender's dedup key
         must not flip at a UTC midnight that is 01:00/02:00 Swedish."""
         monday_evening = datetime(2026, 2, 16, 22, 0, 0)  # 23:00 local, still Monday
-        assert weekly_summary_slot(monday_evening) == datetime(2026, 2, 16).date()
+        assert summary_slot(monday_evening, self.DAYS) == datetime(2026, 2, 16).date()
+        assert local_date(monday_evening) == datetime(2026, 2, 16).date()
+
+    def test_local_date_rolls_over_before_utc_does(self):
+        """22:30 UTC on a summer Monday is 00:30 Tuesday in Sweden."""
+        assert local_date(datetime(2026, 7, 27, 22, 30, 0)) == datetime(2026, 7, 28).date()
+
+
+@pytest.mark.integration
+class TestSummaryWeekdays:
+    """Real Postgres: the mail's days come off the SCHEDULE, and the migrated stores are
+    the schedule. This is the pairing the whole v0.59.0 change rests on — if 0013 and this
+    derivation ever disagree, the mail goes out on a day nothing was checked, which is the
+    bug it replaced wearing different clothes."""
+
+    async def _link(self, session, slug: str = "rusta", **kwargs) -> ProductStore:
+        store = (await session.execute(select(Store).where(Store.slug == slug))).scalar_one()
+        product = Product(
+            tenant_id=DEFAULT_TENANT_ID, name="Badhandduk", brand=None, category=None, unit="st"
+        )
+        session.add(product)
+        await session.flush()
+        link = ProductStore(
+            product_id=product.id,
+            store_id=store.id,
+            store_url=f"https://www.rusta.com/{uuid.uuid4()}",
+            package_quantity=Decimal("1"),
+            **kwargs,
+        )
+        session.add(link)
+        await session.flush()
+        return link
+
+    @pytest.mark.asyncio
+    async def test_an_inherited_link_gives_its_store_days(self, db_session) -> None:
+        """Every store runs mån+fre since alembic 0013 — including Rusta, which ran in
+        interval mode and whose Saturday-observed rea reached the Monday mail."""
+        await self._link(db_session)
+        assert await summary_weekdays(db_session) == [0, 4]
+
+    @pytest.mark.asyncio
+    async def test_a_link_override_earns_its_own_mail_day(self, db_session) -> None:
+        """The override is WHOLESALE per link (effective_schedule), so an overridden link
+        contributes only ITS day — and the union is over all active links, so an inherited
+        sibling still brings the store's."""
+        await self._link(db_session, check_weekdays=[2])
+        assert await summary_weekdays(db_session) == [2]
+
+        await self._link(db_session)
+        assert await summary_weekdays(db_session) == [0, 2, 4]
+
+    @pytest.mark.asyncio
+    async def test_an_interval_link_contributes_no_day(self, db_session) -> None:
+        """A link overridden to interval mode has no weekday — which is exactly why those
+        links were the ones arriving stale. It must not invent one."""
+        await self._link(db_session, check_weekdays=[], check_frequency_hours=48)
+        assert await summary_weekdays(db_session) == [0]
+
+    @pytest.mark.asyncio
+    async def test_an_inactive_link_is_not_a_check_day(self, db_session) -> None:
+        await self._link(db_session, check_weekdays=[2], is_active=False)
+        assert await summary_weekdays(db_session) == [0]
+
+    @pytest.mark.asyncio
+    async def test_no_links_at_all_falls_back_to_monday(self, db_session) -> None:
+        """Silence is the one answer a buy-list mailer may not give."""
+        assert await summary_weekdays(db_session) == SUMMARY_FALLBACK_WEEKDAYS

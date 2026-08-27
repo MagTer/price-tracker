@@ -3071,7 +3071,7 @@ async def get_statistics(
     try:
         payload = await build_statistics(session, weeks=weeks if weeks > 0 else None)
         # Composed here rather than inside build_statistics: the validator is its own
-        # domain judgement (domain/validation.py — THE definition, weekly email reads
+        # domain judgement (domain/validation.py — THE definition, the buy-list email reads
         # the same one), and it ignores the period filter on purpose — data quality is
         # about NOW, not about a window.
         payload["data_quality"] = await data_quality(session)

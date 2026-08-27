@@ -535,7 +535,7 @@ class PriceTrackerService:
                         "product_name": row.product_name,
                         "product_store_id": str(row.product_store_id),
                         "store_name": row.store_name,
-                        # For the weekly email: link straight to the store's page and
+                        # For the buy-list email: link straight to the store's page and
                         # label the jfr-pris with the product's unit.
                         "store_url": row.store_url,
                         "unit": row.unit,

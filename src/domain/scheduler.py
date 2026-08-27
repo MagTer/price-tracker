@@ -33,17 +33,20 @@ from domain.protocols import (
 )
 from domain.result import extraction_source
 from domain.schedule import (
+    SUMMARY_FALLBACK_WEEKDAYS,
     effective_schedule,
+    local_date,
     next_check_time_for_link,
     next_morning_retry,
-    weekly_summary_slot,
+    summary_slot,
+    summary_weekdays,
 )
 from domain.service import PriceCheckOutcome, perform_price_check
 from domain.validation import data_quality
 
 logger = logging.getLogger(__name__)
 
-# The weekly summary recipient. Decoupled from the watches on purpose (v0.41.0): the
+# The buy-list summary recipient. Decoupled from the watches on purpose (v0.41.0): the
 # buy-list email is the tracker's primary output, and deriving recipients from watch rows
 # meant "no watches → no email" — the digest existed only as a side effect of the alarm
 # feature. Falls back to the admin identity the app already knows (note: that is the
@@ -106,6 +109,12 @@ class PriceCheckScheduler:
         # into a store's WAF. See pause_for / _check_due_products.
         self._paused_until: datetime | None = None
         self._last_summary_date: date | None = None
+        # The days the buy-list email goes out, read off the check schedule once per local
+        # day (domain/schedule.summary_weekdays). Cached because the gate runs every cycle
+        # and the answer changes only when a store or link schedule does — a query per
+        # five-minute tick would be telemetry-shaped waste, and a value held for the whole
+        # process would miss a schedule edit until restart.
+        self._summary_weekdays: tuple[date, list[int]] | None = None
         self._stats: dict[str, int] = {
             "checks_total": 0,
             "checks_success": 0,
@@ -161,9 +170,9 @@ class PriceCheckScheduler:
                 logger.error(f"Scheduler error: {e}", exc_info=True)
 
             try:
-                await self._check_weekly_summary()
+                await self._check_summary_due()
             except Exception as e:
-                logger.error(f"Weekly summary error: {e}", exc_info=True)
+                logger.error(f"Buy-list summary error: {e}", exc_info=True)
 
             await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
 
@@ -585,28 +594,33 @@ class PriceCheckScheduler:
                     watch.last_alerted_at = now
                     self._stats["alerts_sent"] += 1
 
-    async def _check_weekly_summary(self) -> None:
-        """Send THE weekly buy-list email once per Monday, after the förmiddag window.
+    async def _check_summary_due(self) -> None:
+        """Send THE buy-list email once per check day, after that day's förmiddag window.
 
-        Timing comes from domain/schedule.py (weekly_summary_slot): Monday from 12:00
-        Swedish wall-clock — the first moment the week's Monday checks (ICA and Willys
-        both) are in. The old rule was "Monday 14:00" applied on naive UTC, i.e. 15/16
-        Swedish depending on DST — the same silent drift v0.33.0 removed from the check
-        window.
+        Timing comes from domain/schedule.py: ``summary_weekdays`` reads the days something
+        is actually checked off the schedule itself, and ``summary_slot`` makes the mail due
+        from 12:00 Swedish on each of them — the first moment that morning's checks are in.
+
+        It was Monday-only until v0.59.0, while the stores checked on cadences of their own:
+        an interval-mode link's observation was over 48 h old on 36 % of the Mondays measured
+        (2026-08-27, five Mondays of prod data), and on 2026-08-24 four Rusta campaign rows
+        observed on the Saturday reached the inbox after the rea had ended. Deriving the
+        mail's days from the schedule is what keeps that claim honest; hardcoding them beside
+        it is what broke it.
         """
         if not self.notifier:
             return
 
         now = datetime.now(UTC).replace(tzinfo=None)
-        slot = weekly_summary_slot(now)
+        slot = summary_slot(now, await self._summary_weekdays_today(now))
         if slot is None:
             return
 
-        # Don't re-send for the same (local) Monday. This in-memory dedup is the ONLY
+        # Don't re-send for the same (local) day. This in-memory dedup is the ONLY
         # guard: the old "recent alert within 10h" restart heuristic silently
         # suppressed legitimate summaries (any Monday-morning alert killed that
-        # afternoon's summary). A rare duplicate after a Monday-afternoon
-        # restart is the accepted cost (locked decision).
+        # afternoon's summary). A rare duplicate after an afternoon restart is
+        # the accepted cost (locked decision).
         if self._last_summary_date == slot:
             return
 
@@ -614,13 +628,13 @@ class PriceCheckScheduler:
         # must arrive even when — especially when — no per-product alarm exists.
         if not SUMMARY_EMAIL:
             logger.warning(
-                "Weekly summary due but no recipient configured "
+                "Buy-list summary due but no recipient configured "
                 "(SUMMARY_EMAIL / ALLOWED_ENTRA_EMAIL) - skipping"
             )
             self._last_summary_date = slot
             return
 
-        logger.info("Sending weekly summary email")
+        logger.info("Sending buy-list summary email")
 
         async with self.session_factory() as session:
             # The buy list: BEST + UNKNOWN and a decent MOMENT — the same two filters as
@@ -657,39 +671,59 @@ class PriceCheckScheduler:
                 # Deliberately NOT stamped as sent: "nothing to send" at 12:00 is
                 # often a wall, not a fact — an ICA challenge on Monday morning
                 # defers every ICA link past noon, and stamping here would skip the
-                # week's buy list the moment those checks would have landed. Left
+                # day's buy list the moment those checks would have landed. Left
                 # unstamped, the 5-minute loop re-evaluates for the rest of the
-                # local Monday and sends as soon as there is something to say.
+                # local day and sends as soon as there is something to say.
                 logger.debug(
                     "No deals, watched products or quality issues yet - "
-                    "re-checking while Monday lasts"
+                    "re-checking while the day lasts"
                 )
                 return
 
             # The send reports failure as a return value, not an exception —
             # ResendEmailService.send never raises. Only a TRUE send stamps the dedup
             # date: a False left unstamped means the 5-minute loop retries for the
-            # rest of the local Monday, instead of counting a lost email as sent and
-            # standing down until next week.
+            # rest of the local day, instead of counting a lost email as sent and
+            # standing down until the next check day.
             sent = False
             try:
-                sent = await self.notifier.send_weekly_summary(
+                sent = await self.notifier.send_buy_list(
                     to_email=SUMMARY_EMAIL,
                     deals=deals,
                     watched_products=watched_products,
                     data_quality=quality,
+                    now=now,
                 )
             except Exception as e:
-                logger.error(f"Failed to send weekly summary to {SUMMARY_EMAIL}: {e}")
+                logger.error(f"Failed to send buy-list summary to {SUMMARY_EMAIL}: {e}")
 
         if sent:
             self._stats["summaries_sent"] += 1
-            logger.info(f"Sent weekly summary to {SUMMARY_EMAIL}")
+            logger.info(f"Sent buy-list summary to {SUMMARY_EMAIL}")
             self._last_summary_date = slot
         else:
             logger.warning(
-                f"Weekly summary to {SUMMARY_EMAIL} failed - retrying while Monday lasts"
+                f"Buy-list summary to {SUMMARY_EMAIL} failed - retrying while the day lasts"
             )
+
+    async def _summary_weekdays_today(self, now: datetime) -> list[int]:
+        """The mail's weekdays for the current local day, from the schedule, cached.
+
+        A read failure must not silence the buy list: it degrades to the fallback (Monday)
+        with the reason logged, rather than to an empty set — which would look exactly like
+        "no day qualifies" and stop the mail without anything saying so.
+        """
+        today = local_date(now)
+        if self._summary_weekdays is not None and self._summary_weekdays[0] == today:
+            return self._summary_weekdays[1]
+        try:
+            async with self.session_factory() as session:
+                weekdays = await summary_weekdays(session)
+        except Exception:
+            logger.exception("Could not read the summary weekdays - falling back to Monday")
+            return list(SUMMARY_FALLBACK_WEEKDAYS)
+        self._summary_weekdays = (today, weekdays)
+        return weekdays
 
     async def _watched_products_summary(
         self, session: AsyncSession

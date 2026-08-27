@@ -42,7 +42,7 @@ latest row, and a latest row without an offer is simply not a deal.
 
 Every consumer resolves through :func:`current_deals` — the /deals endpoint (the portal
 groups client-side on the ``verdict`` it returns), MCP's ``find_deals`` via
-``service.get_current_deals``, and the weekly summary email. Never write a second deal
+``service.get_current_deals``, and the buy-list email. Never write a second deal
 query or a second verdict.
 """
 
@@ -89,12 +89,21 @@ SEEN_CHEAPER_MIN_PCT = 10.0
 # moved on and the tracker would be arguing with a price no store still offers.
 PRICE_LOW_WINDOW_DAYS = 84  # 12 weeks — the longest statistics period short of a year
 
-# Most links are checked WEEKLY (Monday offer-day schedule) — a 24h window showed an
-# empty deals page from Tuesday on, twice (Gotcha 4: the duplicated query drifted).
+# Every link is checked Monday and Friday (v0.59.0), so the longest normal gap is the
+# 3 days from Friday to Monday. The window has to survive a MISSED check on top of that,
+# which is what 7 days buys: a 24h window showed an empty deals page from Tuesday on,
+# twice (Gotcha 4: the duplicated query drifted).
 DEALS_WINDOW_DAYS = 7
 
 # An offer seen this long ago may already be over — consumers caveat it ("sett fredag"),
 # never hide it. The portal's DEAL_STALE_HOURS in admin.html mirrors this value.
+#
+# Since v0.59.0 the flag means something sharper than "old": with every store on mån+fre
+# the observation behind a row is at most a few hours old when the mail goes out, so a row
+# over 48 h old is one whose check did NOT land — a failure or a wall, not the cadence. It
+# used to fire on roughly a third of the interval-mode rows in the Monday mail purely
+# because 72 h and 7 days are coprime, which made it noise on exactly the rows it should
+# have been trusted on.
 DEAL_STALE_HOURS = 48
 
 
@@ -151,7 +160,7 @@ class ObservedSpan:
 
     ``is_manual`` marks a floor set by a hand-recorded price (raw_data source "manual") —
     a förbokning that existed for one week and cannot be bought again. Consumers that DROP
-    poor rows (the weekly email) keep those instead: demoting a real campaign for twelve
+    poor rows (the buy-list email) keep those instead: demoting a real campaign for twelve
     weeks because of a price no shelf ever carried again is the opposite of a buy list.
     """
 
@@ -314,7 +323,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
             .where(alt_rn == 1)
             # Same is_active filter as the deal query itself: an inactive link's frozen
             # last price is not a shelf anyone can buy from, and letting it win as
-            # best_alt flips a genuine BEST to WORSE — which the weekly email then drops.
+            # best_alt flips a genuine BEST to WORSE — which the buy-list email then drops.
             .where(ProductStore.is_active.is_(True))
             .where(ProductStore.product_id.in_(product_ids))
         )

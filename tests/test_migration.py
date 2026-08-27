@@ -138,18 +138,24 @@ async def test_migration_seeded_the_stores(db_session: AsyncSession) -> None:
 
 
 async def test_migration_seeded_the_store_schedules(db_session: AsyncSession) -> None:
-    """0005: chain offer cycles live on the Store rows — ICA Mondays, Willys Mondays AND
-    Fridays, everyone else interval mode at the 72h default."""
+    """0013: EVERY store checks mån+fre. The schedule still lives on the Store rows (0005),
+    but the per-chain shape it seeded is gone — 0005 gave ICA Mondays, Willys Mondays and
+    Fridays and left the other nine in interval mode at 72h, which is what let an interval
+    store's observation be two days old in a Monday-only mail.
+
+    This is also the pairing the buy-list email rests on: schedule.summary_weekdays reads
+    these very columns to decide which days the mail goes out, so an ICA row that lost its
+    Friday here would silence Friday's mail without anything else changing."""
     rows = (
         await db_session.execute(
             select(Store.slug, Store.check_weekdays, Store.check_frequency_hours)
         )
     ).all()
     by_slug = {slug: (weekdays, freq) for slug, weekdays, freq in rows}
-    assert by_slug["ica"] == ([0], 72)
-    assert by_slug["willys"] == ([0, 4], 72)
-    for slug in ("apotea", "med24", "doz", "kronans", "apohem", "rusta", "clasohlson", "lyko"):
-        assert by_slug[slug] == (None, 72)
+    assert by_slug
+    for slug, (weekdays, frequency) in by_slug.items():
+        assert weekdays == [0, 4], slug
+        assert frequency == 72, slug
 
 
 def test_alembic_check_reports_no_drift(alembic_env) -> None:

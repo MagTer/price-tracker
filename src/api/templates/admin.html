@@ -79,7 +79,7 @@
             <div class="offline-pane" id="offline-pane-manual" hidden>
                 <p class="form-hint">Ett pris du sett men vi inte kan hämta. Rör inte
                     "Senast kollad" och räknas inte som en kontroll — men blir produktens
-                    lägstanotering om det är lägre, och kan hamna i måndagens köplista.</p>
+                    lägstanotering om det är lägre, och kan hamna i nästa köplista.</p>
                 <div id="manual-panel-fields"
                      onkeydown="if(event.key==='Enter'){event.preventDefault();saveManualPricePanel();}">
                     <div class="form-row">
@@ -445,7 +445,7 @@
                        placeholder="auto — t.ex. 24-pack, 500 ml" oninput="pkgLabelEdited('qa')">
             </div>
             <!-- NO schedule fields: the link inherits the STORE's check schedule
-                 (ICA måndagar, Willys mån+fre, apoteken var 72:e timme — all förmiddag).
+                 (mån + fre förmiddag for every store since v0.59.0 — alembic 0013).
                  The info line below says so; an override lives in the link-edit dialog. -->
             <div id="qa-price-info" class="best-link" style="padding-bottom:12px;"></div>
             <div class="form-actions">
@@ -2477,7 +2477,7 @@ async function loadProducts() {
 // percentage is the STORE's framing (30 % off a bad price is still a bad price); ours is the
 // cross-link kr/unit margin, and it is what the list is ranked on.
 //
-// THE judgement lives in domain/deals.py since v0.41.0 (the weekly email needs the same one)
+// THE judgement lives in domain/deals.py since v0.41.0 (the buy-list email needs the same one)
 // — /deals returns `verdict` and `savings_per_unit_sek`, and everything here READS that
 // answer. Do not re-derive the comparison: that is how the definitions drift apart.
 const DEAL_BEST = 'best';
@@ -2635,7 +2635,8 @@ function dealMetaHtml(d) {
     const parts = [];
     if (d.checked_at) parts.push('sett ' + (formatShortWhen(d.checked_at) || ''));
     // An offer seen days ago may already be over — the deals window is 7 days wide while
-    // most links are checked weekly. Say so; never hide the row.
+    // a link is checked twice a week (mån+fre), so anything older than 48 h means a
+    // check did not land. Say so; never hide the row.
     if (isDealStale(d)) parts.push('kan ha hunnit ta slut');
     // The store's own stock word — marked, never hidden, same rule as the stale caveat.
     if (d.in_stock === false) parts.push('butiken anger slut i lager');
