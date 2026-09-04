@@ -45,7 +45,7 @@ CONNECT_TIMEOUT_SECONDS = 3.0
 # Truncated between tests so ordering cannot matter. `stores` is deliberately absent — the five
 # stores are seeded BY the migration, and the tests use those seeds (which also proves the seed
 # survived the 0001 rewrite).
-_MUTABLE_TABLES = "price_points, watches, product_stores, products"
+_MUTABLE_TABLES = "price_points, watches, product_stores, products, summary_sends"
 
 # Matches src/infra/db.py's local-dev default.
 _LOCAL_DEV_URL = "postgresql+asyncpg://price_tracker:price_tracker@localhost:5432/price_tracker"

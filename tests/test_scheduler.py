@@ -6,8 +6,10 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from domain.deals import DealRow
+from domain.models import SummarySend
 from domain.result import PriceExtractionResult
 from domain.schedule import MORNING_END_HOUR, MORNING_START_HOUR, STORE_TIMEZONE
 from domain.scheduler import PriceCheckScheduler
@@ -102,6 +104,11 @@ def _make_scheduler(
     """
     # Session factory returns an async context manager
     mock_session = AsyncMock()
+    # No buy-list receipt yet (summary_sends). This default is load-bearing: a bare
+    # AsyncMock answers every `get` with a truthy mock, which the durable dedup added in
+    # v0.62.0 would read as "today's mail already went out" — and every summary test below
+    # would then pass while asserting nothing about a mail that was never composed.
+    mock_session.get = AsyncMock(return_value=None)
     session_cm = AsyncMock()
     session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     session_cm.__aexit__ = AsyncMock(return_value=None)
@@ -817,6 +824,9 @@ class TestWeeklySummary:
 
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=results)
+        # No summary_sends receipt for the day under test — see _make_scheduler: a bare
+        # AsyncMock would answer "already sent" and the mail would never be composed.
+        mock_session.get = AsyncMock(return_value=None)
 
         session_cm = AsyncMock()
         session_cm.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1872,3 +1882,120 @@ class TestDeferralSpread:
         gap = (times[1] - times[0]).total_seconds()
         delay = PriceCheckScheduler.RATE_LIMIT_DELAY
         assert delay <= gap <= delay + PriceCheckScheduler.RATE_LIMIT_JITTER
+
+
+class TestSummaryDedupSurvivesARestart:
+    """The buy list must not be re-sent because the process restarted (v0.62.0).
+
+    Reported from prod 2026-09-04: bumping the deploy to v0.61.0 produced a second buy-list
+    mail six seconds after the container started, hours after that morning's send. The
+    dedup was `self._last_summary_date` — in memory, so a restart forgot it, and on a check
+    day after 12:00 Swedish the loop found the mail due again. It was a deliberate
+    trade-off ("a rare duplicate after an afternoon restart is the accepted cost") whose
+    premise expired: v0.59.0 doubled the mail days to Monday AND Friday, and a deploy IS a
+    restart, so the duplicate now lands exactly when a release does.
+
+    These run against real Postgres because the receipt is a row: the whole point is what
+    survives the process, and a mocked session cannot answer that.
+    """
+
+    RECIPIENT = "magnus@example.com"
+    FRIDAY = datetime(2026, 2, 20, 11, 5, 0)  # 12:05 Europe/Stockholm (CET)
+
+    def _row(self) -> DealRow:
+        return DealRow(
+            product_id=uuid.uuid4(),
+            product_name="Lambi Toalettpapper",
+            product_store_id=uuid.uuid4(),
+            store_name="Willys",
+            store_slug="willys",
+            store_url="https://www.willys.se/produkt/x",
+            package_size="24-pack",
+            unit="st",
+            price_sek=159.90,
+            offer_price_sek=139.90,
+            unit_price_sek=5.83,
+            offer_type="kampanj",
+            offer_details=None,
+            checked_at=datetime(2026, 2, 20, 8, 0, 0),
+            discount_percent=12.5,
+            best_alt_unit_price_sek=7.07,
+            best_alt_store="ICA",
+            best_alt_package_size="8-pack",
+            verdict="best",
+            savings_per_unit_sek=1.24,
+        )
+
+    def _scheduler(self, session_factory) -> PriceCheckScheduler:
+        """A FRESH scheduler on the same database — exactly what a restart produces."""
+        return PriceCheckScheduler(
+            session_factory=session_factory,
+            fetcher=AsyncMock(),
+            email_service=MagicMock(),
+        )
+
+    async def _run(self, scheduler: PriceCheckScheduler, send: AsyncMock) -> None:
+        assert scheduler.notifier is not None
+        with (
+            patch("domain.scheduler.datetime") as mock_dt,
+            patch("domain.scheduler.summary_weekdays", AsyncMock(return_value=[0, 4])),
+            patch("domain.scheduler.SUMMARY_EMAIL", self.RECIPIENT),
+            patch("domain.scheduler.current_deals", AsyncMock(return_value=[self._row()])),
+            patch.object(scheduler.notifier, "send_buy_list", send),
+        ):
+            mock_dt.now.return_value = self.FRIDAY
+            await scheduler._check_summary_due()
+
+    @pytest.mark.asyncio
+    async def test_a_restart_does_not_re_send_the_same_days_buy_list(
+        self, session_factory, db_session
+    ) -> None:
+        first = AsyncMock(return_value=True)
+        await self._run(self._scheduler(session_factory), first)
+        first.assert_called_once()
+
+        # The restart: a new scheduler, empty memory, same database.
+        second = AsyncMock(return_value=True)
+        await self._run(self._scheduler(session_factory), second)
+        second.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_receipt_records_what_the_mail_carried(
+        self, session_factory, db_session
+    ) -> None:
+        """ "No row" must mean "not sent", and the row says what went out."""
+        await self._run(self._scheduler(session_factory), AsyncMock(return_value=True))
+
+        receipt = (await db_session.execute(select(SummarySend))).scalars().one()
+        assert receipt.sent_on == self.FRIDAY.date()
+        assert receipt.recipient == self.RECIPIENT
+        assert receipt.deals_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_send_writes_no_receipt_and_is_retried(
+        self, session_factory, db_session
+    ) -> None:
+        """A Resend outage must not stand down until the next check day.
+
+        ResendEmailService.send reports failure as a RETURN VALUE, so this is the case that
+        looks like success from the outside — and stamping it would lose the day's buy list.
+        """
+        await self._run(self._scheduler(session_factory), AsyncMock(return_value=False))
+        assert (await db_session.execute(select(SummarySend))).scalars().all() == []
+
+        retry = AsyncMock(return_value=True)
+        await self._run(self._scheduler(session_factory), retry)
+        retry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_receipt_sends_rather_than_going_quiet(self) -> None:
+        """The guard fails toward the DUPLICATE, deliberately.
+
+        A duplicate email is an annoyance; a missing buy list is the product not working,
+        and it would be silent. This is the opposite of how an auth guard degrades, and the
+        difference is the point: this is a nuisance-versus-silence decision, not a security
+        one.
+        """
+        scheduler, session_factory, _ = _make_scheduler(email_service=MagicMock())
+        session_factory.side_effect = RuntimeError("database gone")
+        assert await scheduler._summary_already_sent(self.FRIDAY.date()) is False

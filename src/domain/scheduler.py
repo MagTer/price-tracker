@@ -10,6 +10,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -18,6 +19,7 @@ from domain.models import (
     PriceWatch,
     ProductStore,
     Store,
+    SummarySend,
     latest_point_per_link,
     link_store_name,
 )
@@ -623,12 +625,19 @@ class PriceCheckScheduler:
         if slot is None:
             return
 
-        # Don't re-send for the same (local) day. This in-memory dedup is the ONLY
-        # guard: the old "recent alert within 10h" restart heuristic silently
-        # suppressed legitimate summaries (any Monday-morning alert killed that
-        # afternoon's summary). A rare duplicate after an afternoon restart is
-        # the accepted cost (locked decision).
+        # Don't re-send for the same (local) day. The in-memory date is only a fast path;
+        # the AUTHORITY is the summary_sends row, because memory does not survive a restart
+        # and a restart is exactly when this went wrong: until v0.62.0 the in-memory date
+        # was the only guard, so a deploy on a check day after 12:00 mailed the buy list a
+        # second time (prod 2026-09-04, six seconds after the v0.61.0 container started).
+        # The trade-off that allowed it was written when the mail went out on Mondays only;
+        # v0.59.0 doubled the days, and a deploy IS a restart, so "rare" stopped being true.
         if self._last_summary_date == slot:
+            return
+        if await self._summary_already_sent(slot):
+            # Cache it so a restart costs one query, not one per five-minute cycle.
+            self._last_summary_date = slot
+            logger.debug("Buy-list summary for %s already sent - not re-sending", slot)
             return
 
         # The recipient is configuration, not the union of watch emails: the summary
@@ -708,10 +717,70 @@ class PriceCheckScheduler:
             self._stats["summaries_sent"] += 1
             logger.info(f"Sent buy-list summary to {SUMMARY_EMAIL}")
             self._last_summary_date = slot
+            await self._record_summary_sent(
+                slot,
+                recipient=SUMMARY_EMAIL,
+                deals_count=len(deals),
+                watched_count=len(watched_products),
+                had_quality_issues=quality is not None,
+            )
         else:
             logger.warning(
                 f"Buy-list summary to {SUMMARY_EMAIL} failed - retrying while the day lasts"
             )
+
+    async def _summary_already_sent(self, slot: date) -> bool:
+        """Has today's buy list already gone out — according to the DATABASE?
+
+        A read failure answers **False**, i.e. "send it": this guard exists to prevent a
+        duplicate, and the alternative failure is a SILENT one — a database hiccup at noon
+        would otherwise swallow the day's buy list with nothing on screen saying so. A
+        second copy of an email is an annoyance; a missing buy list is the product not
+        working. That direction is deliberate and is the opposite of how an auth guard
+        degrades (fail closed); this is not a security decision, it is a nuisance-versus-
+        silence one.
+        """
+        try:
+            async with self.session_factory() as session:
+                found = await session.get(SummarySend, slot)
+                return found is not None
+        except Exception:
+            logger.exception("Could not read summary_sends - sending rather than going quiet")
+            return False
+
+    async def _record_summary_sent(
+        self,
+        slot: date,
+        *,
+        recipient: str,
+        deals_count: int,
+        watched_count: int,
+        had_quality_issues: bool,
+    ) -> None:
+        """Write the durable receipt. Never raises — the mail is already out.
+
+        ON CONFLICT DO NOTHING because the row's whole job is to be there once: two
+        processes racing (or a retry after a partial failure) must not turn a delivered
+        email into a crash in the scheduler loop.
+        """
+        try:
+            async with self.session_factory() as session:
+                await session.execute(
+                    pg_insert(SummarySend)
+                    .values(
+                        sent_on=slot,
+                        recipient=recipient[:255],
+                        deals_count=deals_count,
+                        watched_count=watched_count,
+                        had_quality_issues=had_quality_issues,
+                    )
+                    .on_conflict_do_nothing(index_elements=["sent_on"])
+                )
+                await session.commit()
+        except Exception:
+            # The mail went out; failing to record it means at worst one duplicate after a
+            # restart — the state this release exists to reduce, not a reason to crash.
+            logger.exception("Could not record the buy-list send for %s", slot)
 
     async def _summary_weekdays_today(self, now: datetime) -> list[int]:
         """The mail's weekdays for the current local day, from the schedule, cached.

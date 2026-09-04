@@ -1,12 +1,13 @@
 """Price Tracker ORM models."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -322,6 +323,42 @@ class CheckAttempt(Base):
     # The failure text, truncated. Carries the HTTP status on a wall ("HTTP 405"), which is
     # what distinguishes ICA's challenge shapes from each other.
     detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class SummarySend(Base):
+    """One row per buy-list email that actually went out, keyed by its local check day.
+
+    WHY it is in the database rather than in the scheduler's memory, which is where it
+    lived until v0.62.0: the dedup was ``self._last_summary_date``, so every restart
+    forgot it and a restart on a check day after 12:00 Swedish sent the day's buy list
+    again. That was a KNOWN trade-off ("a rare duplicate after an afternoon restart is the
+    accepted cost") and the premise stopped holding — v0.59.0 doubled the mail days to
+    Monday AND Friday, and a deploy is itself a restart, so the duplicate arrives exactly
+    when a release lands. Observed 2026-09-04: the v0.61.0 deploy mailed the buy list six
+    seconds after startup, hours after that morning's send.
+
+    It also answers a question nothing else could: DID Monday's mail go out, and what did
+    it carry? A send that failed leaves no row, which is the same rule check_attempts
+    follows — failure has to be as visible as success, and "no row" must mean "not sent"
+    rather than "not recorded".
+
+    The counts are what the mail contained, so a suspiciously empty one can be recognised
+    afterwards without the mail itself.
+    """
+
+    __tablename__ = "summary_sends"
+
+    # The LOCAL (Europe/Stockholm) check day the mail belongs to — the same value the
+    # scheduler's slot logic keys on, and the primary key, so a duplicate send is
+    # impossible by construction rather than by remembering.
+    sent_on: Mapped[date] = mapped_column(Date, primary_key=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
+    recipient: Mapped[str] = mapped_column(String(255))
+    deals_count: Mapped[int] = mapped_column(Integer, default=0)
+    watched_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Whether the data-quality block rode along — the one part of the mail that says the
+    # deals themselves may be wrong.
+    had_quality_issues: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class PriceWatch(Base):
