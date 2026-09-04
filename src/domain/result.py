@@ -96,20 +96,28 @@ def offer_online_only(raw_data: Any) -> bool | None:
     list, the portal row, MCP) resolves the judgement here rather than testing the string,
     so the mail and the page cannot come to disagree about one campaign.
 
-    **True is a HYPOTHESIS with evidence behind it, not a statement by ICA.** Measured
-    2026-09-04 against both Sandviken butiker's public erbjudandesidor (187 + 48 offers,
-    each carrying its own ``storeInd``/``onlineInd``): of the six offers the tracker held
-    that day, the four flagged ``MUTE_STYLE`` were absent from the store's veckoblad and
-    the one present in it was ``DEFAULT``. An independent second signal agrees — over all
-    26 ICA offers ever recorded, 22 lived 0-7 days (the veckoblad's own cadence) and the
-    four long-runners (11-31 days) are exactly those four. The case that prompted the
-    measurement is a real trip: an offer from the buy list did not exist at the till, and
-    the staff said it was online only.
+    **True is a HYPOTHESIS with evidence behind it, not a statement by ICA — and it is
+    known to be INCOMPLETE.** Measured 2026-09-04 against both Sandviken butiker's public
+    erbjudandesidor (187 + 48 offers, each carrying its own ``storeInd``/``onlineInd``):
+    of the six offers the tracker held that day, the four flagged ``MUTE_STYLE`` were
+    absent from the store's veckoblad and the one present in it was ``DEFAULT``. A second
+    signal agrees — over all 26 ICA offers ever recorded, 22 lived 0-7 days (the
+    veckoblad's own cadence) and the four long-runners (11-31 days) are exactly those four.
 
-    The inverse does NOT hold and must never be inferred: ``False`` means "not flagged",
-    not "verified in the store" — the veckoblad is the store's ADVERTISED campaigns, and
-    one DEFAULT offer of the six was absent from it too. Consumers therefore MARK a True
-    and say nothing at all otherwise.
+    **What this flag does NOT catch, established the same day (corrected in place):** the
+    trip that produced the whole investigation — a buy-list row that did not exist at the
+    till, staff said online only — was Arla Köket smör- & rapsolja 7,5dl at ICA Maxi, and
+    its promotion is ``DEFAULT``. So MUTE_STYLE implies "absent from the veckoblad" on the
+    evidence so far, but the converse is false in BOTH directions that matter: a DEFAULT
+    campaign can be online-only too, and ``False`` never means "verified in the store".
+    Consumers MARK a True and say nothing otherwise — an unmarked row is not a promise.
+
+    The sharper signal is recorded beside this one and not yet acted on:
+    ``offer_retailer_promotion_id``'s first segment IS the id of the corresponding offer
+    on the butik's erbjudandesida (``offers.weeklyOffers[].id``), so leaflet membership is
+    an EXACT join rather than a name match — 6/6 on that day's sample, including the
+    rapsolja the flag misses. Reading it needs one fetch per butik per check day, which is
+    a decision about a new external source, not a rename.
 
     None means UNKNOWN and is the normal answer nearly everywhere: every other store
     records no such flag, and so does every ICA point written before v0.60.0 — the field
