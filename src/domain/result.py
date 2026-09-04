@@ -134,3 +134,101 @@ def offer_online_only(raw_data: Any) -> bool | None:
     if not isinstance(mode, str) or not mode:
         return None
     return mode.upper() == _ICA_MUTED_PRESENTATION
+
+
+def offer_in_leaflet(raw_data: Any) -> bool | None:
+    """Whether this campaign was among the butik's ADVERTISED offers when we checked.
+
+    THE reader of ``raw_data["offer_in_leaflet"]``, written at check time by
+    ``ica_leaflet.annotate_extraction`` from an exact id join (v0.61.0). Three states, and
+    the None is the important one: no leaflet configured for that butik, a walled or
+    unparseable erbjudandesida, a store that has no such thing — all mean we did not read
+    it, and none of them may render as "not advertised".
+
+    True does not promise the till charges it either. The veckoblad is what the butik
+    ADVERTISES, and an unadvertised shelf price is a real thing — which is why the note
+    below says "finns i veckobladet" rather than anything about the till.
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    value = raw_data.get("offer_in_leaflet")
+    return value if isinstance(value, bool) else None
+
+
+def leaflet_valid_to(raw_data: Any) -> str | None:
+    """The date the butik itself put on the advertised offer (ISO), or None."""
+    if not isinstance(raw_data, dict):
+        return None
+    value = raw_data.get("offer_leaflet_valid_to")
+    return value if isinstance(value, str) and value else None
+
+
+def leaflet_store_ind(raw_data: Any) -> bool | None:
+    """The butik's own "gäller i butiken" flag on the advertised offer, or None."""
+    if not isinstance(raw_data, dict):
+        return None
+    value = raw_data.get("offer_leaflet_store_ind")
+    return value if isinstance(value, bool) else None
+
+
+def channel_note(
+    *,
+    in_leaflet: bool | None,
+    valid_to: str | None = None,
+    store_ind: bool | None = None,
+    online_only: bool | None = None,
+) -> str | None:
+    """THE one sentence about where an offer applies — or None when we have nothing to say.
+
+    Composed in one place because it has three surfaces (the buy-list mail, the portal row
+    and MCP) and they may not drift: it is exactly the setup Gotcha 4 describes, and the
+    sentence is the whole point of the feature. Swedish, like every other string that
+    reaches a reader (deals.py's own "erbjudande" fallback sets the precedent).
+
+    It takes the VALUES rather than a row or a raw_data dict so the deal row can derive it
+    as a property: a stored note would let a hand-built row carry the flags with no
+    sentence, which is precisely how the notifier's own fixtures went quiet the first time
+    this was written.
+
+    Precedence, strongest evidence first:
+
+    1. The butik advertised it and said it does NOT apply in the shop (``storeInd`` false)
+       — the only statement here that comes from the store rather than from us.
+    2. It is not among the advertised offers at all. That is a fact about the veckoblad,
+       so the sentence says veckoblad and only then names the likely reason.
+    3. It IS advertised — say so, with the date the butik itself put on it. Positive, and
+       the reason a reader can trust the silence on every other row.
+    4. Nothing was read from a leaflet: fall back to v0.60.0's ``presentationMode`` hint,
+       which is weaker (it misses DEFAULT online-only campaigns, the rapsolja case) but
+       better than nothing. Everything else says nothing at all.
+    """
+    if in_leaflet is True:
+        if store_ind is False:
+            return "butiken anger att erbjudandet inte gäller i butiken"
+        if valid_to:
+            return f"finns i butikens veckoblad t.o.m. {_swedish_day(valid_to)}"
+        return "finns i butikens veckoblad"
+    if in_leaflet is False:
+        return "finns inte i butikens veckoblad — kan gälla endast e-handeln"
+    if online_only:
+        return "kan gälla endast e-handeln"
+    return None
+
+
+def offer_channel_note(raw_data: Any) -> str | None:
+    """``channel_note`` read straight off a stored point's raw_data."""
+    return channel_note(
+        in_leaflet=offer_in_leaflet(raw_data),
+        valid_to=leaflet_valid_to(raw_data),
+        store_ind=leaflet_store_ind(raw_data),
+        online_only=offer_online_only(raw_data),
+    )
+
+
+def _swedish_day(iso_date: str) -> str:
+    """ "2026-09-06" as "6/9" — the way a date is written on a Swedish shelf label."""
+    try:
+        parts = iso_date.split("-")
+        return f"{int(parts[2])}/{int(parts[1])}"
+    except (IndexError, ValueError):
+        return iso_date

@@ -299,6 +299,11 @@ class DealResponse(BaseModel):
     # None = no flag recorded, which is every other store and every ICA point written
     # before v0.60.0. Consumers mark a True; False and None both render nothing.
     offer_online_only: bool | None = None
+    # Whether the butik advertised this campaign in its veckoblad (exact id join), and THE
+    # sentence composed from that plus the store's own flag. None on both = nothing known
+    # and nothing to say; the portal styles on the boolean and PRINTS the note.
+    offer_in_leaflet: bool | None = None
+    offer_channel_note: str | None = None
 
 
 __all__ = [

@@ -266,10 +266,12 @@ class TestMcpTools:
 
     @patch("mcp_server.server._get_service")
     async def test_find_deals_marks_an_online_only_campaign(self, mock_get_svc):
-        """The channel caveat reaches the agent in the portal's own words (v0.60.0).
+        """The channel caveat reaches the agent in the portal's own words.
 
         An agent answering "what should I buy, and where" would otherwise send someone to
-        a till that charges ordinarie — the trip that produced this field.
+        a till that charges ordinarie — the trip that produced this field. MCP PRINTS the
+        sentence the domain composed (`offer_channel_note`) and never words it itself, so
+        the three surfaces cannot drift apart.
         """
         mock_service = MagicMock()
         mock_service.get_current_deals = AsyncMock(
@@ -281,13 +283,16 @@ class TestMcpTools:
                     "offer_price_sek": 65.0,
                     "offer_type": "kampanj",
                     "offer_online_only": True,
+                    "offer_channel_note": (
+                        "finns inte i butikens veckoblad — kan gälla endast e-handeln"
+                    ),
                 }
             ]
         )
         mock_get_svc.return_value = mock_service
 
         result = await find_deals.fn("grocery")
-        assert "kan gälla endast e-handeln" in result
+        assert "finns inte i butikens veckoblad — kan gälla endast e-handeln" in result
 
     @patch("mcp_server.server._get_service")
     async def test_find_deals_stays_quiet_without_the_flag(self, mock_get_svc):
@@ -301,6 +306,7 @@ class TestMcpTools:
                     "offer_price_sek": 10.0,
                     "offer_type": "extrapris",
                     "offer_online_only": None,
+                    "offer_channel_note": None,
                 }
             ]
         )

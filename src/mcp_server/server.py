@@ -163,11 +163,12 @@ async def find_deals(store_type: str | None = None) -> str:
             facts.append("bra läge: nära produktens egen lägstanivå")
         if deal.get("in_stock") is False:
             facts.append("butiken anger slut i lager")
-        # Same wording as the portal row and the buy-list mail — one judgement, three
-        # surfaces, and they may not drift (Gotcha 4). Only a True speaks: None is
-        # unknown, which is every store but ICA.
-        if deal.get("offer_online_only") is True:
-            facts.append("kan gälla endast e-handeln")
+        # THE channel sentence, composed in domain/result.offer_channel_note and merely
+        # printed here — one judgement, three surfaces, worded once (Gotcha 4). None means
+        # nothing is known about where the offer applies, and then nothing is said.
+        note = deal.get("offer_channel_note")
+        if isinstance(note, str) and note:
+            facts.append(note)
         lines.append(f"  - {'; '.join(facts)}")
 
     return "\n".join(lines)

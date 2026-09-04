@@ -2,6 +2,7 @@ from infra.check_log import CheckAttemptLog
 from infra.db import async_session_factory
 from infra.email import ResendEmailService
 from infra.fetcher import WebFetcher
+from infra.ica_leaflet import IcaLeafletCache
 from infra.rate_limiter import StoreRateLimiter
 from infra.store_block import StoreBlockRegistry
 
@@ -10,6 +11,7 @@ _email_service_instance: ResendEmailService | None = None
 _rate_limiter_instance: StoreRateLimiter | None = None
 _block_registry_instance: StoreBlockRegistry | None = None
 _check_log_instance: CheckAttemptLog | None = None
+_leaflet_instance: IcaLeafletCache | None = None
 
 
 def get_fetcher() -> WebFetcher:
@@ -55,6 +57,20 @@ def get_check_log() -> CheckAttemptLog:
     if _check_log_instance is None:
         _check_log_instance = CheckAttemptLog(async_session_factory)
     return _check_log_instance
+
+
+def get_leaflet() -> IcaLeafletCache:
+    """THE veckoblad reader, shared so a butik's leaflet is fetched once per local day.
+
+    A single instance across the scheduler and the interactive "Kolla nu" path for the same
+    reason the ledger and the breaker are shared: 44 due ICA links in one cycle must cost
+    ONE request to www.ica.se, not 44. It rides the same ledger and breaker, keyed on that
+    host rather than on a store id — www.ica.se is not the host the products come from.
+    """
+    global _leaflet_instance
+    if _leaflet_instance is None:
+        _leaflet_instance = IcaLeafletCache(get_fetcher(), get_rate_limiter(), get_block_registry())
+    return _leaflet_instance
 
 
 def get_email_service() -> ResendEmailService:

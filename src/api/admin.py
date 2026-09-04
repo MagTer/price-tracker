@@ -96,6 +96,7 @@ from infra.providers import (
     get_block_registry,
     get_check_log,
     get_fetcher,
+    get_leaflet,
     get_rate_limiter,
 )
 
@@ -1084,6 +1085,7 @@ async def _run_first_check(session: AsyncSession, product_store_id: uuid.UUID) -
             session=session,
             fetcher=get_fetcher(),
             parser=PriceParser(),
+            leaflet=get_leaflet(),
             attempt_log=get_check_log(),
             attempt_source="quick-add",
         )
@@ -1867,6 +1869,7 @@ async def trigger_price_check(
             session=session,
             fetcher=get_fetcher(),
             parser=PriceParser(),
+            leaflet=get_leaflet(),
             attempt_log=get_check_log(),
             attempt_source="manual-check",
         )
@@ -1987,6 +1990,8 @@ async def get_current_deals(
                 in_stock=row.in_stock,
                 floor_is_manual=row.floor_is_manual,
                 offer_online_only=row.offer_online_only,
+                offer_in_leaflet=row.offer_in_leaflet,
+                offer_channel_note=row.offer_channel_note,
             )
             for row in rows
         ]

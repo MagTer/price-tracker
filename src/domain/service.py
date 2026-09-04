@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.categories import normalize_category
 from domain.deals import current_deals
+from domain.ica_leaflet import annotate_extraction
 from domain.link_health import broken_links
 from domain.models import (
     PricePoint,
@@ -35,7 +36,7 @@ from domain.pricing import (
     rounded_unit_price,
     unit_price_expr,
 )
-from domain.protocols import ICheckAttemptLog, IFetcher
+from domain.protocols import ICheckAttemptLog, IFetcher, ILeafletLookup
 from domain.result import PriceExtractionResult, StoreBlockedError, extraction_source
 from domain.schedule import effective_schedule, is_inherited
 
@@ -83,6 +84,7 @@ async def perform_price_check(
     session: AsyncSession,
     fetcher: IFetcher,
     parser: PriceParser,
+    leaflet: ILeafletLookup | None = None,
     attempt_log: ICheckAttemptLog | None = None,
     attempt_source: str = "unknown",
 ) -> PriceCheckOutcome:
@@ -112,6 +114,7 @@ async def perform_price_check(
             session=session,
             fetcher=fetcher,
             parser=parser,
+            leaflet=leaflet,
         )
     except Exception as e:
         if attempt_log is not None:
@@ -151,6 +154,7 @@ async def _run_price_check(
     session: AsyncSession,
     fetcher: IFetcher,
     parser: PriceParser,
+    leaflet: ILeafletLookup | None = None,
 ) -> PriceCheckOutcome:
     """The flow itself. Split out only so perform_price_check can record every exit once."""
     fetch_result = await fetcher.fetch(product_store.store_url)
@@ -252,6 +256,12 @@ async def _run_price_check(
     mismatch = apply_scrape_to_link(product_store, extraction, product.unit)
     if mismatch:
         logger.warning(f"Package quantity mismatch for {product.name} at {store.name}: {mismatch}")
+
+    # Does the butik ADVERTISE this campaign? Answered here, at check time, so the mail
+    # and the portal read one stored verdict instead of fetching a leaflet per page load —
+    # and so a row keeps saying what was true the morning it was recorded. Writes nothing
+    # unless there is something to say, and cannot raise (a note may not kill a check).
+    await annotate_extraction(extraction, product_store.store_url, leaflet)
 
     # store_unit_price_sek is what the STORE printed (D-05) — the computed kr/unit
     # is derived on read from the link's quantity and never persisted (D-04).
@@ -562,6 +572,8 @@ class PriceTrackerService:
                         # shelf may not carry. An agent answering "what should I buy, and
                         # where" must not send someone to a till on an online-only price.
                         "offer_online_only": row.offer_online_only,
+                        "offer_in_leaflet": row.offer_in_leaflet,
+                        "offer_channel_note": row.offer_channel_note,
                     }
                     for row in rows
                 ]

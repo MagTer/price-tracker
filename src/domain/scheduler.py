@@ -29,6 +29,7 @@ from domain.protocols import (
     ICheckAttemptLog,
     IEmailService,
     IFetcher,
+    ILeafletLookup,
     IRateLimiter,
 )
 from domain.result import extraction_source
@@ -74,6 +75,7 @@ class PriceCheckScheduler:
         rate_limiter: IRateLimiter | None = None,
         block_registry: IBlockRegistry | None = None,
         attempt_log: ICheckAttemptLog | None = None,
+        leaflet: ILeafletLookup | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.fetcher = fetcher
@@ -98,6 +100,10 @@ class PriceCheckScheduler:
         # passes the process-wide instance. Nothing here depends on it, by design: telemetry
         # must never be able to stop a check.
         self.attempt_log = attempt_log
+        # THE veckoblad lookup, shared with the interactive paths (app.py passes the
+        # process-wide instance). None in tests = no cross-check, which records no verdict
+        # rather than a false one. Like the attempt log, nothing here depends on it.
+        self.leaflet = leaflet
         # Create notifier wrapper if email service is provided
         self.notifier: PriceNotifier | None = None
         if email_service is not None:
@@ -409,6 +415,7 @@ class PriceCheckScheduler:
             session=session,
             fetcher=self.fetcher,
             parser=self.parser,
+            leaflet=self.leaflet,
             attempt_log=self.attempt_log,
             attempt_source="scheduler",
         )

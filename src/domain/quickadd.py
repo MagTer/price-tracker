@@ -59,6 +59,18 @@ _PACK_RE = re.compile(
 # different prices on two different URLs.
 _STORE_SEGMENT_RE = re.compile(r"/stores/([^/]+)/")
 
+
+def butik_id_from_url(url: str) -> str | None:
+    """THE reader of a handlaprivatkund URL's /stores/<id>/ segment, or None.
+
+    Three callers now key on the physical butik — the label suggestion, the sibling-link
+    swap and (v0.61.0) the veckoblad cross-check, which needs it to find the butik's own
+    erbjudandesida. One definition, so a chain that changes its URL shape is one edit.
+    """
+    match = _STORE_SEGMENT_RE.search(url)
+    return match.group(1) if match else None
+
+
 # --- Per-instance butik config -----------------------------------------------------------
 #
 # The butik ids below are OPERATOR data, not product logic: another instance of this app
@@ -263,10 +275,9 @@ def suggest_store_label(url: str, store_name: str) -> str | None:
     when the URL has no butik segment (Willys, the pharmacies) — those chains price
     nationally and the chain name suffices.
     """
-    match = _STORE_SEGMENT_RE.search(url)
-    if not match:
+    store_id = butik_id_from_url(url)
+    if store_id is None:
         return None
-    store_id = match.group(1)
     return KNOWN_STORE_LABELS.get(store_id, f"{store_name} {store_id}")
 
 
@@ -288,10 +299,9 @@ def suggest_sibling_links(url: str, store_name: str) -> list[SiblingLink]:
     the caller must treat these as CANDIDATES and verify each with a real fetch before
     keeping the link.
     """
-    match = _STORE_SEGMENT_RE.search(url)
-    if not match:
+    store_id = butik_id_from_url(url)
+    if store_id is None:
         return []
-    store_id = match.group(1)
     for group in SIBLING_STORE_GROUPS:
         if store_id in group:
             return [

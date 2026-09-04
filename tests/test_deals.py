@@ -378,6 +378,59 @@ class TestTheFloorComesFromRealHistory:
         assert deal.offer_online_only is True
 
     @pytest.mark.asyncio
+    async def test_the_veckoblad_verdict_reaches_the_row_as_one_sentence(self, db_session) -> None:
+        """The v0.61.0 cross-check, stamped at check time and merely read here.
+
+        Three surfaces print `offer_channel_note` verbatim, so this is the row that decides
+        what the buy list, the portal and MCP all say about where an offer applies.
+        """
+        product, store = await self._product(db_session, "Smör- & rapsolja 7,5dl")
+        link = await self._link(db_session, product, store, "0.75")
+        point = self._point(link, "34.25", offer="30.00")
+        point.raw_data = {"source": "ica_page", "offer_in_leaflet": False}
+        db_session.add(point)
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.offer_in_leaflet is False
+        assert deal.offer_channel_note == (
+            "finns inte i butikens veckoblad — kan gälla endast e-handeln"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_advertised_campaign_says_so_with_the_butiks_date(self, db_session) -> None:
+        product, store = await self._product(db_session, "Idealmakaroner")
+        link = await self._link(db_session, product, store, "0.75")
+        point = self._point(link, "12.44", offer="10.00")
+        point.raw_data = {
+            "source": "ica_page",
+            "offer_in_leaflet": True,
+            "offer_leaflet_valid_to": "2026-09-06",
+            "offer_leaflet_store_ind": True,
+        }
+        db_session.add(point)
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.offer_channel_note == "finns i butikens veckoblad t.o.m. 6/9"
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_leaflet_answer_falls_back_to_the_weaker_flag(
+        self, db_session
+    ) -> None:
+        """Unknown leaflet + MUTE_STYLE: v0.60.0's hint still speaks, and nothing else does."""
+        product, store = await self._product(db_session, "Bryggkaffe")
+        link = await self._link(db_session, product, store, "0.45")
+        point = self._point(link, "68.44", offer="65.00")
+        point.raw_data = {"source": "ica_page", "offer_presentation_mode": "MUTE_STYLE"}
+        db_session.add(point)
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.offer_in_leaflet is None
+        assert deal.offer_channel_note == "kan gälla endast e-handeln"
+
+    @pytest.mark.asyncio
     async def test_a_deal_with_no_recorded_mode_is_unknown_not_false(self, db_session) -> None:
         """Every store but ICA, and every ICA point written before v0.60.0.
 
@@ -392,6 +445,7 @@ class TestTheFloorComesFromRealHistory:
 
         deal = (await current_deals(db_session))[0]
         assert deal.offer_online_only is None
+        assert deal.offer_channel_note is None
 
     @pytest.mark.asyncio
     async def test_an_out_of_stock_link_is_no_alternative(self, db_session) -> None:

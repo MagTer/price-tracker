@@ -380,6 +380,30 @@ def test_every_price_check_caller_records_its_attempt() -> None:
     )
 
 
+def test_every_price_check_caller_passes_the_leaflet_lookup() -> None:
+    """A caller that omits `leaflet` silently stops cross-checking the veckoblad.
+
+    Same shape as the attempt_log gate above, and the same reason the default cannot be the
+    enforcement: `leaflet` is None in several hundred existing tests that drive the flow
+    with mocks. What is lost when a production caller forgets is invisible in the worst
+    way — the buy list keeps sending rows, and simply stops saying which of them the butik
+    never advertised. That is the very silence v0.61.0 exists to break.
+    """
+    calls = _perform_price_check_calls()
+    assert calls, "No perform_price_check call sites found — has the flow been renamed?"
+
+    missing = [
+        f"{path.relative_to(REPO_ROOT)}:{node.lineno}"
+        for path, node in calls
+        if not any(kw.arg == "leaflet" for kw in node.keywords)
+    ]
+    assert not missing, (
+        "perform_price_check called without leaflet at: "
+        + ", ".join(missing)
+        + " — that check would record no veckoblad verdict at all."
+    )
+
+
 _FILTER_CONTROLS_RE = re.compile(
     r"const PRODUCT_FILTER_CONTROLS\s*=\s*\[(.*?)\];",
     re.DOTALL,

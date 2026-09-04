@@ -65,7 +65,13 @@ from domain.models import (
     link_store_name,
 )
 from domain.pricing import effective_price, rounded_unit_price
-from domain.result import offer_online_only
+from domain.result import (
+    channel_note,
+    leaflet_store_ind,
+    leaflet_valid_to,
+    offer_in_leaflet,
+    offer_online_only,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -216,6 +222,29 @@ class DealRow:
     # store but ICA, and every ICA point before v0.60.0). Consumers MARK a True and stay
     # silent otherwise — False is "not flagged", never "verified in the store".
     offer_online_only: bool | None = None
+    # Did the butik ADVERTISE this campaign in its veckoblad (v0.61.0)? An exact id join,
+    # answered at check time; None is unknown (no leaflet configured, walled, unreadable,
+    # or a store that has no such thing) and is never rendered as "not advertised".
+    offer_in_leaflet: bool | None = None
+    # The butik's own date and channel flag on the advertised offer, carried so the
+    # sentence below can be DERIVED rather than stored beside the flags it comes from.
+    offer_leaflet_valid_to: str | None = None
+    offer_leaflet_store_ind: bool | None = None
+
+    @property
+    def offer_channel_note(self) -> str | None:
+        """THE one sentence about where this offer applies (result.channel_note).
+
+        A property, not a field: a stored note lets a row carry the flags with no sentence,
+        and every defensively-built row (the notifier's and scheduler's fixtures) would
+        then go quiet about exactly the thing this feature exists to say.
+        """
+        return channel_note(
+            in_leaflet=self.offer_in_leaflet,
+            valid_to=self.offer_leaflet_valid_to,
+            store_ind=self.offer_leaflet_store_ind,
+            online_only=self.offer_online_only,
+        )
 
 
 async def observed_spans(
@@ -408,6 +437,9 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 in_stock=price_point.in_stock,
                 floor_is_manual=floor.is_manual if floor else False,
                 offer_online_only=offer_online_only(price_point.raw_data),
+                offer_in_leaflet=offer_in_leaflet(price_point.raw_data),
+                offer_leaflet_valid_to=leaflet_valid_to(price_point.raw_data),
+                offer_leaflet_store_ind=leaflet_store_ind(price_point.raw_data),
             )
         )
 

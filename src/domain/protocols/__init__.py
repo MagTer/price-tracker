@@ -2,6 +2,7 @@ from domain.protocols.block_registry import IBlockRegistry
 from domain.protocols.check_log import ICheckAttemptLog
 from domain.protocols.email import EmailMessage, EmailResult, IEmailService
 from domain.protocols.fetcher import IFetcher
+from domain.protocols.leaflet import ILeafletLookup
 from domain.protocols.rate_limiter import IRateLimiter
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     "ICheckAttemptLog",
     "IEmailService",
     "IFetcher",
+    "ILeafletLookup",
     "IRateLimiter",
 ]

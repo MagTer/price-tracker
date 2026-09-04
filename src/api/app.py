@@ -20,6 +20,7 @@ from infra.providers import (
     get_check_log,
     get_email_service,
     get_fetcher,
+    get_leaflet,
     get_rate_limiter,
 )
 from mcp_server.server import get_mcp_app
@@ -61,6 +62,9 @@ async def lifespan(app: FastAPI):
             # traffic, so without this wiring the table would only ever hold the handful of
             # checks a human triggered by hand.
             attempt_log=get_check_log(),
+            # THE veckoblad cross-check. Shared so the butik's erbjudandesida is fetched
+            # once per local day no matter how many ICA links come due.
+            leaflet=get_leaflet(),
         )
         await scheduler.start()
         app.state.scheduler = scheduler
