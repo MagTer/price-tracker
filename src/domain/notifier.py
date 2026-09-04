@@ -353,6 +353,11 @@ class PriceNotifier:
             condition_bits.append(deal.offer_type)
         if deal.offer_details:
             condition_bits.append(deal.offer_details)
+        # The channel is a condition on the price like any other: ICA flags campaigns its
+        # shelf may not carry, and this mail is read standing in the aisle after a drive.
+        # Same wording as the portal row (dealMetaHtml) — the two must not drift.
+        if deal.offer_online_only:
+            condition_bits.append("kan gälla endast e-handeln")
         if condition_bits:
             price_cell += (
                 f'<br><span style="color: #b45309; font-size: 0.85em;">'

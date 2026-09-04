@@ -13,6 +13,7 @@ import json
 from decimal import Decimal
 
 from domain.extractors.ica import IcaExtractor
+from domain.result import offer_online_only
 
 URL = (
     "https://handlaprivatkund.ica.se/stores/1003396/products/"
@@ -21,14 +22,18 @@ URL = (
 PRODUCT_ID = "2010293"
 
 
-def _promotion(description: str, required_quantity: int | None = None) -> dict:
+def _promotion(
+    description: str,
+    required_quantity: int | None = None,
+    presentation_mode: str = "DEFAULT",
+) -> dict:
     """A promotion in the live state shape — note: no price field anywhere."""
     promo = {
         "promoId": "234b1f78-9cbb-4199-b69c-ba8b261af9ea",
         "retailerPromotionId": "5004080311-1782816723",
         "description": description,
         "type": "OFFER",
-        "presentationMode": "DEFAULT",
+        "presentationMode": presentation_mode,
         "limitReached": False,
     }
     if required_quantity is not None:
@@ -324,3 +329,90 @@ class TestMetadata:
         # ICA's JSON-LD carries name, brand and size — the quick-add preview's JSON-LD
         # tier answers everything, so this tier adds nothing there.
         assert IcaExtractor().extract_metadata_from_html(_html(_product()), URL) is None
+
+
+class TestPromotionPresentationFlag:
+    """The store's own flag on the campaign we recorded (v0.60.0).
+
+    ICA presents some campaigns MUTE_STYLE, and those have so far been the ones absent
+    from the butik's veckoblad — measured 2026-09-04 against both Sandviken stores'
+    erbjudandesidor after a buy-list row turned out to be online only at the till.
+    The extractor records the flag; domain/result.offer_online_only judges it.
+    """
+
+    def test_the_flag_is_recorded_verbatim_off_the_winning_promotion(self):
+        product = _product(
+            promotions=[_promotion("2 för 45 kr", 2, presentation_mode="MUTE_STYLE")]
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.raw_response["offer_presentation_mode"] == "MUTE_STYLE"
+        assert result.raw_response["offer_promo_id"] == "234b1f78-9cbb-4199-b69c-ba8b261af9ea"
+        assert result.raw_response["offer_retailer_promotion_id"] == "5004080311-1782816723"
+        assert offer_online_only(result.raw_response) is True
+
+    def test_a_normally_presented_campaign_is_not_flagged(self):
+        result = IcaExtractor().extract_from_html(_html(_product()), URL)
+        assert result is not None
+        assert result.raw_response["offer_presentation_mode"] == "DEFAULT"
+        # False, NOT None: the store did say something, and it did not say this.
+        assert offer_online_only(result.raw_response) is False
+
+    def test_the_flag_comes_from_the_promotion_whose_price_won(self):
+        """Several promotions, one recorded price — the flag must follow that one.
+
+        The HIGHEST per-unit price wins (the smaller claimed saving is the safer error),
+        so reading the flag off the first promotion in the list would attribute a channel
+        to a campaign the row does not carry.
+        """
+        product = _product(
+            promotions=[
+                _promotion("2 för 30 kr", 2, presentation_mode="MUTE_STYLE"),
+                _promotion("2 för 45 kr", 2, presentation_mode="DEFAULT"),
+            ]
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek == Decimal("22.50")
+        assert result.raw_response["offer_presentation_mode"] == "DEFAULT"
+
+    def test_a_refused_offer_carries_no_flag(self):
+        """The inversion guard drops the offer — the flag goes with it.
+
+        A recorded mode beside no offer would read as "an offer ICA presents normally",
+        which is the confident-wrong-answer failure the guards exist to prevent.
+        """
+        product = _product(
+            price={"amount": "20.00", "currency": "SEK"},
+            promotions=[_promotion("2 för 60 kr", 2, presentation_mode="MUTE_STYLE")],
+        )
+        result = IcaExtractor().extract_from_html(_html(product), URL)
+        assert result is not None
+        assert result.offer_price_sek is None
+        assert result.raw_response["offer_presentation_mode"] is None
+        assert offer_online_only(result.raw_response) is None
+
+    def test_no_promotions_leaves_the_flag_absent(self):
+        result = IcaExtractor().extract_from_html(_html(_product(promotions=[])), URL)
+        assert result is not None
+        assert result.raw_response["offer_presentation_mode"] is None
+
+
+class TestOfferOnlineOnlyReader:
+    """THE reader's three states — and why False and None may not be collapsed."""
+
+    def test_unknown_when_nothing_recorded_a_mode(self):
+        # Every store but ICA, and every ICA point written before v0.60.0. An absent flag
+        # is not evidence of a store offer.
+        assert offer_online_only({"source": "willys_api"}) is None
+        assert offer_online_only({}) is None
+        assert offer_online_only(None) is None
+        assert offer_online_only("MUTE_STYLE") is None
+
+    def test_a_non_string_mode_is_unknown_not_false(self):
+        assert offer_online_only({"offer_presentation_mode": 1}) is None
+        assert offer_online_only({"offer_presentation_mode": ""}) is None
+
+    def test_the_judgement_is_case_insensitive(self):
+        assert offer_online_only({"offer_presentation_mode": "mute_style"}) is True
+        assert offer_online_only({"offer_presentation_mode": "DEFAULT"}) is False

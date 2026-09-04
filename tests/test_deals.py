@@ -359,6 +359,41 @@ class TestTheFloorComesFromRealHistory:
         assert deal.floor_is_manual is True
 
     @pytest.mark.asyncio
+    async def test_the_stores_online_only_flag_rides_the_deal_row(self, db_session) -> None:
+        """ICA flags campaigns its own shelf may not carry — the row must carry that.
+
+        The trip that produced this (2026-09-04): a buy-list offer did not exist at the
+        till, and the staff said it was online only. The flag is recorded by the ICA
+        extractor into raw_data and judged in ONE place (result.offer_online_only), so the
+        mail, the portal and MCP cannot come to disagree about one campaign.
+        """
+        product, store = await self._product(db_session, "Bryggkaffe Mellanrost 450g")
+        link = await self._link(db_session, product, store, "0.45")
+        point = self._point(link, "68.44", offer="65.00")
+        point.raw_data = {"source": "ica_page", "offer_presentation_mode": "MUTE_STYLE"}
+        db_session.add(point)
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.offer_online_only is True
+
+    @pytest.mark.asyncio
+    async def test_a_deal_with_no_recorded_mode_is_unknown_not_false(self, db_session) -> None:
+        """Every store but ICA, and every ICA point written before v0.60.0.
+
+        None and False must stay apart on the wire: "nobody said" is not "the store said
+        this is a normal offer", and a consumer that collapsed them would quietly promise
+        the shelf carries it.
+        """
+        product, store = await self._product(db_session, "Toapapper 6p")
+        link = await self._link(db_session, product, store, "6")
+        db_session.add(self._point(link, "44.90", offer="39.50"))
+        await db_session.flush()
+
+        deal = (await current_deals(db_session))[0]
+        assert deal.offer_online_only is None
+
+    @pytest.mark.asyncio
     async def test_an_out_of_stock_link_is_no_alternative(self, db_session) -> None:
         """A latest point the store marked out of stock cannot veto a buyable deal:
         an empty shelf beats nothing. The deal row itself carries in_stock so

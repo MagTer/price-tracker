@@ -1986,6 +1986,7 @@ async def get_current_deals(
                 highest_unit_price_sek=row.highest_unit_price_sek,
                 in_stock=row.in_stock,
                 floor_is_manual=row.floor_is_manual,
+                offer_online_only=row.offer_online_only,
             )
             for row in rows
         ]

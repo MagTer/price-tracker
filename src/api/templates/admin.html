@@ -2640,6 +2640,10 @@ function dealMetaHtml(d) {
     if (isDealStale(d)) parts.push('kan ha hunnit ta slut');
     // The store's own stock word — marked, never hidden, same rule as the stale caveat.
     if (d.in_stock === false) parts.push('butiken anger slut i lager');
+    // The channel caveat, same rule again: ICA flags campaigns its shelf may not carry
+    // (offer_online_only), and a buy list that stays quiet about it sends the reader to
+    // a till that charges ordinarie. Strictly === true — null is unknown, not a claim.
+    if (d.offer_online_only === true) parts.push('kan gälla endast e-handeln');
     if (d.offer_type && d.offer_type !== 'kampanj') parts.push(d.offer_type);
     if (d.price_sek != null) parts.push('ordinarie ' + kr(d.price_sek));
     // The store's own framing, kept as metadata and never as the ranking — whole percent

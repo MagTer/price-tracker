@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 
 class StoreBlockedError(Exception):
@@ -80,3 +81,48 @@ def extraction_source(result: PriceExtractionResult | None) -> str:
         return "unknown"
     source = raw.get("source")
     return source if isinstance(source, str) and source else "unknown"
+
+
+# ICA's own presentation flag on a promotion. MUTE_STYLE is the value that has never yet
+# coincided with an offer in the store's printed veckoblad (measured below).
+_ICA_MUTED_PRESENTATION = "MUTE_STYLE"
+
+
+def offer_online_only(raw_data: Any) -> bool | None:
+    """Whether the store presented this offer as one its shelf may not carry.
+
+    THE reader of ``raw_data["offer_presentation_mode"]`` — the ICA extractor records the
+    flag verbatim off the promotion whose price it recorded, and every consumer (the buy
+    list, the portal row, MCP) resolves the judgement here rather than testing the string,
+    so the mail and the page cannot come to disagree about one campaign.
+
+    **True is a HYPOTHESIS with evidence behind it, not a statement by ICA.** Measured
+    2026-09-04 against both Sandviken butiker's public erbjudandesidor (187 + 48 offers,
+    each carrying its own ``storeInd``/``onlineInd``): of the six offers the tracker held
+    that day, the four flagged ``MUTE_STYLE`` were absent from the store's veckoblad and
+    the one present in it was ``DEFAULT``. An independent second signal agrees — over all
+    26 ICA offers ever recorded, 22 lived 0-7 days (the veckoblad's own cadence) and the
+    four long-runners (11-31 days) are exactly those four. The case that prompted the
+    measurement is a real trip: an offer from the buy list did not exist at the till, and
+    the staff said it was online only.
+
+    The inverse does NOT hold and must never be inferred: ``False`` means "not flagged",
+    not "verified in the store" — the veckoblad is the store's ADVERTISED campaigns, and
+    one DEFAULT offer of the six was absent from it too. Consumers therefore MARK a True
+    and say nothing at all otherwise.
+
+    None means UNKNOWN and is the normal answer nearly everywhere: every other store
+    records no such flag, and so does every ICA point written before v0.60.0 — the field
+    cannot be backfilled, since a promotion that has ended is gone from the page. An
+    absent flag is not evidence of a store offer, which is why False and None are
+    deliberately NOT collapsed into one falsy value here.
+
+    To falsify: pull www.ica.se/erbjudanden/<butik>/, read ``offers.weeklyOffers[]`` from
+    ``window.__INITIAL_DATA__`` and look for a MUTE_STYLE offer among them.
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    mode = raw_data.get("offer_presentation_mode")
+    if not isinstance(mode, str) or not mode:
+        return None
+    return mode.upper() == _ICA_MUTED_PRESENTATION

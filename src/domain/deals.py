@@ -65,6 +65,7 @@ from domain.models import (
     link_store_name,
 )
 from domain.pricing import effective_price, rounded_unit_price
+from domain.result import offer_online_only
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -210,6 +211,11 @@ class DealRow:
     # already excludes such links, because a shelf that is empty beats nothing.
     in_stock: bool = True
     floor_is_manual: bool = False
+    # The store's own presentation of this campaign, read through result.offer_online_only:
+    # True = flagged as an offer the shelf may not carry, None = no flag recorded (every
+    # store but ICA, and every ICA point before v0.60.0). Consumers MARK a True and stay
+    # silent otherwise — False is "not flagged", never "verified in the store".
+    offer_online_only: bool | None = None
 
 
 async def observed_spans(
@@ -401,6 +407,7 @@ async def current_deals(session: AsyncSession, store_type: str | None = None) ->
                 highest_unit_price_sek=floor.high_unit_price_sek if floor else None,
                 in_stock=price_point.in_stock,
                 floor_is_manual=floor.is_manual if floor else False,
+                offer_online_only=offer_online_only(price_point.raw_data),
             )
         )
 

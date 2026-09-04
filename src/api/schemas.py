@@ -294,6 +294,11 @@ class DealResponse(BaseModel):
     # buy-list email keeps such "poor" rows — a price no shelf carries again must not
     # silence twelve weeks of genuine campaigns.
     floor_is_manual: bool
+    # True when the STORE flagged this campaign as one its shelf may not carry (ICA's
+    # MUTE_STYLE — domain/result.offer_online_only holds the evidence and its limits).
+    # None = no flag recorded, which is every other store and every ICA point written
+    # before v0.60.0. Consumers mark a True; False and None both render nothing.
+    offer_online_only: bool | None = None
 
 
 __all__ = [

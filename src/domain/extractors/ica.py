@@ -88,6 +88,19 @@ def _to_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _promotion_field(promo: dict[str, Any] | None, key: str) -> str | None:
+    """One string field off the promotion we recorded, or None.
+
+    A promotion is a foreign JSONB-bound payload: a missing key, a null and a number all
+    have to leave the field ABSENT rather than stringified, or `raw_data` would carry
+    "None" as if the store had said it.
+    """
+    if not isinstance(promo, dict):
+        return None
+    value = promo.get(key)
+    return value if isinstance(value, str) and value else None
+
+
 class IcaExtractor:
     """Extract price data from ICA's ``window.__QUERY_INITIAL_STATE__`` hydration state."""
 
@@ -113,7 +126,9 @@ class IcaExtractor:
         store_unit_price_sek = unit_price if unit_price is not None and unit_price > 0 else None
         unit_code = str((node.get("unitPrice") or {}).get("unit") or "")
 
-        offer_price, offer_details = self._best_offer(node, price, store_unit_price_sek, unit_code)
+        offer_price, offer_details, offer_promo = self._best_offer(
+            node, price, store_unit_price_sek, unit_code
+        )
         offer_type: str | None = None
         if offer_price is not None:
             # The v0.32.1 invariant: an "offer" at or above ordinarie is no offer at all —
@@ -125,7 +140,7 @@ class IcaExtractor:
                     offer_price,
                     price,
                 )
-                offer_price, offer_details = None, None
+                offer_price, offer_details, offer_promo = None, None, None
             elif offer_price < price * Decimal("0.2"):
                 # The mirror of the inversion guard: a parsed offer below a fifth of
                 # ordinarie is a label artifact, not a campaign — no Swedish grocery
@@ -138,7 +153,7 @@ class IcaExtractor:
                     offer_price,
                     price,
                 )
-                offer_price, offer_details = None, None
+                offer_price, offer_details, offer_promo = None, None, None
             else:
                 assert offer_details is not None
                 offer_type = "stammispris" if "stammis" in offer_details.lower() else "kampanj"
@@ -172,6 +187,13 @@ class IcaExtractor:
                 "offer_details": offer_details,
                 "unit_price": float(unit_price) if unit_price is not None else None,
                 "unit_price_unit": ((node.get("unitPrice") or {}).get("unit")),
+                # The store's OWN presentation flag on the promotion we recorded, verbatim
+                # and unjudged here — domain/result.offer_online_only is what reads it.
+                # Absent (None) whenever no offer survived the guards above, so "no offer"
+                # can never masquerade as "an offer ICA presents normally".
+                "offer_presentation_mode": _promotion_field(offer_promo, "presentationMode"),
+                "offer_promo_id": _promotion_field(offer_promo, "promoId"),
+                "offer_retailer_promotion_id": _promotion_field(offer_promo, "retailerPromotionId"),
             },
         )
 
@@ -186,17 +208,21 @@ class IcaExtractor:
         price: Decimal,
         unit_price: Decimal | None,
         unit_code: str,
-    ) -> tuple[Decimal | None, str | None]:
+    ) -> tuple[Decimal | None, str | None, dict[str, Any] | None]:
         """The per-package campaign price parsed from the store's own promotion labels.
 
         When several promotions parse, the HIGHEST price wins — the ranking runs on what
         you pay either way, and the smaller claimed saving is the safer error (Lyko's
         rule). An unparseable or contradictory promotion contributes nothing.
+
+        The winning promotion rides back with its price because the caller records the
+        store's flags off THAT promotion: a page can carry several, and reading the flag
+        off the wrong one would attribute a channel to a campaign we did not record.
         """
         promotions = node.get("promotions")
         if not isinstance(promotions, list):
-            return None, None
-        candidates: list[tuple[Decimal, str]] = []
+            return None, None, None
+        candidates: list[tuple[Decimal, str, dict[str, Any]]] = []
         for promo in promotions:
             if not isinstance(promo, dict):
                 continue
@@ -205,14 +231,14 @@ class IcaExtractor:
                 description, promo.get("requiredProductQuantity"), price, unit_price, unit_code
             )
             if parsed is not None:
-                candidates.append((parsed, description))
+                candidates.append((parsed, description, promo))
             elif description:
                 logger.warning(
                     "ICA promotion %r did not parse to a package price - recording no offer for it",
                     description,
                 )
         if not candidates:
-            return None, None
+            return None, None, None
         return max(candidates, key=lambda item: item[0])
 
     def _parse_promotion(

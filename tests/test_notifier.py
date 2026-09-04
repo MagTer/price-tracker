@@ -33,6 +33,7 @@ def _deal(
     lowest_unit_price: float | None = None,
     highest_unit_price: float | None = None,
     lowest_store: str | None = None,
+    offer_online_only: bool | None = None,
 ) -> DealRow:
     """A DealRow as the scheduler hands them to the notifier (naive-UTC checked_at)."""
     return DealRow(
@@ -62,6 +63,7 @@ def _deal(
         highest_unit_price_sek=highest_unit_price,
         lowest_seen_at=datetime(2026, 7, 18, 8, 0, 0),
         lowest_store=lowest_store,
+        offer_online_only=offer_online_only,
     )
 
 
@@ -761,3 +763,36 @@ class TestPriceNotifier:
         assert "&lt;iframe" in html
         # javascript: in href attribute should be escaped, not executable
         assert '<a href="javascript:' not in html  # Executable link blocked
+
+
+class TestOnlineOnlyCaveat:
+    """A campaign the store's own shelf may not carry (v0.60.0).
+
+    The mail is what gets read standing in the aisle after a drive, so the channel is a
+    condition on the price exactly like a multi-buy is. Marked, never hidden — the price
+    is real, it is the till that may disagree.
+    """
+
+    def test_a_flagged_deal_says_so_in_the_mail(self):
+        html = PriceNotifier(email_service=MockEmailService())._build_summary_html(
+            deals=[_deal(offer_online_only=True)], watched_products=[], now=_NOW
+        )
+        assert "kan gälla endast e-handeln" in html
+
+    def test_an_unflagged_deal_says_nothing(self):
+        # False is "not flagged", None is "no store said anything" — neither is a claim
+        # that the shelf carries it, and neither may put words in the store's mouth.
+        for value in (False, None):
+            html = PriceNotifier(email_service=MockEmailService())._build_summary_html(
+                deals=[_deal(offer_online_only=value)], watched_products=[], now=_NOW
+            )
+            assert "e-handeln" not in html
+
+    def test_the_caveat_rides_beside_the_offer_condition(self):
+        html = PriceNotifier(email_service=MockEmailService())._build_summary_html(
+            deals=[_deal(offer_details="2 för 45 kr", offer_online_only=True)],
+            watched_products=[],
+            now=_NOW,
+        )
+        assert "2 för 45 kr" in html
+        assert "kan gälla endast e-handeln" in html

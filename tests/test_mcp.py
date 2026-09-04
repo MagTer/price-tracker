@@ -265,6 +265,51 @@ class TestMcpTools:
         assert "10.00 kr" in result
 
     @patch("mcp_server.server._get_service")
+    async def test_find_deals_marks_an_online_only_campaign(self, mock_get_svc):
+        """The channel caveat reaches the agent in the portal's own words (v0.60.0).
+
+        An agent answering "what should I buy, and where" would otherwise send someone to
+        a till that charges ordinarie — the trip that produced this field.
+        """
+        mock_service = MagicMock()
+        mock_service.get_current_deals = AsyncMock(
+            return_value=[
+                {
+                    "product_name": "Bryggkaffe",
+                    "store_name": "ICA Supermarket Björksätra",
+                    "regular_price_sek": 68.44,
+                    "offer_price_sek": 65.0,
+                    "offer_type": "kampanj",
+                    "offer_online_only": True,
+                }
+            ]
+        )
+        mock_get_svc.return_value = mock_service
+
+        result = await find_deals.fn("grocery")
+        assert "kan gälla endast e-handeln" in result
+
+    @patch("mcp_server.server._get_service")
+    async def test_find_deals_stays_quiet_without_the_flag(self, mock_get_svc):
+        mock_service = MagicMock()
+        mock_service.get_current_deals = AsyncMock(
+            return_value=[
+                {
+                    "product_name": "Mjolk",
+                    "store_name": "Willys",
+                    "regular_price_sek": 15.0,
+                    "offer_price_sek": 10.0,
+                    "offer_type": "extrapris",
+                    "offer_online_only": None,
+                }
+            ]
+        )
+        mock_get_svc.return_value = mock_service
+
+        result = await find_deals.fn("grocery")
+        assert "e-handeln" not in result
+
+    @patch("mcp_server.server._get_service")
     async def test_compare_stores_one_row_per_link_ranked_by_unit_price(self, mock_get_svc):
         """The Lambi scenario: three links, cheapest-per-roll first (D-13)."""
         mock_service = MagicMock()

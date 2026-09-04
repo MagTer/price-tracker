@@ -558,6 +558,10 @@ class PriceTrackerService:
                         "seen_cheaper_pct": row.seen_cheaper_pct,
                         "lowest_unit_price_sek": row.lowest_unit_price_sek,
                         "in_stock": row.in_stock,
+                        # The CHANNEL caveat: the store flagged this campaign as one its
+                        # shelf may not carry. An agent answering "what should I buy, and
+                        # where" must not send someone to a till on an online-only price.
+                        "offer_online_only": row.offer_online_only,
                     }
                     for row in rows
                 ]
