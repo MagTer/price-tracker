@@ -27,6 +27,12 @@ venv/
 target/
 vendor/
 *.log
+# Exception: the ICA night probe's run log is EVIDENCE, not runtime noise. 215 bytes
+# recording that all five cron runs logged 4 rows each — which is what separates "one
+# product 404'd at 03:00" from "that run partly failed". The blanket *.log rule silently
+# dropped it from the commit that moved the experiment in (2026-09-06); `git add -A`
+# said nothing.
+!docs/experiments/ica-night-probe/cron.log
 coverage/
 .cache/
 tmp/
