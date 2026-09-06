@@ -1,0 +1,24 @@
+{"run": "07-28 08:17 UTC", "at_utc": "2026-07-28T08:17:06+00:00", "label": "Bregott Maxi", "status": 200, "price": 39.9, "offer": null, "offer_details": null}
+{"run": "07-28 08:17 UTC", "at_utc": "2026-07-28T08:17:40+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "07-28 08:17 UTC", "at_utc": "2026-07-28T08:18:22+00:00", "label": "Falukorv Maxi", "status": 200, "price": 37.65, "offer": null, "offer_details": null}
+{"run": "07-28 08:17 UTC", "at_utc": "2026-07-28T08:19:03+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
+{"run": "08-02 20:30 UTC", "at_utc": "2026-08-02T20:30:01+00:00", "label": "Bregott Maxi", "status": 200, "price": 39.9, "offer": null, "offer_details": null}
+{"run": "08-02 20:30 UTC", "at_utc": "2026-08-02T20:30:33+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "08-02 20:30 UTC", "at_utc": "2026-08-02T20:31:08+00:00", "label": "Falukorv Maxi", "status": 200, "price": 37.65, "offer": null, "offer_details": null}
+{"run": "08-02 20:30 UTC", "at_utc": "2026-08-02T20:31:52+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
+{"run": "08-02 22:15 UTC", "at_utc": "2026-08-02T22:15:01+00:00", "label": "Bregott Maxi", "status": 200, "price": 48.95, "offer": null, "offer_details": null}
+{"run": "08-02 22:15 UTC", "at_utc": "2026-08-02T22:15:41+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "08-02 22:15 UTC", "at_utc": "2026-08-02T22:16:12+00:00", "label": "Falukorv Maxi", "status": 200, "price": 37.65, "offer": null, "offer_details": null}
+{"run": "08-02 22:15 UTC", "at_utc": "2026-08-02T22:16:51+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
+{"run": "08-02 23:00 UTC", "at_utc": "2026-08-02T23:00:01+00:00", "label": "Bregott Maxi", "status": 200, "price": 48.95, "offer": null, "offer_details": null}
+{"run": "08-02 23:00 UTC", "at_utc": "2026-08-02T23:00:37+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "08-02 23:00 UTC", "at_utc": "2026-08-02T23:01:13+00:00", "label": "Falukorv Maxi", "status": 200, "price": 37.65, "offer": null, "offer_details": null}
+{"run": "08-02 23:00 UTC", "at_utc": "2026-08-02T23:01:57+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
+{"run": "08-03 01:00 UTC", "at_utc": "2026-08-03T01:00:01+00:00", "label": "Bregott Maxi", "status": 200, "price": 48.95, "offer": null, "offer_details": null}
+{"run": "08-03 01:00 UTC", "at_utc": "2026-08-03T01:00:38+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "08-03 01:00 UTC", "at_utc": "2026-08-03T01:01:07+00:00", "label": "Falukorv Maxi", "status": 404}
+{"run": "08-03 01:00 UTC", "at_utc": "2026-08-03T01:01:56+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
+{"run": "08-03 04:00 UTC", "at_utc": "2026-08-03T04:00:01+00:00", "label": "Bregott Maxi", "status": 200, "price": 48.95, "offer": null, "offer_details": null}
+{"run": "08-03 04:00 UTC", "at_utc": "2026-08-03T04:00:38+00:00", "label": "Bregott Björksätra", "status": 200, "price": 50.22, "offer": null, "offer_details": null}
+{"run": "08-03 04:00 UTC", "at_utc": "2026-08-03T04:01:09+00:00", "label": "Falukorv Maxi", "status": 200, "price": 37.65, "offer": null, "offer_details": null}
+{"run": "08-03 04:00 UTC", "at_utc": "2026-08-03T04:01:54+00:00", "label": "Köttbullar Björksätra", "status": 200, "price": 78.45, "offer": null, "offer_details": null}
