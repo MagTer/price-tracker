@@ -442,6 +442,46 @@ class TestPriceTrackerService:
         assert history[1]["offer_price_sek"] is None
 
     @pytest.mark.asyncio
+    async def test_get_price_history_carries_the_price_that_was_paid(
+        self, mock_session_factory: Mock
+    ) -> None:
+        """A campaign row carries BOTH numbers, and the paid one under its own key.
+
+        The portal's history chart drew `price_sek` in absolute mode, so a 132-pack bought
+        for 90,00 kr under a 129,00 kr ordinarie was plotted at 129,00 — ringed as a
+        campaign, contradicting the kr/enhet mode drawn from the same rows. The row now
+        states what was paid rather than leaving every client to re-derive it (Gotcha 4):
+        coalesce(offer, price) is pricing.effective_price and lives in one place.
+        """
+        mock_session = AsyncMock()
+        mock_session_factory.return_value.__aenter__.return_value = mock_session
+
+        on_offer = _make_price_point(price_sek=Decimal("129.00"), offer_price_sek=Decimal("90.00"))
+        plain = _make_price_point(price_sek=Decimal("129.00"))
+        mock_link = _make_link(package_size="132-pack", package_quantity=Decimal("132"))
+        mock_store = MagicMock()
+        mock_store.name = "Apohem"
+        mock_store.slug = "apohem"
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [
+            (on_offer, mock_link, mock_store),
+            (plain, mock_link, mock_store),
+        ]
+        mock_session.execute.return_value = mock_result
+
+        service = PriceTrackerService(mock_session_factory)
+        history = await service.get_price_history(str(uuid.uuid4()))
+
+        # The ordinarie stays on the wire — the observation table prints both columns.
+        assert history[0]["price_sek"] == 129.00
+        assert history[0]["effective_price_sek"] == 90.00
+        # Same basis as the computed kr/unit beside it: 90.00 / 132 = 0.68.
+        assert history[0]["unit_price_sek"] == 0.68
+        # No offer: the two are the same number, never None.
+        assert history[1]["effective_price_sek"] == 129.00
+
+    @pytest.mark.asyncio
     async def test_get_price_history_carries_the_keys_mcp_reads(
         self, mock_session_factory: Mock
     ) -> None:
@@ -549,6 +589,36 @@ class TestPriceTrackerService:
         assert needs_amount["needs_amount"] is True
         assert needs_amount["unit_price_sek"] is None
         assert needs_amount["price_sek"] == 59.90
+
+    @pytest.mark.asyncio
+    async def test_get_links_for_product_states_the_price_a_campaign_link_costs(
+        self, mock_session_factory: Mock
+    ) -> None:
+        """The links panel's own twin of the same row — both halves or neither.
+
+        `_link_payload` in api/admin.py and this method are the two hand-written builders of
+        one wire shape (CLAUDE.md, Gotcha 4). This is the row the links PANEL renders and
+        sorts, and it printed the ordinarie beside a kr/enhet computed from the offer.
+        """
+        mock_session = AsyncMock()
+        mock_session_factory.return_value.__aenter__.return_value = mock_session
+
+        store = MagicMock()
+        store.name = "Apohem"
+        store.slug = "apohem"
+        link = _make_link(package_size="132-pack", package_quantity=Decimal("132"))
+        point = _make_price_point(price_sek=Decimal("129.00"), offer_price_sek=Decimal("90.00"))
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [(link, store, point)]
+        mock_session.execute.return_value = mock_result
+
+        service = PriceTrackerService(mock_session_factory)
+        row = (await service.get_links_for_product(str(uuid.uuid4())))[0]
+
+        assert row["price_sek"] == 129.00  # ORDINARIE
+        assert row["effective_price_sek"] == 90.00  # what you pay, and what the cell shows
+        assert row["unit_price_sek"] == 0.68  # 90.00 / 132 — the same basis
 
     @pytest.mark.asyncio
     async def test_get_links_for_product_surfaces_quantity_mismatch(

@@ -263,6 +263,12 @@ def _link_payload(
             float(latest_price.price_sek) if latest_price and latest_price.price_sek else None
         ),
         "offer_price_sek": (as_float(latest_price.offer_price_sek) if latest_price else None),
+        # What the package COSTS today: coalesce(offer, price). The links panel prints this
+        # and sorts on it — it used to print `price_sek` beside a kr/enhet computed from the
+        # effective price, so a campaign link read "129 kr · 0,68 kr/st" (= 90/132), two
+        # cells about one link disagreeing by the whole discount while the campaign itself
+        # was nowhere on the row. pricing.effective_price is THE definition; never re-derive.
+        "effective_price_sek": (as_float(effective_price(latest_price)) if latest_price else None),
         # COMPUTED from the link's own quantity (D-03) — the comparable number.
         "unit_price_sek": rounded_unit_price(effective_price(latest_price), ps.package_quantity),
         # What the STORE printed (D-05) — display only, never sorted on. The measure rides

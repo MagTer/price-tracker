@@ -205,7 +205,10 @@ class PricePointResponse(BaseModel):
     store_slug: str
     package_size: str | None  # The link's printed label, e.g. "24-pack"
     package_quantity: float | None  # None => this link HAS no kr/unit; never coerce it to 0
-    price_sek: float | None
+    price_sek: float | None  # ORDINARIE — what the package costs outside a campaign
+    # What was PAID: coalesce(offer, price). The same basis unit_price_sek is computed on,
+    # so the chart's two modes cannot disagree about what happened on a campaign day.
+    effective_price_sek: float | None
     unit_price_sek: float | None  # COMPUTED — the sortable one
     store_unit_price_sek: float | None  # What the store printed — display only
     offer_price_sek: float | None

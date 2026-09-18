@@ -786,3 +786,79 @@ def test_the_stores_printed_jfr_pris_is_never_labelled_with_the_products_unit() 
         "unit (m.unit). Use m.printed_unit — the two are only equal when a measure was "
         "actually recorded, which is the minority of rows."
     )
+
+
+def test_the_absolute_price_chart_plots_what_was_paid() -> None:
+    """Both history-chart modes read the EFFECTIVE price — ordinarie plots nothing anyone paid.
+
+    kr/enhet has always been computed from coalesce(offer, price) server-side, while the
+    "Absolut pris" mode read `price_sek`. On a campaign day the two therefore disagreed:
+    a 132-pack bought for 90,00 kr was drawn at its ordinarie 129,00 — under a hollow ring
+    announcing the campaign, with the modal's own summary strip saying 0,68 kr/st (= 90/132)
+    two centimetres above it. Nothing raised; the curve was simply the wrong number, and it
+    is the mode whose figure a reader can check against the shelf.
+
+    BOTH halves are gated. The field selection alone is half a fix: if
+    groupHistoryByLink stops copying `effective_price_sek` into byDate, every absolute
+    point resolves to undefined -> y: null and the chart silently draws NOTHING, which no
+    runtime test sees — this modal is never reached by one.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+
+    field = re.search(r"const field = mode === 'absolute' \? '(\w+)' : '(\w+)';", js)
+    assert field is not None, (
+        "buildChartData no longer chooses its series field the way this gate reads it — "
+        "has the mode switch moved? The rule it guards still holds."
+    )
+    assert field.group(1) == "effective_price_sek", (
+        f"absolute mode plots {field.group(1)!r}. price_sek is the ORDINARIE: on a campaign "
+        "day that draws a price nobody paid, contradicting the kr/enhet mode, the summary "
+        "strip, the buy list and the shelf."
+    )
+    assert field.group(2) == "unit_price_sek", (
+        "kr/enhet mode must plot the computed unit price the domain sends."
+    )
+
+    group = re.search(r"function groupHistoryByLink\(rows\) \{(.*?)\n\}", js, re.DOTALL)
+    assert group is not None, "groupHistoryByLink is gone — what feeds the chart now?"
+    assert "effective_price_sek: row.effective_price_sek" in group.group(1), (
+        "groupHistoryByLink no longer carries effective_price_sek onto the observation, so "
+        "the absolute series resolves to undefined and the chart draws an empty canvas."
+    )
+
+
+def test_the_links_panel_prints_the_price_that_is_paid() -> None:
+    """The panel's Pris cell, the kr/enhet beside it and the sort key are one number.
+
+    That table has no erbjudande column: it renders the link's latest observation as a
+    price, a jfr-pris and a date. It printed `price_sek` — the ORDINARIE — in the price
+    cell while the jfr-pris beside it is computed from coalesce(offer, price), so a link on
+    campaign read "129 kr · 0,68 kr/st" (= 90/132), two cells about one link disagreeing by
+    the whole discount with nothing on the row mentioning a campaign.
+
+    The sort key is gated with the cell on purpose: a column that DISPLAYS the paid price
+    and ORDERS on the ordinarie puts rows in an order the reader cannot see, which is the
+    silent half of this fix.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+
+    header = re.search(r'<th class="sortable-col" data-sort="(\w+)">Pris</th>', js)
+    assert header is not None, "the links panel's Pris header is gone — has the table moved?"
+    assert header.group(1) == "effective_price_sek", (
+        f"the Pris column sorts on {header.group(1)!r} but shows the paid price — a row on "
+        "campaign then sorts by a number nobody can see in it."
+    )
+
+    cell = re.search(r"const paid = ([^;]+);", js)
+    assert cell is not None, "the links panel's price cell no longer resolves through `paid`."
+    assert cell.group(1).strip() == "r.effective_price_sek", (
+        "the links panel's price cell is back on a locally derived price. It must read the "
+        "domain's own coalesce(offer, price) off the wire — the same number it sorts on."
+    )
+
+    # The JS twin of pricing.effective_price is gone, and must stay gone: every link payload
+    # now carries the field, so a re-introduced helper is a second definition by construction.
+    assert "function effectivePrice(" not in js, (
+        "a JS effectivePrice() twin is back. Link payloads carry effective_price_sek from "
+        "the domain; a second definition here is the Gotcha-4 shape all over again."
+    )

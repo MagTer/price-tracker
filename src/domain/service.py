@@ -338,6 +338,12 @@ async def price_history_rows(
             # price_sek is NOT NULL — no truthiness test: 0.00 is a price, not a null.
             "price_sek": float(price_point.price_sek),
             "offer_price_sek": as_float(price_point.offer_price_sek),
+            # What was actually PAID that day - coalesce(offer, price), the SAME basis
+            # unit_price_sek is computed on. The chart's absolute mode read price_sek and
+            # therefore drew the ordinarie of a point it had just ringed as a campaign:
+            # 129,00 kr on a row every other surface in the app prices at 90,00. Never
+            # rebuild this in the client - pricing.effective_price is THE definition.
+            "effective_price_sek": as_float(effective_price(price_point)),
             "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
             "unit_price_sek": rounded_unit_price(
                 effective_price(price_point), product_store.package_quantity
@@ -480,6 +486,13 @@ class PriceTrackerService:
                             "offer_price_sek": (
                                 as_float(price_point.offer_price_sek) if price_point else None
                             ),
+                            # What the package COSTS today - coalesce(offer, price), the same
+                            # `effective` the kr/enhet below is computed from. The links panel
+                            # printed price_sek (the ORDINARIE) in the cell beside that
+                            # kr/enhet, so a link on campaign read "129 kr . 0,68 kr/st"
+                            # (= 90/132): two cells about one link disagreeing by the whole
+                            # discount, on a table with no erbjudande column to explain it.
+                            "effective_price_sek": as_float(effective),
                             # D-05, plus the measure it is printed in: the store's own
                             # unit, not the product's. Without it the links panel stacks
                             # ICA's kr/kg beside our kr/st as two bare numbers. None =

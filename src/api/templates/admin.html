@@ -1869,14 +1869,11 @@ function formatDay(iso) {
 
 function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
-// The price actually paid — the offer when there is one, else the ordinary price. The JS twin of
-// _effective_price() in api/admin.py. Used ONLY for display of the winning link's pack price:
-// unit_price_sek already arrives computed from this same effective price (D-03), and this
-// function must never be used to recompute a kr/unit.
-function effectivePrice(link) {
-    if (!link) return null;
-    return link.offer_price_sek != null ? link.offer_price_sek : link.price_sek;
-}
+// NOTE: the JS twin of pricing.effective_price is GONE. Every link payload now carries
+// `effective_price_sek` (coalesce(offer, price)) computed in the domain, so a link's paid
+// price is read, never re-derived here. The twin was harmless while it agreed; it became a
+// second definition the moment the wire needed one of its own to sort the links panel on.
+// `price_sek` on these rows is the ORDINARIE — use it only where that is what you mean.
 
 // A human label for the link's package: what the store called it, else the amount we hold.
 function packageLabel(link, unit) {
@@ -2090,15 +2087,16 @@ function productPriceHtml(product) {
     const best = bestUnitPrice(product);
     if (best) {
         const cls = best.offer_price_sek != null ? 'p-unit has-offer' : 'p-unit';
-        const parts = [best.store_name, packageLabel(best, unit), kr(effectivePrice(best))]
+        const parts = [best.store_name, packageLabel(best, unit), kr(best.effective_price_sek)]
             .filter(part => part != null);
         return `<div class="${cls}">${escapeHtml(unitKr(best.unit_price_sek, unit))}</div>`
              + `<div class="p-best">${escapeHtml(parts.join(' · '))}</div>`;
     }
-    const pricedLinks = links.filter(s => effectivePrice(s) != null);
+    const pricedLinks = links.filter(s => s.effective_price_sek != null);
     if (!pricedLinks.length) return `<div class="p-unit no-unit">${DASH}</div>`;
-    const cheapest = pricedLinks.reduce((a, b) => (effectivePrice(b) < effectivePrice(a) ? b : a));
-    return `<div class="p-unit no-unit">${escapeHtml(kr(effectivePrice(cheapest)))}</div>`
+    const cheapest = pricedLinks.reduce(
+        (a, b) => (b.effective_price_sek < a.effective_price_sek ? b : a));
+    return `<div class="p-unit no-unit">${escapeHtml(kr(cheapest.effective_price_sek))}</div>`
          + `<div class="p-best">${escapeHtml(cheapest.store_name)} &#183; jfr-pris saknas</div>`;
 }
 
@@ -2237,7 +2235,7 @@ function productMatchesStatus(p, status) {
     const links = p.stores || [];
     if (status === 'offer') return links.some(s => s.offer_price_sek != null);
     if (status === 'needs_amount') return links.some(s => s.needs_amount === true);
-    if (status === 'no_price') return !links.some(s => effectivePrice(s) != null);
+    if (status === 'no_price') return !links.some(s => s.effective_price_sek != null);
     if (status === 'broken') return links.some(s => s.is_broken === true);
     return true;
 }
@@ -3611,7 +3609,7 @@ function buildAmountGaps(rows) {
         const hint = link.scraped_package_quantity != null
             ? `sidan säger ${Number(link.scraped_package_quantity).toLocaleString('sv-SE', { maximumFractionDigits: 4 })} ${product.unit || ''} — bekräfta`
             : (link.package_size ? `sidan säger ${link.package_size}` : 'sidan säger inget antal');
-        const price = effectivePrice(link);
+        const price = link.effective_price_sek;
         html += `<div class="issue-row">
             <div class="issue-main">
                 <div class="issue-name">${escapeHtml(product.name)}</div>
@@ -4482,6 +4480,12 @@ function groupHistoryByLink(rows) {
             ? row.store_name + ' ' + row.package_size
             : row.store_name + ' (utan förpackningsmängd)';
         link.byDate[date] = {
+            // What was PAID that day, from the wire (coalesce(offer, price) — the domain's
+            // own definition). NOT price_sek: that is the ordinarie, and plotting it drew a
+            // campaign day at its pre-campaign price under a ring saying "erbjudande".
+            effective_price_sek: row.effective_price_sek,
+            // The ordinarie rides along for the tooltip on a ringed point — an offer's
+            // headline number means little without the price it is an offer against.
             price_sek: row.price_sek,
             unit_price_sek: row.unit_price_sek,
             // Which points the chart rings. A campaign is the whole reason a curve dips,
@@ -4555,7 +4559,11 @@ function buildChartData(rows, mode) {
         for (const date of Object.keys(link.byDate)) dateSet[date] = true;
     }
     const dates = Object.keys(dateSet).sort();
-    const field = mode === 'absolute' ? 'price_sek' : 'unit_price_sek';
+    // Both modes read the EFFECTIVE price: kr/unit is computed from it server-side, and
+    // absolute mode must answer the same question in kronor — what the package costs you
+    // today. They disagreed until v0.62.1, and the mode that was wrong is the one whose
+    // number a reader can check against the shelf.
+    const field = mode === 'absolute' ? 'effective_price_sek' : 'unit_price_sek';
 
     const datasets = links.map((link, index) => {
         const color = palette[index % palette.length];
@@ -4570,10 +4578,14 @@ function buildChartData(rows, mode) {
             product_store_id: link.product_store_id,
             label: link.label,
             data: dates.map((date) => {
-                const value = link.byDate[date][field];
+                const obs = link.byDate[date];
+                const value = obs[field];
                 return {
                     x: toTs(date),
-                    y: (typeof value === 'number' && isFinite(value)) ? value : null
+                    y: (typeof value === 'number' && isFinite(value)) ? value : null,
+                    // Chart.js ignores extra point properties; the tooltip reads this one
+                    // to name the ordinarie behind a ring. Only when there IS one.
+                    ordinary_sek: obs.is_offer === true ? obs.price_sek : null
                 };
             }),
             borderColor: color,
@@ -4830,9 +4842,20 @@ function renderPriceHistory() {
                             title: (items) => items.length
                                 ? new Date(items[0].parsed.x).toISOString().slice(0, 10)
                                 : '',
-                            label: (item) => item.dataset.label + ': '
-                                + formatSek(item.parsed.y) + ' '
-                                + (historyMode === 'unit' ? unitPriceHeading(unit) : 'kr')
+                            label: (item) => {
+                                const suffix = historyMode === 'unit'
+                                    ? unitPriceHeading(unit) : 'kr';
+                                let text = item.dataset.label + ': '
+                                    + formatSek(item.parsed.y) + ' ' + suffix;
+                                // A ring says "kampanj"; this says what it is a kampanj
+                                // against. Absolute mode only — the ordinarie is a package
+                                // price and has no kr/enhet reading here.
+                                const ordinary = item.raw && item.raw.ordinary_sek;
+                                if (historyMode === 'absolute' && typeof ordinary === 'number') {
+                                    text += ' (ordinarie ' + formatSek(ordinary) + ' kr)';
+                                }
+                                return text;
+                            }
                         }
                     }
                 },
@@ -5147,7 +5170,7 @@ function buildLinksTable(rows, unit) {
     let html = `<div class="links-table"><table><thead><tr>
         <th class="sortable-col" data-sort="store_name">Butik</th>
         <th>Förpackning</th>
-        <th class="sortable-col" data-sort="price_sek">Pris</th>
+        <th class="sortable-col" data-sort="effective_price_sek">Pris</th>
         <th class="sortable-col" data-sort="unit_price_sek">Jfr-pris (${escapeHtml(unitPriceHeading(unit))})</th>
         <th>Butiken anger</th>
         <th>Senast kollad</th>
@@ -5176,8 +5199,26 @@ function buildLinksTable(rows, unit) {
                 ? `<button class="action-btn needs-amount" data-link-action="packaging" data-id="${escapeHtml(r.product_store_id)}">saknar mängd</button>`
                 : '<span class="badge badge-warning">saknar mängd</span>')
             : (r.unit_price_sek != null
-                ? `<span class="unit-price">${escapeHtml(r.unit_price_sek.toFixed(2))} kr</span>`
+                // unitKr(), not toFixed(2) + ' kr': money is Swedish and to the öre here,
+                // and the figure carries the PRODUCT's measure — the same rule the history
+                // table was brought under in v0.54.0. This cell was the last holdout.
+                ? `<span class="unit-price">${escapeHtml(unitKr(r.unit_price_sek, unit))}</span>`
                 : '&#8212;');
+
+        // The price PAID, with the ordinarie under it when there is a campaign. This cell
+        // printed `price_sek` — the ordinarie — beside a jfr-pris computed from the
+        // effective price, so a link on offer read "129 kr · 0,68 kr/st" (= 90/132): two
+        // cells about one link disagreeing by the whole discount, with nothing on the row
+        // saying a campaign was running. The panel has no erbjudande column; this is it.
+        // From the wire: the column SORTS on effective_price_sek, and a cell drawn from
+        // one definition under a sort keyed on another is how a row ends up in the wrong
+        // place looking right.
+        const paid = r.effective_price_sek;
+        const priceCell = paid == null
+            ? '&#8212;'
+            : escapeHtml(kr(paid)) + (r.offer_price_sek != null && r.price_sek != null
+                ? `<div class="best-link">ordinarie ${escapeHtml(kr(r.price_sek))}</div>`
+                : '');
 
         // Repeated non-blocked failures on this URL (is_broken, domain/link_health.py).
         // Derived and self-clearing: one successful check removes it, so there is nothing
@@ -5195,7 +5236,7 @@ function buildLinksTable(rows, unit) {
         html += `<tr>
             <td>${storeLinkHtml(r.store_name, r.store_url)}${brokenBadge}</td>
             <td>${pkg}</td>
-            <td>${r.price_sek != null ? escapeHtml(r.price_sek) + ' kr' : '&#8212;'}</td>
+            <td>${priceCell}</td>
             <td>${unitCell}</td>
             <td class="store-says">${escapeHtml(storeSaysKr(r.store_unit_price_sek, r.store_unit_price_unit))}</td>
             <td>${r.checked_at ? escapeHtml(String(r.checked_at).slice(0, 10)) : '&#8212;'}

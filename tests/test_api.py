@@ -1130,6 +1130,36 @@ class TestComputedUnitPriceOnRead:
         assert link["needs_amount"] is False
         assert link["quantity_mismatch"] is False
 
+    def test_list_products_states_the_price_a_campaign_link_actually_costs(
+        self, client, mock_session
+    ):
+        """The link row carries the PAID price beside the ordinarie, not only the ordinarie.
+
+        The links panel prints this cell next to a kr/enhet computed from coalesce(offer,
+        price), so with only `price_sek` on the wire a link on campaign rendered "129 kr"
+        beside "0,68 kr/st" (= 90/132) — one link, two cells, disagreeing by the whole
+        discount, on a table with no erbjudande column to explain it. The panel also SORTS
+        on this key, which is why it is the domain's number and not re-derived in the client.
+        """
+        product, store = _product(), _store()
+        ps = _ps(product, store, package_quantity="132", package_size="132-pack")
+        pp = _pp(ps, price="129.00", offer="90.00")
+        mock_session.execute.side_effect = [
+            _scalars([product]),
+            _rows([(ps, store)]),
+            _scalars([pp]),
+            _rows([]),  # broken-links query (domain/link_health.py): no attempts recorded
+        ]
+
+        r = client.get("/products")
+        assert r.status_code == 200
+        link = r.json()[0]["stores"][0]
+
+        assert link["price_sek"] == pytest.approx(129.00)  # ORDINARIE — the struck-out one
+        assert link["effective_price_sek"] == pytest.approx(90.00)  # what you pay
+        # The same basis the comparable number uses: 90.00 / 132 = 0.68.
+        assert link["unit_price_sek"] == pytest.approx(0.68)
+
     def test_list_products_sets_needs_amount_on_a_link_without_a_quantity(
         self, client, mock_session
     ):
