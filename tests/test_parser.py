@@ -262,6 +262,43 @@ class TestPriceParser:
             mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_every_llm_call_sends_the_price_sorted_fp8_routing_block(self) -> None:
+        """The request body carries OpenRouter's `provider` block, spelled out here.
+
+        Spelled out rather than imported: a test that reads the constant it checks would
+        pass whatever the constant said. Before 2026-09-23 the body had no provider block
+        at all, so neither the fp8 floor nor zdr/data_collection was ever stated.
+        """
+        parser = PriceParser()
+        mock_response_data = {"choices": [{"message": {"content": json.dumps({"price": 1})}}]}
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_response_data
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post.return_value = mock_response
+
+            await parser._call_model_json("p", "deepseek/deepseek-v4-flash")
+            body = mock_client.post.call_args.kwargs["json"]
+            assert body["provider"] == {
+                "sort": "price",
+                "quantizations": ["fp8", "fp16", "bf16", "fp32"],
+                "zdr": True,
+                "data_collection": "deny",
+                "require_parameters": True,
+            }
+            # `unknown` would admit every endpoint that does not state its precision.
+            assert "unknown" not in body["provider"]["quantizations"]
+
+            # A caller mutating one request's body must not reach the next request.
+            body["provider"]["quantizations"].append("fp4")
+            await parser._call_model_json("p", "deepseek/deepseek-v4-flash")
+            again = mock_client.post.call_args.kwargs["json"]
+            assert again["provider"]["quantizations"] == ["fp8", "fp16", "bf16", "fp32"]
+
+    @pytest.mark.asyncio
     async def test_extract_with_model_survives_comma_and_currency_price(self) -> None:
         """A model that returns "32,90 kr" must not raise — the old bare Decimal() did.
 

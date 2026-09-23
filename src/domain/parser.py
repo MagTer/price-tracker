@@ -20,7 +20,7 @@ from domain.extractors.lyko import LykoExtractor
 from domain.extractors.rusta import RustaExtractor
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
-from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS
+from infra.llm import OPENROUTER_BASE_URL, OPENROUTER_HEADERS, OPENROUTER_PROVIDER_ROUTING
 
 __all__ = ["PriceExtractionResult", "PriceParser", "ProductMetadata"]
 
@@ -657,6 +657,10 @@ Only output the JSON object, no explanation or markdown."""
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
+                    "provider": {
+                        **OPENROUTER_PROVIDER_ROUTING,
+                        "quantizations": list(OPENROUTER_PROVIDER_ROUTING["quantizations"]),
+                    },
                 },
                 headers=OPENROUTER_HEADERS,
             )

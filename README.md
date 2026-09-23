@@ -49,7 +49,10 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
      prices, no LLM cost.
   4. **LLM cascade** via OpenRouter as fallback. Extractions below
      `PRICE_PARSER_MIN_CONFIDENCE` are discarded (a gap beats a hallucinated
-     price).
+     price). Every call asks OpenRouter for the cheapest zero-data-retention
+     endpoint quantized at fp8 or better (`OPENROUTER_PROVIDER_ROUTING` in
+     `src/infra/llm.py`), so a model whose endpoints do not state their
+     quantization answers "No endpoints found" and the cascade moves on.
 - **MCP server** (`fastmcp`) mounted at `/mcp/` exposing 4 tools:
   `check_price`, `find_deals`, `compare_stores`, `list_products`.
 
