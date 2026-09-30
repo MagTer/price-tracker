@@ -12,6 +12,10 @@ carries a valid assertion with NO email claim, so "verified" does not imply "a p
 The verification is the one Cloudflare documents: RS256 only, signed by a key from the
 team's certs endpoint, `aud` containing this application's AUD tag, `iss` the team
 domain, and not expired.
+
+A SECOND COPY lives in MagTer/logsink-shim `src/logsink_shim/cf_access.py`, verbatim
+from 0db887e (home-server APPLOGS-MIGRATION-DESIGN A3): the two apps release separately
+and share no package. A fix here belongs there in the same sitting.
 """
 
 import logging
