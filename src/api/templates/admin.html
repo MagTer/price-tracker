@@ -1987,6 +1987,16 @@ function renderSchedulerFooter(sched) {
         cls = 'is-paused';
         label = 'Pausad till ' + pausedUntil.toLocaleTimeString('sv-SE', {hour: '2-digit', minute: '2-digit'});
         title = 'Bakgrundskontroller pausade — förlängs varje gång du lägger till en produkt';
+    } else if (sched.role === 'disabled') {
+        // Off by configuration (SCHEDULER_ENABLED): a second installation, such as a lab
+        // copy of the data. Said outright, so it is never read as "waiting for Monday".
+        cls = 'is-off';
+        label = 'Schemaläggare avstängd';
+        title = 'Avstängd i konfigurationen: inga bakgrundskontroller, larm eller inköpslistor från den här installationen';
+    } else if (sched.role === 'standby') {
+        cls = 'is-paused';
+        label = 'Schemaläggare vilar';
+        title = 'En annan instans mot samma databas kör kontrollerna';
     } else if (sched.running) {
         label = 'Schemaläggare aktiv';
     } else {

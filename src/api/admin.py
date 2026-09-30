@@ -3035,7 +3035,7 @@ async def scheduler_status(
     """
     scheduler = request.app.state.scheduler
     status: dict[str, Any] = (
-        {"running": False, "last_summary_date": None, "stats": None}
+        {"running": False, "enabled": None, "role": None, "last_summary_date": None, "stats": None}
         if scheduler is None
         else scheduler.get_status()
     )

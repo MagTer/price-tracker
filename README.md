@@ -106,6 +106,7 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
 | `SUMMARY_EMAIL` | no | falls back to `ALLOWED_ENTRA_EMAIL` | Recipient of the Monday buy-list email. Set it when the admin UPN is not a deliverable address. |
+| `SCHEDULER_ENABLED` | no | on | `false` switches this installation's background work off: no scheduled checks, alerts or buy-list mail (manual checks still work). For a second copy of the data, such as a lab. Anything but a true/false word stops the app at startup. Instances sharing ONE database need no setting: a Postgres advisory lock lets exactly one of them run the scheduler. |
 | `AUTH_SOURCE` | no | `iap-header` | Which ingress to believe: `iap-header` (read `X-Auth-Request-Email`) or `cf-access` (verify `Cf-Access-Jwt-Assertion`). Anything else ⇒ everyone is denied. |
 | `CF_ACCESS_TEAM_DOMAIN` | with `cf-access` | `""` (deny all) | The Access team domain, e.g. `yourteam.cloudflareaccess.com`: the issuer, and where the signing keys are fetched (`/cdn-cgi/access/certs`, cached for an hour). |
 | `CF_ACCESS_AUD` | with `cf-access` | `""` (deny all) | The AUD tag of the Access application in front of the portal. A token for any other application is refused. |

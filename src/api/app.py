@@ -12,8 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from api.admin import router as admin_router
-from domain.scheduler import PriceCheckScheduler
+from domain.scheduler import PriceCheckScheduler, scheduler_enabled_from_env
 from infra.db import async_session_factory, engine
+from infra.leader_lock import PostgresLeaderLock
 from infra.logbuffer import install as install_log_buffer
 from infra.providers import (
     get_block_registry,
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI):
                 "OPENROUTER_API_KEY not set - LLM price extraction and enrichment "
                 "are effectively disabled until it is configured"
             )
+        # Read before anything starts: an unrecognised value raises here and the app does
+        # not come up, rather than guessing which way the operator meant it.
+        scheduler_enabled = scheduler_enabled_from_env()
         fetcher = get_fetcher()
         email_service = get_email_service()
         # Only pass email_service if it is actually configured
@@ -65,6 +69,9 @@ async def lifespan(app: FastAPI):
             # THE veckoblad cross-check. Shared so the butik's erbjudandesida is fetched
             # once per local day no matter how many ICA links come due.
             leaflet=get_leaflet(),
+            # One scheduler per database, whatever the replica count (infra/leader_lock.py).
+            leader_lock=PostgresLeaderLock(engine),
+            enabled=scheduler_enabled,
         )
         await scheduler.start()
         app.state.scheduler = scheduler
@@ -94,13 +101,18 @@ def create_app() -> FastAPI:
             db_ok = False
 
         scheduler = getattr(app.state, "scheduler", None)
-        scheduler_running = bool(scheduler and scheduler.get_status()["running"])
+        sched_status = scheduler.get_status() if scheduler else {}
+        scheduler_running = bool(sched_status.get("running"))
 
         return JSONResponse(
             {
                 "status": "ok" if db_ok else "degraded",
                 "db": db_ok,
                 "scheduler_running": scheduler_running,
+                # Off by configuration, or on standby behind another instance: both are
+                # healthy, and neither may read as a dead scheduler.
+                "scheduler_enabled": sched_status.get("enabled"),
+                "scheduler_role": sched_status.get("role"),
             },
             # 503 makes the container healthcheck surface a dead DB in Dokploy
             status_code=200 if db_ok else 503,

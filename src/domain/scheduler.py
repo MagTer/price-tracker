@@ -31,6 +31,7 @@ from domain.protocols import (
     ICheckAttemptLog,
     IEmailService,
     IFetcher,
+    ILeaderLock,
     ILeafletLookup,
     IRateLimiter,
 )
@@ -58,6 +59,33 @@ logger = logging.getLogger(__name__)
 SUMMARY_EMAIL = os.getenv("SUMMARY_EMAIL") or os.getenv("ALLOWED_ENTRA_EMAIL", "")
 
 
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def scheduler_enabled_from_env(raw: str | None = None) -> bool:
+    """SCHEDULER_ENABLED: whether this INSTALLATION runs background work at all.
+
+    For a second installation with its own database, such as a lab copy of production's
+    data: it would otherwise check every store beside production, from the same public
+    IP, and the leader lock cannot see it (each database has its own lock). Unset means
+    on, since production must not need a setting to keep working.
+
+    An unrecognised value RAISES, which stops the app at startup. Read as "off", a typo
+    would silently stop production's checks, alerts and buy-list mail; read as "on", it
+    would silently defeat the switch. Neither may pass quietly.
+    """
+    value = os.getenv("SCHEDULER_ENABLED") if raw is None else raw
+    if value is None or value.strip() == "":
+        return True
+    normalised = value.strip().lower()
+    if normalised in _TRUE:
+        return True
+    if normalised in _FALSE:
+        return False
+    raise ValueError(f"SCHEDULER_ENABLED={value!r} is neither true nor false")
+
+
 class PriceCheckScheduler:
     """Background scheduler for periodic price checks."""
 
@@ -78,6 +106,8 @@ class PriceCheckScheduler:
         block_registry: IBlockRegistry | None = None,
         attempt_log: ICheckAttemptLog | None = None,
         leaflet: ILeafletLookup | None = None,
+        leader_lock: ILeaderLock | None = None,
+        enabled: bool = True,
     ) -> None:
         self.session_factory = session_factory
         self.fetcher = fetcher
@@ -110,6 +140,15 @@ class PriceCheckScheduler:
         self.notifier: PriceNotifier | None = None
         if email_service is not None:
             self.notifier = PriceNotifier(email_service)
+        # Whether this installation runs background work (SCHEDULER_ENABLED, decided in
+        # app.py). Off, start() does nothing and the status says so, so "off" can never
+        # be mistaken for "waiting for the next check day".
+        self.enabled = enabled
+        # One scheduler per DATABASE (infra/leader_lock.py). None in tests = always the
+        # leader; app.py passes the Postgres lock. Held or not, it is asked every cycle.
+        self.leader_lock = leader_lock
+        # "leader" / "standby" once the first cycle has asked the lock; None before that.
+        self._role: str | None = None
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # When set, background checks are skipped until this time (auto-cleared once it passes).
@@ -137,6 +176,12 @@ class PriceCheckScheduler:
 
     async def start(self) -> None:
         """Start the background scheduler."""
+        if not self.enabled:
+            logger.warning(
+                "Price check scheduler DISABLED (SCHEDULER_ENABLED): no background checks, "
+                "alerts or buy-list mail from this instance"
+            )
+            return
         if self._running:
             logger.warning("Scheduler already running")
             return
@@ -154,6 +199,13 @@ class PriceCheckScheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self.leader_lock is not None:
+            # Released at once rather than when the connection times out, so a standby
+            # (the next pod of a rollout) takes over on its next cycle.
+            try:
+                await self.leader_lock.release()
+            except Exception as e:
+                logger.warning(f"Leader lock release failed: {e}")
         logger.info("Price check scheduler stopped")
 
     def pause_for(self, duration: timedelta) -> datetime:
@@ -172,6 +224,10 @@ class PriceCheckScheduler:
     async def _run_loop(self) -> None:
         """Main scheduler loop."""
         while self._running:
+            if not await self._hold_leadership():
+                await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
+                continue
+
             try:
                 await self._check_due_products()
             except Exception as e:
@@ -183,6 +239,34 @@ class PriceCheckScheduler:
                 logger.error(f"Buy-list summary error: {e}", exc_info=True)
 
             await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
+
+    async def _hold_leadership(self) -> bool:
+        """Whether THIS instance does the cycle's work. Logs only when the answer changes.
+
+        A lock that cannot be asked (database down) means standby for this cycle: doing the
+        work unguarded is exactly the double-checking the lock exists to prevent, and the
+        work needs the database anyway.
+        """
+        if self.leader_lock is None:
+            leader = True
+        else:
+            try:
+                leader = await self.leader_lock.acquire()
+            except Exception as e:
+                logger.warning(
+                    f"Leader lock unavailable ({type(e).__name__}); standing by this cycle"
+                )
+                leader = False
+        role = "leader" if leader else "standby"
+        if role != self._role:
+            if leader:
+                logger.info("Scheduler is the LEADER: this instance runs the checks and the mail")
+            else:
+                logger.warning(
+                    "Scheduler on STANDBY: another instance holds the leader lock for this database"
+                )
+            self._role = role
+        return leader
 
     async def _check_due_products(self) -> None:
         """Check all products that are due for a price check.
@@ -887,6 +971,9 @@ class PriceCheckScheduler:
         """Get scheduler status and statistics."""
         return {
             "running": self._running,
+            "enabled": self.enabled,
+            # disabled / leader / standby, or None before the first cycle has asked.
+            "role": "disabled" if not self.enabled else self._role,
             "paused_until": self._paused_until.isoformat() if self._paused_until else None,
             # Which stores are currently walled off, and how deep into the escalation they are.
             # Without this the only evidence of a live block is a log line that scrolls away.
