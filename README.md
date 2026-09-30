@@ -64,6 +64,13 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
   the user once and forwards `X-Auth-Request-Email`. The app requires that
   header on every request; without it (or without `ALLOWED_ENTRA_EMAIL` set at
   all) it fails closed with 403.
+- **Or: Cloudflare Access (`AUTH_SOURCE=cf-access`, v0.63.0).** Behind Access the
+  app verifies the signed `Cf-Access-Jwt-Assertion` itself (RS256, the team's
+  published keys, this application's AUD, the team as issuer, not expired) and
+  takes the email from it. `X-Auth-Request-Email` and Access's own plain email
+  header are then ignored. An assertion with no email (a service token) names
+  nobody and gets 403. Exactly one source is believed at a time, and an unknown
+  `AUTH_SOURCE` fails closed.
 - **Two roles, one variable (v0.29.0).** `ALLOWED_ENTRA_EMAIL` is the **admin**
   — the only identity that may change anything. Anyone else the upstream proxy
   let through is a **reader**: every `GET` (products, deals, watches, history,
@@ -99,6 +106,9 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
 | `SUMMARY_EMAIL` | no | falls back to `ALLOWED_ENTRA_EMAIL` | Recipient of the Monday buy-list email. Set it when the admin UPN is not a deliverable address. |
+| `AUTH_SOURCE` | no | `iap-header` | Which ingress to believe: `iap-header` (read `X-Auth-Request-Email`) or `cf-access` (verify `Cf-Access-Jwt-Assertion`). Anything else ⇒ everyone is denied. |
+| `CF_ACCESS_TEAM_DOMAIN` | with `cf-access` | `""` (deny all) | The Access team domain, e.g. `yourteam.cloudflareaccess.com`: the issuer, and where the signing keys are fetched (`/cdn-cgi/access/certs`, cached for an hour). |
+| `CF_ACCESS_AUD` | with `cf-access` | `""` (deny all) | The AUD tag of the Access application in front of the portal. A token for any other application is refused. |
 | `INGRESS_SHARED_SECRET` | no | `""` (off) | Defense in depth: when set, every request must carry the same value in `X-Ingress-Auth` (inject it in your reverse proxy). Closes the direct-container-access hole in header trust. Enable on both sides at once. |
 | `WILLYS_OFFLINE_STORE_ID` | no | `2211` | Willys butik id for `/blad/analyze` (butiksblad offers are store-scoped). |
 | `QUICKADD_RATE_LIMIT_DELAY` | no | `5` | Seconds between interactive fetches to one store (quick-add preview, manual re-check). |
@@ -122,8 +132,9 @@ everything a second deployment needs.
    supported stores (ICA, Willys, Apotea, Med24, Doz, Kronans Apotek, Apohem, Rusta,
    Clas Ohlson, Lyko).
 3. **Auth:** the app does NOT do login itself. It trusts the `X-Auth-Request-Email`
-   header from your reverse proxy (any forward-auth setup works — oauth2-proxy, Authelia,
-   Cloudflare Access…) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:
+   header from your reverse proxy (any forward-auth setup works — oauth2-proxy,
+   Authelia…), or behind Cloudflare Access verifies Access's JWT instead
+   (`AUTH_SOURCE=cf-access`, see Security model) and compares it against `ALLOWED_ENTRA_EMAIL` (despite the name:
    whatever email your IdP forwards). That address is the admin; anyone else your proxy
    authenticates gets read-only access, so **your proxy's allowlist is the membership
    boundary** — scope it before pointing it at this app. **Never expose the app without

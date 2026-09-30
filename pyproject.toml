@@ -1,7 +1,7 @@
 [project]
 name = "price-tracker"
 # The released tag, kept in step with it on purpose: this said 0.1.0 while prod ran v0.3.2.
-version = "0.62.1"
+version = "0.63.0"
 description = "Standalone Swedish grocery and pharmacy price tracker (extracted from ai-agent-platform)"
 authors = [{ name = "Magnus Ternstrom", email = "claude@falle.se" }]
 readme = "README.md"
@@ -23,6 +23,11 @@ dependencies = [
     "fastapi (>=0.111,<0.112)",
     "uvicorn[standard] (>=0.30,<0.31)",
     "fastmcp (>=2.0,<3.0)",
+    # Verifies Cloudflare Access's JWT (api/cf_access.py). Already in the lock as
+    # authlib's dependency (via fastmcp) at the version this range admits, so declaring
+    # it adds no code to the image: it only stops the auth path from resting on a
+    # transitive install that a fastmcp upgrade could drop.
+    "joserfc (>=1.7,<2.0)",
 ]
 
 [tool.poetry]

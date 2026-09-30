@@ -1,7 +1,14 @@
-"""IAP header trust auth dependency, and the admin/reader role split.
+"""Who the caller is, from the ingress in front of the app, and the admin/reader split.
 
-Reads X-Auth-Request-Email forwarded by an upstream Identity-Aware Proxy.
-No in-app OIDC client — the proxy terminates Entra OIDC and forwards the email.
+Two ingresses, chosen by AUTH_SOURCE, and exactly one is trusted at a time:
+
+* ``iap-header`` (default) — Dokploy: oauth2-proxy forwards X-Auth-Request-Email.
+* ``cf-access`` — the Kubernetes cluster behind Cloudflare Access: the email comes
+  from a VERIFIED Cf-Access-Jwt-Assertion (api/cf_access.py). X-Auth-Request-Email is
+  then ignored, since nothing in front of the app sets it and anyone could.
+
+No in-app OIDC client either way: the ingress terminates Entra and the app reads what
+it asserts.
 
 Two roles, decided by ONE env var:
 
@@ -19,10 +26,20 @@ rewrites 401-403 into the oauth2-proxy sign-in response body while KEEPING the
 """
 
 import hmac
+import logging
 import os
 from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, Request, status
+
+from api.cf_access import AccessKeyCache, AccessTokenError, verify_access_jwt
+
+logger = logging.getLogger(__name__)
+
+AUTH_SOURCES = frozenset({"iap-header", "cf-access"})
+
+# One cache per process: the keys are the team's, not the request's.
+_access_keys = AccessKeyCache()
 
 # Methods that cannot change state. Everything else is admin-only — see
 # require_admin_for_writes. Deny-by-default: the rule is keyed on the METHOD, so a
@@ -63,9 +80,48 @@ def _configured_ingress_secret() -> str:
     return os.getenv("INGRESS_SHARED_SECRET", "")
 
 
+def _configured_auth_source() -> str:
+    """Which ingress to believe, read per request like the other settings."""
+    return os.getenv("AUTH_SOURCE", "iap-header")
+
+
+def _forbidden(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def _email_from_access(assertion: str | None) -> str:
+    """The caller's email from a verified Access assertion, or 403.
+
+    A service-token assertion verifies and carries no email (measured, home-server
+    STATEFUL-APPS U2): that caller is a machine, and neither the admin nor a reader.
+    """
+    team = os.getenv("CF_ACCESS_TEAM_DOMAIN", "")
+    audience = os.getenv("CF_ACCESS_AUD", "")
+    if not team or not audience:
+        # Fail closed: without both there is nothing to verify against.
+        raise _forbidden("CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD must be configured")
+    if not assertion:
+        raise _forbidden("Missing Cf-Access-Jwt-Assertion header")
+    try:
+        claims = verify_access_jwt(
+            assertion, team_domain=team, audience=audience, keys=_access_keys
+        )
+    except AccessTokenError as exc:
+        # The reason is logged and never returned: it would tell a forger which check
+        # to aim at. It never contains the token.
+        logger.warning("Access assertion refused: %s", exc)
+        raise _forbidden("Invalid Cf-Access-Jwt-Assertion") from None
+    email = claims.get("email")
+    if not isinstance(email, str) or not email:
+        logger.warning("Access assertion without an email refused (service token?)")
+        raise _forbidden("Access assertion carries no user identity")
+    return email
+
+
 def get_principal(
     x_auth_request_email: str | None = Header(None, alias="X-Auth-Request-Email"),
     x_ingress_auth: str | None = Header(None, alias="X-Ingress-Auth"),
+    cf_access_jwt_assertion: str | None = Header(None, alias="Cf-Access-Jwt-Assertion"),
 ) -> Principal:
     """Resolve the caller from the upstream IAP header.
 
@@ -73,9 +129,10 @@ def get_principal(
         The caller's Principal (admin if the email matches ALLOWED_ENTRA_EMAIL).
 
     Raises:
-        HTTPException 403: no admin configured (fail closed), no header at all —
-            the latter means the request did not come through the ingress — or a
-            configured ingress secret that the request does not carry.
+        HTTPException 403: no admin configured (fail closed), an unknown
+            AUTH_SOURCE, no identity from the configured ingress (no header, or an
+            Access assertion that does not verify or names no user), or a configured
+            ingress secret that the request does not carry.
     """
     admin_email = _configured_admin_email()
     if not admin_email:
@@ -96,16 +153,19 @@ def get_principal(
             detail="Missing or invalid ingress credential",
         )
 
-    if not x_auth_request_email:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing X-Auth-Request-Email header",
-        )
+    source = _configured_auth_source()
+    if source not in AUTH_SOURCES:
+        # A typo must not fall back to the header anyone can send.
+        raise _forbidden("AUTH_SOURCE not recognised")
 
-    return Principal(
-        email=x_auth_request_email,
-        is_admin=x_auth_request_email.lower() == admin_email.lower(),
-    )
+    if source == "cf-access":
+        email = _email_from_access(cf_access_jwt_assertion)
+    else:
+        if not x_auth_request_email:
+            raise _forbidden("Missing X-Auth-Request-Email header")
+        email = x_auth_request_email
+
+    return Principal(email=email, is_admin=email.lower() == admin_email.lower())
 
 
 def require_auth(principal: Principal = Depends(get_principal)) -> str:
