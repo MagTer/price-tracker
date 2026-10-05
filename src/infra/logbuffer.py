@@ -13,6 +13,7 @@ access spam stays out and only the app's own business events land here.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 from datetime import UTC, datetime
@@ -71,6 +72,44 @@ class RingBufferLogHandler(logging.Handler):
             self._records.clear()
 
 
+class JsonLineFormatter(logging.Formatter):
+    """One JSON object per record, so the platform's log store reads the level as a field.
+
+    Production collects stdout with vlagent into the home-server platform's logs-infra
+    store. vlagent makes fields of JSON lines (and of klog) only; a text line such as
+    `2026-10-05 22:07:03,103 INFO     mcp.server…` stays one opaque string, and Grafana
+    showed every price-tracker row at level "unknown" (measured 2026-10-05: 36,565 rows
+    in 7 d, none with a level). The key names are the ones the collector looks for:
+    `time` becomes the row's timestamp, `msg` its message, and `level` is what Grafana's
+    VictoriaLogs datasource reads a level from.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict[str, object] = {
+            "time": datetime.fromtimestamp(record.created, tz=UTC)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        # A traceback inside the record, not as continuation lines: each physical line is
+        # a separate row in the log store, and a traceback's lines lose their level.
+        if record.exc_info:
+            entry["exc"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            entry["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(entry, ensure_ascii=False, default=str)
+
+
+# uvicorn gives these two loggers handlers of its own, with text formats ("INFO:     …"),
+# and stops them propagating. Emptied and propagating, their records reach the root
+# console handler and come out as JSON like the app's. They still never reach the ring
+# buffer, which is attached to the app's loggers only. `uvicorn.error` has no handler of
+# its own and propagates to `uvicorn`.
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.access")
+
+
 _buffer: RingBufferLogHandler | None = None
 
 
@@ -98,14 +137,23 @@ def ensure_console_logging(level: int = logging.INFO) -> None:
     to. Seven days of prod logs contained no app line at all — only uvicorn access logs.
 
     Attaching to root (not to the app loggers) keeps one console handler for the whole
-    process instead of one per logger, so nothing is printed three times.
+    process instead of one per logger, so nothing is printed three times. Its lines are
+    JSON (JsonLineFormatter says why), and uvicorn's own loggers are routed to it so the
+    access log is JSON too.
     """
     root = logging.getLogger()
+    # uvicorn configures its loggers before it imports the app (0.30.6, config.py:
+    # configure_logging() in Config.__init__, import_from_string in load()), so by the
+    # time this runs, at import of api.app, there is something to take over.
+    for name in _UVICORN_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.handlers.clear()
+        lg.propagate = True
     if any(isinstance(h, logging.StreamHandler) for h in root.handlers):
         return
     handler = logging.StreamHandler()
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s"))
+    handler.setFormatter(JsonLineFormatter())
     root.addHandler(handler)
     # Root defaults to WARNING; INFO records would be dropped before reaching the handler.
     if root.level == logging.NOTSET or root.level > level:

@@ -183,3 +183,94 @@ class TestConsoleLoggingSurvivesTheRingBuffer:
             assert len(streams) == 1
         finally:
             self._restore_root(saved)
+
+
+class TestConsoleLinesAreJson:
+    """Production's log store makes fields of JSON lines only; text lines read level "unknown"."""
+
+    def _clean(self):
+        root = logging.getLogger()
+        saved = (
+            list(root.handlers),
+            root.level,
+            {
+                n: (list(logging.getLogger(n).handlers), logging.getLogger(n).propagate)
+                for n in ("uvicorn", "uvicorn.access")
+            },
+        )
+        root.handlers.clear()
+        root.setLevel(logging.WARNING)
+        return saved
+
+    def _restore(self, saved):
+        handlers, level, uv = saved
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.handlers.extend(handlers)
+        root.setLevel(level)
+        for name, (hs, prop) in uv.items():
+            lg = logging.getLogger(name)
+            lg.handlers.clear()
+            lg.handlers.extend(hs)
+            lg.propagate = prop
+
+    def _lines(self, err: str) -> list[dict]:
+        import json
+
+        return [json.loads(line) for line in err.splitlines() if line.strip()]
+
+    def test_an_app_record_is_one_json_line_with_level_and_msg(self, capsys) -> None:
+        from infra.logbuffer import ensure_console_logging
+
+        saved = self._clean()
+        try:
+            ensure_console_logging()
+            logging.getLogger("infra.fetcher").warning("Bot wall från %s", "ica.se")
+            (line,) = self._lines(capsys.readouterr().err)
+            assert line["level"] == "WARNING"
+            assert line["msg"] == "Bot wall från ica.se"
+            assert line["logger"] == "infra.fetcher"
+            assert line["time"].endswith("Z")
+        finally:
+            self._restore(saved)
+
+    def test_a_traceback_stays_inside_its_record(self, capsys) -> None:
+        from infra.logbuffer import ensure_console_logging
+
+        saved = self._clean()
+        try:
+            ensure_console_logging()
+            try:
+                raise ValueError("boom")
+            except ValueError:
+                logging.getLogger("domain.service").exception("check failed")
+            (line,) = self._lines(capsys.readouterr().err)
+            assert line["level"] == "ERROR"
+            assert "ValueError: boom" in line["exc"]
+        finally:
+            self._restore(saved)
+
+    def test_uvicorns_loggers_come_out_as_json_through_root(self, capsys) -> None:
+        import logging.config
+
+        from uvicorn.config import LOGGING_CONFIG
+
+        from infra.logbuffer import ensure_console_logging
+
+        saved = self._clean()
+        try:
+            # What uvicorn does before it imports the app: text handlers, no propagation.
+            logging.config.dictConfig(LOGGING_CONFIG)
+            ensure_console_logging()
+            logging.getLogger("uvicorn.error").info("Application startup complete.")
+            logging.getLogger("uvicorn.access").info(
+                '%s - "%s %s HTTP/%s" %d', "10.0.0.1:5", "GET", "/health", "1.1", 200
+            )
+            lines = self._lines(capsys.readouterr().err)
+            assert [(x["logger"], x["level"]) for x in lines] == [
+                ("uvicorn.error", "INFO"),
+                ("uvicorn.access", "INFO"),
+            ]
+            assert lines[1]["msg"] == '10.0.0.1:5 - "GET /health HTTP/1.1" 200'
+        finally:
+            self._restore(saved)

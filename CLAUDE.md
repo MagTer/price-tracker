@@ -403,23 +403,21 @@ Docs-only, planning-only, or test-only commits do **not** earn a tag; they ride 
 
 ## Prod logs & observability
 
-Prod runs on the home-server platform (Dokploy). Nothing runs locally — `docker ps` here is empty. To read live prod logs, SSH to the **Dokploy VM (`magnus@192.168.10.223`, VMID 200)** and read the container directly; `sudo` is required (magnus isn't in the docker group there):
+Prod runs on the home-server platform's Kubernetes cluster `prod` (Deployment `price-tracker`, StatefulSet `price-tracker-postgres`, namespace `price-tracker`); the Dokploy VM it ran on was retired 2026-10-02, and nothing runs locally. Corrected 2026-10-06: this section described Dokploy until then.
+
+**Field logs.** The pod's stdout is collected into the platform's `logs-infra` store (14 d), readable from the dev seat with `telemetry-query` (its skill has the rules: `check` first, always a `_time:` filter, exit 1 is unknown, not empty):
 
 ```bash
-# containers: `price-tracker` (app) and `price-tracker-postgres`
-ssh magnus@192.168.10.223 "sudo docker logs --since 10m --timestamps price-tracker"
-ssh magnus@192.168.10.223 "sudo docker logs --tail 200 -f price-tracker"     # follow
+telemetry-query check
+telemetry-query logs logs-infra '_time:1h kubernetes.container_name:=price-tracker level:WARNING' --limit 50
+telemetry-query logs logs-infra '_time:24h kubernetes.container_name:=price-tracker logger:="uvicorn.access" -_msg:~"/health"'
 ```
 
-The image is `python:3.12-slim` — **no `curl`**; for in-container HTTP probing use `python -c` with `httpx` (already a dep), e.g. to hit OpenRouter with the live key without it leaving the box:
-```bash
-ssh magnus@192.168.10.223 'sudo docker exec price-tracker python -c "import os,httpx; ..."'
-```
+Every console line is one JSON object (`infra/logbuffer.py`, `JsonLineFormatter`, since 2026-10-06), and the collector turns its keys into fields: `level` (Python's level name), `logger`, the message as `_msg`, a traceback in `exc`, and `time` as the row's timestamp. uvicorn's own loggers are routed through the same handler, so the access log is `logger:="uvicorn.access"`. Before this, every line was text and the store and Grafana read its level as "unknown". Still text, so still level-less: the `alembic upgrade head` that runs before uvicorn in the container, and Python `warnings`.
 
-Notes:
-- `home-server`'s `scripts/logs.sh` does the same SSH-to-Dokploy dance but its container allowlist is only `hermes`/`oauth2-proxy` — it does **not** know price-tracker; go direct with the commands above.
-- Server-side apps do **not** ship to the `applogs`/logsink sink (that's for unreachable devices — phones, head units; ADR-011). price-tracker logs live only in Docker/journald on the Dokploy VM.
-- The home-server topology: PVE `192.168.10.220`, ops LXC `.221`, AdGuard `.222`, **Dokploy `.223`**, dev `.224`.
+Live, from the ops LXC (the dev seat cannot reach the cluster's API): `sudo kubectl --kubeconfig /etc/talos-prod/kubeconfig -n price-tracker logs deploy/price-tracker --since=10m`.
+
+The image is `python:3.12-slim` — **no `curl`**; for in-container HTTP probing use `python -c` with `httpx` (already a dep).
 
 ## Gotchas
 
