@@ -9,8 +9,10 @@
 
 ```bash
 # WHAT PROD IS PINNED TO — the authority. No SSH, no clone, works from anywhere.
-gh api repos/MagTer/home-server/contents/compose/dokploy-apps/price-tracker/docker-compose.yml \
-  --jq '.content' | tr -d '\n' | base64 -d | grep 'image: ghcr.io'
+# The pin is a digest under a comment naming its tag, in the shared base, so it moves the lab
+# and production together. (Until 2026-10-02 it was compose/dokploy-apps/…, now gone: 404.)
+gh api repos/MagTer/home-server/contents/clusters/base/price-tracker/app.yaml \
+  --jq '.content' | tr -d '\n' | base64 -d | grep -A1 '# ghcr.io/magter/price-tracker:'
 # The newest tag HERE — the gap between the two is what is undeployed. `--sort=v:refname` is
 # NOT optional: git tag sorts LEXICALLY, so v0.9.0 sorts after every v0.1x–v0.5x tag and a
 # bare `git tag | tail -1` answers v0.9.0 no matter how far the repo has come. That is the
@@ -18,7 +20,7 @@ gh api repos/MagTer/home-server/contents/compose/dokploy-apps/price-tracker/dock
 git tag --sort=v:refname | tail -1
 ```
 
-`ssh magnus@192.168.10.223 "sudo docker inspect price-tracker --format '{{.Config.Image}}'"` answers what the container is actually RUNNING, which is the check worth making when a deploy is suspected to have not landed. Backup export checked against the live instance (on v0.26.0): 15 products / 38 links / 41 history rows, 38 KB, format 1.1. Deploying is that one-line bump in `compose/dokploy-apps/price-tracker/docker-compose.yml` — that repo is not this repo, do not edit it from here, and the release is not live until the bump lands.
+`ssh magnus@192.168.10.221 "sudo kubectl --kubeconfig /etc/talos-prod/kubeconfig -n price-tracker get deploy price-tracker -o jsonpath='{.spec.template.spec.containers[0].image}'"` (from the ops LXC, which alone reaches the cluster) answers what the container is actually RUNNING, which is the check worth making when a deploy is suspected to have not landed. Backup export checked against the live instance (on v0.26.0): 15 products / 38 links / 41 history rows, 38 KB, format 1.1. Deploying is that one-line bump in `compose/dokploy-apps/price-tracker/docker-compose.yml` — that repo is not this repo, do not edit it from here, and the release is not live until the bump lands.
 
 **Since 04.1 — what changed, and where the rule now lives.** This is an index, not the documentation: every durable rule sits in **Architecture** or **Gotchas** below, next to the code it governs. Do not grow this list into a changelog — `git log` is the changelog.
 
@@ -397,7 +399,7 @@ gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -
 - **minor** (`v0.3.x` → `v0.4.0`) — a new capability, a schema change, or anything that alters how the app is operated or deployed.
 - A schema change means **a new alembic revision** (additive, on top of the chain — see Gotcha 3 for why a shipped revision is never rewritten in place). The deploy applies it via `alembic upgrade head`; verify with `alembic check`, not `alembic current`.
 
-**Then tell Magnus the tag is built and needs the deploy bump** — and say which version is pending against what is pinned *right now*, read with the command in the Deploy state paragraph, never recalled. Deploying is a one-line change to the pinned tag in the home-server repo's `compose/dokploy-apps/price-tracker/docker-compose.yml`, which **Magnus makes himself in the GitHub web UI** (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
+**Then tell Magnus the tag is built and needs the deploy bump** — and say which version is pending against what is pinned *right now*, read with the command in the Deploy state paragraph, never recalled. Deploying is a change to the pinned digest and its tag comment in the home-server repo's `clusters/base/price-tracker/app.yaml`, which **Magnus makes himself in the GitHub web UI** (GitOps split: this repo builds, the platform repo is the deployment truth). **That repo is not this repo — do not edit it from here**, and the release is not live until that bump lands.
 
 Docs-only, planning-only, or test-only commits do **not** earn a tag; they ride along with the next real one.
 
