@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -38,14 +37,6 @@ mcp_app, mcp_http_app = get_mcp_app()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with mcp_http_app.lifespan(mcp_http_app):
-        # Mirrors the MCP_BEARER_TOKEN pattern in mcp_server/server.py: loud at
-        # startup, but never a crash — the app still serves everything that does
-        # not need an LLM.
-        if not os.getenv("OPENROUTER_API_KEY"):
-            logger.error(
-                "OPENROUTER_API_KEY not set - LLM price extraction and enrichment "
-                "are effectively disabled until it is configured"
-            )
         # Read before anything starts: an unrecognised value raises here and the app does
         # not come up, rather than guessing which way the operator meant it.
         scheduler_enabled = scheduler_enabled_from_env()

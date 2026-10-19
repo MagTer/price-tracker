@@ -13,7 +13,7 @@ package text ("50 ml Invisible Black & White") that Rusta's bare JSON-LD names d
 This extractor makes NO HTTP calls of its own: like JsonLdExtractor it parses the page
 the pipeline already fetched, so it needs no ledger slot and can never see a bot wall.
 Any parse failure returns None and the ladder falls through to JSON-LD — right price
-outside campaigns — and then the LLM.
+outside campaigns — and, past that, to no price.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ class RustaExtractor:
     def extract_from_html(
         self, html: str, store_url: str, product_name: str | None = None
     ) -> PriceExtractionResult | None:
-        """Parse CURRENT_PAGE and return a result, or None for the JSON-LD/LLM fallback."""
+        """Parse CURRENT_PAGE and return a result, or None for the JSON-LD fallback."""
         found = self._find_product(html, store_url)
         if found is None:
             return None

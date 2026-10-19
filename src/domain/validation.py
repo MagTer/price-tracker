@@ -8,7 +8,7 @@ on the CLASS, using redundancy the tracker already records:
 1. **Tier regression** — ``check_attempts.extraction_source`` names which ladder tier
    answered. For a store whose best tier is a structured one (ICA/Rusta/Lyko page state,
    Willys API), a link whose LATEST successful check came from a lower tier means the
-   structured source changed shape and the ladder silently degraded to JSON-LD/LLM —
+   structured source changed shape and the ladder silently degraded to JSON-LD —
    checks keep passing, campaigns and jämförpris go dark. Clas Ohlson is deliberately
    NOT judged: its extractor returns None BY DESIGN when the page adds nothing beyond
    JSON-LD (no rea, no jfr-pris), so "jsonld" is a normal source there, not a regression.

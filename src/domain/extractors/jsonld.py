@@ -5,8 +5,8 @@ Swedish e-commerce sites embed schema.org Product data in server-rendered
 live product pages: ICA handlaprivatkund, Apotea, Med24, DOZ Apotek;
 2026-07-22: Kronans Apotek, Apohem).
 Parsing that is exact and free, and reuses the page fetch the pipeline
-already made — so it sits between the store-API extractors and the LLM
-cascade in ``PriceParser.extract_price``.
+already made — so it is the LAST tier in ``PriceParser.extract_price``, after the
+store-API and store-page extractors; nothing it declines is priced (v0.66.0).
 
 Shapes handled (all observed in the wild):
 - top-level ``Product`` object (ICA, Apotea)
@@ -47,7 +47,7 @@ class JsonLdExtractor:
     def extract_from_html(
         self, html: str, product_name: str | None = None
     ) -> PriceExtractionResult | None:
-        """Parse JSON-LD blocks and return a result, or None for LLM fallback."""
+        """Parse JSON-LD blocks and return a result, or None when no usable Product node."""
         product = self._find_product(html)
         if product is None:
             return None
@@ -55,8 +55,8 @@ class JsonLdExtractor:
         # Name sanity: a recommendation carousel can put ITS Product node first in the
         # markup, and recording that price with 0.95 confidence poisons the history.
         # Zero token overlap between the tracked name and the node's name means the
-        # node is (almost certainly) some other product — fall through to the LLM
-        # rather than trying subsequent Product nodes (locked decision).
+        # node is (almost certainly) some other product — record no price rather than
+        # trying subsequent Product nodes (locked decision).
         name = unescape(str(product.get("name", "")))
         if product_name:
             expected = set(_NAME_TOKEN_RE.findall(product_name.lower()))
@@ -64,7 +64,7 @@ class JsonLdExtractor:
             if expected and found and not (expected & found):
                 logger.warning(
                     "JSON-LD Product name %r shares no token with tracked product %r "
-                    "- ignoring the node, falling back to LLM",
+                    "- ignoring the node",
                     name,
                     product_name,
                 )

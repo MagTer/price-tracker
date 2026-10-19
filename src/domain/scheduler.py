@@ -487,7 +487,7 @@ class PriceCheckScheduler:
         """Check price for a single product-store combination.
 
         Thin wrapper around domain.service.perform_price_check — the single
-        fetch → extract → enrich → apply-scrape → record flow. This method owns
+        fetch → extract → apply-scrape → record flow. This method owns
         only the scheduler's bookkeeping (stats, alerts) and returns the outcome
         so the loop can reschedule failures.
         """
@@ -534,8 +534,9 @@ class PriceCheckScheduler:
             )
             return outcome
 
-        # Track extraction source (API/JSON-LD vs LLM). An ENRICHED jsonld check
-        # still counts as jsonld — enrichment keeps raw_response["source"] intact.
+        # Track extraction source per tier. checks_llm is an append-only wire field on
+        # /scheduler/status: no model tier exists since v0.66.0, so a success landing in the
+        # else now means a tier this code does not recognise.
         #
         # The store-HTML tier gets its OWN counter: "rusta_page"/"clasohlson_page" used to fall
         # through to the else and count as LLM checks, so every Rusta and Clas Ohlson check

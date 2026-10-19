@@ -236,49 +236,6 @@ class TestButikConfigLoaders:
         assert load_sibling_groups('[[], ["1", "2"]]') == (frozenset({"1", "2"}),)
 
 
-class TestExtractProductMetadata:
-    """The LLM metadata fallback — cascade order and the acceptance floor."""
-
-    def _parser(self):
-        from domain.parser import PriceParser
-
-        return PriceParser()
-
-    async def test_returns_first_confident_parse_normalized(self):
-        parser = self._parser()
-        payload = {
-            "name": "Falu Rågrut",
-            "brand": "Wasa",
-            "category": "knäckebröd",
-            "price": 29.9,
-            "pack_size": None,
-            "package_amount": 500,
-            "package_unit": "G",
-            "confidence": 0.9,
-        }
-        with patch.object(parser, "_call_model_json", AsyncMock(return_value=payload)):
-            meta = await parser.extract_product_metadata("page text", "willys")
-        assert meta is not None
-        assert meta.name == "Falu Rågrut"
-        assert meta.package_unit == "g"  # lowercased like the price prompt's parse
-        assert meta.price_sek == Decimal("29.9")
-        assert meta.source == "llm"
-
-    async def test_below_floor_on_all_models_is_none(self):
-        parser = self._parser()
-        low = {"name": "X", "confidence": 0.2}
-        with patch.object(parser, "_call_model_json", AsyncMock(return_value=low)):
-            assert await parser.extract_product_metadata("page text", "ica") is None
-
-    async def test_model_errors_fall_through_to_none(self):
-        parser = self._parser()
-        boom = AsyncMock(side_effect=RuntimeError("api down"))
-        with patch.object(parser, "_call_model_json", boom):
-            assert await parser.extract_product_metadata("page text", "ica") is None
-        # Every cascade model was tried before giving up.
-        assert boom.await_count == len(parser.MODEL_CASCADE)
-
-
 class TestJsonLdMetadata:
     def test_name_and_brand_node(self):
         meta = JsonLdExtractor().extract_product_metadata(_JSONLD_HTML)
@@ -410,12 +367,7 @@ class TestQuickAddPreview:
         fetcher.fetch = AsyncMock(
             return_value={"ok": True, "text": "page", "html": _JSONLD_HTML, "error": None}
         )
-        parser = MagicMock()
-        parser.extract_product_metadata = AsyncMock()
-        with (
-            patch("api.admin.get_fetcher", return_value=fetcher),
-            patch("api.admin.PriceParser", return_value=parser),
-        ):
+        with patch("api.admin.get_fetcher", return_value=fetcher):
             r = client.post("/quick-add/preview", json={"url": "https://www.apotea.se/p/1"})
 
         assert r.status_code == 200
@@ -432,8 +384,6 @@ class TestQuickAddPreview:
         assert body["package_size"] == "24-pack"
         # The existing Lambi product surfaced as a possible "new link" target.
         assert [s["id"] for s in body["existing_products"]] == [str(existing.id)]
-        # JSON-LD sufficed — the LLM fallback must not have been consulted.
-        parser.extract_product_metadata.assert_not_called()
         # Apotea has no offer cycle — the store schedule (which the link INHERITS)
         # is interval mode; the preview reports it for the confirm step's info line.
         assert body["store_schedule"] == {"weekdays": [], "frequency_hours": 72}
@@ -504,19 +454,11 @@ class TestQuickAddPreview:
             r = client.post("/quick-add/preview", json={"url": "https://www.apotea.se/p/1"})
         assert r.status_code == 502
 
-    def test_llm_fallback_when_no_jsonld(self, client, mock_session):
-        from domain.result import ProductMetadata
-
+    def test_no_structured_identity_leaves_the_form_empty(self, client, mock_session):
+        """No tier can name the product: the operator types it. Until v0.66.0 an LLM guessed
+        an identity here, and nothing in the form said the name was a guess."""
         mock_session.execute.side_effect = [
-            _result(
-                scalars_all=[
-                    _store(
-                        slug="willys",
-                        base_url="https://www.willys.se",
-                        check_weekdays=[0, 4],
-                    )
-                ]
-            ),
+            _result(scalars_all=[_store()]),
             _result(first=None),
             _result(scalars_all=[]),
         ]
@@ -524,37 +466,33 @@ class TestQuickAddPreview:
         fetcher.fetch = AsyncMock(
             return_value={"ok": True, "text": "page text", "html": "<html></html>", "error": None}
         )
-        parser = MagicMock()
-        parser.extract_product_metadata = AsyncMock(
-            return_value=ProductMetadata(
-                name="Falu Rågrut",
-                brand="Wasa",
-                category="knäckebröd",
-                price_sek=Decimal("29.90"),
-                package_amount=Decimal("500"),
-                package_unit="g",
-                pack_size=None,
-                confidence=0.9,
-                source="llm",
-            )
-        )
-        with (
-            patch("api.admin.get_fetcher", return_value=fetcher),
-            patch("api.admin.PriceParser", return_value=parser),
-        ):
-            r = client.post("/quick-add/preview", json={"url": "https://willys.se/produkt/x"})
+        with patch("api.admin.get_fetcher", return_value=fetcher):
+            r = client.post("/quick-add/preview", json={"url": "https://www.apotea.se/p/1"})
 
         assert r.status_code == 200
         body = r.json()
-        assert body["name"] == "Falu Rågrut"
-        assert body["source"] == "llm"
-        assert body["category"] == "knäckebröd"
-        assert body["suggested_unit"] == "kg"
-        assert body["package_quantity"] == pytest.approx(0.5)  # 500 g normalized to kg
-        assert body["price_sek"] == pytest.approx(29.90)
-        # Willys publishes offers Mondays AND Fridays — the STORE schedule carries the
-        # days; the link inherits them, so the preview only reports, never prefills.
-        assert body["store_schedule"] == {"weekdays": [0, 4], "frequency_hours": 72}
+        assert body["name"] is None
+        assert body["source"] is None
+
+    def test_a_product_the_store_says_is_gone_is_a_404_with_the_reason(self, client, mock_session):
+        """A JYSK article missing from its group used to preview a SIBLING's identity."""
+        from tests.test_jysk_extractor import _group
+
+        mock_session.execute.side_effect = [
+            _result(scalars_all=[_store(slug="jysk", base_url="https://jysk.se")]),
+            _result(first=None),
+        ]
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(
+            return_value={"ok": True, "text": "page", "html": _group(), "error": None}
+        )
+        url = "https://jysk.se/badrum/handdukar/badlakan-nora-100x150-sand?article=9999999"
+        with patch("api.admin.get_fetcher", return_value=fetcher):
+            r = client.post("/quick-add/preview", json={"url": url})
+
+        assert r.status_code == 404
+        assert "finns inte hos butiken" in r.json()["detail"]
+        assert "9999999" in r.json()["detail"]
 
 
 class TestQuickAddConfirm:

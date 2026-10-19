@@ -7,7 +7,7 @@ import pytest
 
 from domain.extractors.willys_api import WillysApiExtractor
 from domain.pricing import printed_measure
-from domain.result import PriceExtractionResult, StoreBlockedError
+from domain.result import PriceExtractionResult, ProductGoneError, StoreBlockedError
 
 
 def _make_extractor() -> WillysApiExtractor:
@@ -180,8 +180,12 @@ class TestExtract:
         assert result.in_stock is False
 
     @pytest.mark.asyncio
-    async def test_extract_returns_none_on_404(self) -> None:
-        """HTTP 404 returns None to trigger LLM fallback."""
+    async def test_extract_raises_product_gone_on_404(self) -> None:
+        """HTTP 404 is the API saying the code does not exist — the ladder must stop there.
+
+        It returned None until v0.66.0 so an LLM could try the SPA shell; that fallback
+        priced a product Willys no longer sold (2026-10-16 → 10-19) and was removed.
+        """
         extractor = _make_extractor()
         url = "https://www.willys.se/produkt/Mjolk-100014716_ST"
         fetcher = _mock_fetcher(_fetch_json_fail("HTTP 404"))
@@ -189,10 +193,9 @@ class TestExtract:
         with (
             patch("infra.providers.get_rate_limiter", return_value=AsyncMock()),
             patch("infra.providers.get_fetcher", return_value=fetcher),
+            pytest.raises(ProductGoneError, match="HTTP 404"),
         ):
-            result = await extractor.extract(url)
-
-        assert result is None
+            await extractor.extract(url)
 
     @pytest.mark.asyncio
     async def test_extract_returns_none_on_timeout(self) -> None:

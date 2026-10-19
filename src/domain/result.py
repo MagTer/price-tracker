@@ -17,6 +17,18 @@ class StoreBlockedError(Exception):
     """
 
 
+class ProductGoneError(Exception):
+    """A store's OWN structured source says the product this link names does not exist.
+
+    Raised where the store states it outright — the Willys API answering 404 for the code,
+    a JYSK ProductGroup that no longer carries the URL's article. The ladder STOPS on it
+    and the check ends as a no_price whose detail is this message, so link_health flags
+    the link after three mornings and Fel & luckor says why. Returning None instead let the
+    ladder fall through to a tier that answered for some OTHER product: on 2026-10-02 →
+    10-19 that recorded 8 wrong prices on two dead links as "ok", hiding both.
+    """
+
+
 @dataclass
 class ProductMetadata:
     """What a product PAGE says the product is — used by quick-add, never by price checks.
@@ -35,7 +47,7 @@ class ProductMetadata:
     package_unit: str | None
     pack_size: int | None
     confidence: float
-    source: str  # "jsonld" | "llm" | "willys_api"
+    source: str  # "jsonld" | "willys_api" | "<store>_page"
     in_stock: bool | None = None  # availability when the source states it (store APIs do)
 
 
@@ -62,17 +74,14 @@ def extraction_source(result: PriceExtractionResult | None) -> str:
     """WHICH ladder tier produced this extraction — THE reader of ``raw_response["source"]``.
 
     Every extractor stamps its own marker ("willys_api", "rusta_page", "clasohlson_page",
-    "lyko_page", "jsonld"); the LLM path stamps "llm:<model>". The value is deliberately raw
-    rather than bucketed into a tier: which MODEL answered is what makes LLM spend readable,
-    and grouping is a display decision.
+    "lyko_page", "jsonld"); a ladder that ended without a price stamps "product_gone" or
+    "none" (v0.66.0). Rows written before then may carry "llm:<model>" — the removed model
+    tier. The value is deliberately raw rather than bucketed: grouping is a display decision.
 
     It exists because the same `isinstance(raw, dict)` dance had been written three times —
-    the scheduler's per-tier counters, the JSON-LD enrichment trigger in perform_price_check,
-    and the check log — over a loosely-typed JSONB dict where a typo returns None and simply
-    reads as "the LLM answered". One definition, like pricing and schedule.
-
-    An ENRICHED JSON-LD result still reports "jsonld": enrich_with_llm keeps the base
-    raw_response precisely so a routine enrichment cannot masquerade as an LLM extraction.
+    the scheduler's per-tier counters, the (since removed) enrichment trigger in
+    perform_price_check, and the check log — over a loosely-typed JSONB dict where a typo
+    returns None and silently mislabels the tier. One definition, like pricing and schedule.
     """
     if result is None:
         return "unknown"
@@ -81,6 +90,18 @@ def extraction_source(result: PriceExtractionResult | None) -> str:
         return "unknown"
     source = raw.get("source")
     return source if isinstance(source, str) and source else "unknown"
+
+
+def no_price_reason(result: PriceExtractionResult | None) -> str | None:
+    """Why the ladder ended without a price — THE reader of ``raw_response["reason"]``.
+
+    perform_price_check writes it as the no_price attempt's detail, which is what
+    link_health hands Fel & luckor; None when the extraction carried no reason.
+    """
+    if result is None or not isinstance(result.raw_response, dict):
+        return None
+    reason = result.raw_response.get("reason")
+    return reason if isinstance(reason, str) and reason else None
 
 
 # ICA's own presentation flag on a promotion. MUTE_STYLE is the value that has never yet

@@ -686,7 +686,7 @@ class TestPriceTrackerService:
 
 
 # ---------------------------------------------------------------------------
-# perform_price_check — THE single fetch→extract→enrich→apply_scrape→record flow
+# perform_price_check — THE single fetch→extract→apply_scrape→record flow
 # ---------------------------------------------------------------------------
 
 
@@ -749,7 +749,6 @@ def _check_fixtures(
 
     parser = MagicMock()
     parser.extract_price = AsyncMock()
-    parser.enrich_with_llm = AsyncMock(side_effect=lambda base, **kwargs: base)
 
     return product_store, product, store, session, fetcher, parser
 
@@ -784,7 +783,7 @@ class TestPerformPriceCheck:
         session.add.assert_called_once()
         assert outcome.price_point is session.add.call_args.args[0]
         assert outcome.price_point.price_sek == Decimal("139.90")
-        # D-07 autofill ran (after enrichment, inside the flow)
+        # D-07 autofill ran (inside the flow)
         assert ps.package_quantity == Decimal("24")
         assert ps.last_checked_at is not None
         session.commit.assert_not_called()
@@ -851,134 +850,6 @@ class TestPerformPriceCheck:
         assert outcome.failure_reason == "no_price"
         assert outcome.extraction.confidence == 0.3
         session.add.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_enrichment_fires_on_first_success_without_quantity(self) -> None:
-        """Trigger (a): jsonld result, no prior point, quantity-less link -> enrich."""
-        ps, product, store, session, fetcher, parser = _check_fixtures(prior_point=None)
-        parser.extract_price.return_value = _extraction("108.95", source="jsonld")
-
-        outcome = await perform_price_check(
-            product_store=ps,
-            product=product,
-            store=store,
-            session=session,
-            fetcher=fetcher,
-            parser=parser,
-        )
-
-        parser.enrich_with_llm.assert_awaited_once()
-        kwargs = parser.enrich_with_llm.call_args.kwargs
-        assert kwargs["text_content"] == "page text"  # the already-fetched page
-        assert kwargs["store_slug"] == "apotea"
-        assert outcome.success is True
-
-    @pytest.mark.asyncio
-    async def test_enrichment_fires_on_quantity_less_link_with_history(self) -> None:
-        """Trigger (a) second clause: history exists but the link never got a quantity."""
-        ps, product, store, session, fetcher, parser = _check_fixtures(
-            package_quantity=None,
-            scraped_package_quantity=None,
-            prior_point=_prior("108.95"),
-        )
-        parser.extract_price.return_value = _extraction("108.95", source="jsonld")
-
-        await perform_price_check(
-            product_store=ps,
-            product=product,
-            store=store,
-            session=session,
-            fetcher=fetcher,
-            parser=parser,
-        )
-
-        parser.enrich_with_llm.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_enrichment_fires_on_effective_price_drop(self) -> None:
-        """Trigger (b): current effective price below the prior point's -> enrich."""
-        ps, product, store, session, fetcher, parser = _check_fixtures(
-            package_quantity=Decimal("16"),
-            scraped_package_quantity=Decimal("16"),
-            prior_point=_prior("108.95"),
-        )
-        parser.extract_price.return_value = _extraction("89.95", source="jsonld")
-
-        await perform_price_check(
-            product_store=ps,
-            product=product,
-            store=store,
-            session=session,
-            fetcher=fetcher,
-            parser=parser,
-        )
-
-        parser.enrich_with_llm.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_no_enrichment_on_unchanged_or_raised_price(self) -> None:
-        """Neither trigger: settled link (quantity known, history) at same/higher price."""
-        for current in ("108.95", "129.95"):
-            ps, product, store, session, fetcher, parser = _check_fixtures(
-                package_quantity=Decimal("16"),
-                scraped_package_quantity=Decimal("16"),
-                prior_point=_prior("108.95"),
-            )
-            parser.extract_price.return_value = _extraction(current, source="jsonld")
-
-            outcome = await perform_price_check(
-                product_store=ps,
-                product=product,
-                store=store,
-                session=session,
-                fetcher=fetcher,
-                parser=parser,
-            )
-
-            parser.enrich_with_llm.assert_not_awaited()
-            assert outcome.success is True
-
-    @pytest.mark.asyncio
-    async def test_drop_compares_against_prior_offer_price(self) -> None:
-        """The prior EFFECTIVE price is the offer when the prior point had one."""
-        ps, product, store, session, fetcher, parser = _check_fixtures(
-            package_quantity=Decimal("16"),
-            scraped_package_quantity=Decimal("16"),
-            prior_point=_prior("108.95", offer="79.95"),
-        )
-        # 89.95 is below the prior regular but ABOVE the prior offer -> no drop.
-        parser.extract_price.return_value = _extraction("89.95", source="jsonld")
-
-        await perform_price_check(
-            product_store=ps,
-            product=product,
-            store=store,
-            session=session,
-            fetcher=fetcher,
-            parser=parser,
-        )
-
-        parser.enrich_with_llm.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_no_enrichment_for_non_jsonld_sources(self) -> None:
-        """API/LLM extractions already carry all fields — never enriched."""
-        for source in ("willys_api", "llm", None):
-            ps, product, store, session, fetcher, parser = _check_fixtures(prior_point=None)
-            parser.extract_price.return_value = _extraction("89.95", source=source)
-
-            await perform_price_check(
-                product_store=ps,
-                product=product,
-                store=store,
-                session=session,
-                fetcher=fetcher,
-                parser=parser,
-            )
-
-            parser.enrich_with_llm.assert_not_awaited()
-            # No prior-point query either — the triggers are jsonld-only.
-            session.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_service_has_no_check_price(self) -> None:

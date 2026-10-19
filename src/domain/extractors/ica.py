@@ -24,7 +24,7 @@ passing every guard.
 This extractor makes NO HTTP calls of its own: like JsonLdExtractor it parses the page
 the pipeline already fetched, so it needs no ledger slot and can never see a bot wall.
 Any parse failure returns None and the ladder falls through to JSON-LD — right
-ordinarie, no offer — and then the LLM.
+ordinarie, no offer — and, past that, to no price.
 """
 
 from __future__ import annotations

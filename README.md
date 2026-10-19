@@ -46,13 +46,13 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
      four hide the campaign and/or the ordinarie from JSON-LD, which carries
      only the current per-unit price).
   3. **JSON-LD** (`schema.org` Product/Offer parsed from raw HTML) — exact
-     prices, no LLM cost.
-  4. **LLM cascade** via OpenRouter as fallback. Extractions below
-     `PRICE_PARSER_MIN_CONFIDENCE` are discarded (a gap beats a hallucinated
-     price). Every call asks OpenRouter for the cheapest zero-data-retention
-     endpoint quantized at fp8 or better (`OPENROUTER_PROVIDER_ROUTING` in
-     `src/infra/llm.py`), so a model whose endpoints do not state their
-     quantization answers "No endpoints found" and the cascade moves on.
+     prices.
+
+  Nothing after that: a page no tier can read records no price, and a store
+  whose own source says the product is gone (Willys API 404, a JYSK article
+  missing from its variants) ends the check with that reason, which surfaces
+  on Fel & luckor. There is no language-model fallback since v0.66.0 — on
+  prod it only ever priced products the stores no longer sold, wrongly.
 - **MCP server** (`fastmcp`) mounted at `/mcp/` exposing 4 tools:
   `check_price`, `find_deals`, `compare_stores`, `list_products`.
 
@@ -97,12 +97,6 @@ Chrome TLS/h2 impersonation via curl_cffi, and honest fail-fast on bot walls.
 | `ALLOWED_ENTRA_EMAIL` | yes | `""` (deny all) | Entra **UPN** of the **admin** — the only identity allowed to write; matched against `X-Auth-Request-Email`. Everyone else the ingress authenticates gets read-only access. Unset ⇒ everyone is denied, reads included. |
 | `MCP_BEARER_TOKEN` | for MCP | `""` | Static bearer for `/mcp/`. Unset ⇒ `/mcp` fails closed with 503. |
 | `FETCHER_TRANSPORT` | no | `curl_cffi` | Which HTTP client fetches store pages. `curl_cffi` impersonates Chrome's TLS (JA3) and HTTP/2 fingerprint; `httpx` is the fallback and the rollback. A missing/broken curl_cffi degrades to httpx with a warning. |
-| `OPENROUTER_API_KEY` | for LLM fallback | `""` | OpenRouter key for the LLM extraction cascade. |
-| `OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | OpenRouter endpoint (OpenAI-compatible). |
-| `OPENROUTER_HTTP_REFERER` | no | `""` | Optional OpenRouter attribution header. |
-| `OPENROUTER_APP_TITLE` | no | `Price Tracker` | Optional OpenRouter attribution header. |
-| `PRICE_PARSER_MODEL_CASCADE` | no | `deepseek/deepseek-v4-flash,meta-llama/llama-4-scout` | Comma-separated model fallback order. |
-| `PRICE_PARSER_MIN_CONFIDENCE` | no | `0.6` | Acceptance floor; LLM extractions below this are discarded. |
 | `RESEND_API_KEY` | for alerts | `""` | Resend API key. Watch-alert emails are sent via the Resend HTTP API. |
 | `EMAIL_FROM` | for alerts | `""` | From address for alert emails. Must be on a Resend-verified domain. |
 | `SUMMARY_EMAIL` | no | falls back to `ALLOWED_ENTRA_EMAIL` | Recipient of the Monday buy-list email. Set it when the admin UPN is not a deliverable address. |
@@ -141,9 +135,8 @@ everything a second deployment needs.
    boundary** — scope it before pointing it at this app. **Never expose the app without
    such a proxy** — the header is trusted as-is. `/mcp/` is instead protected by
    `MCP_BEARER_TOKEN` and fails closed (503) when unset.
-4. **Keys:** get your own `OPENROUTER_API_KEY` (LLM extraction fallback — cheap; most
-   checks use store APIs/JSON-LD and never touch the LLM) and, for email alerts,
-   `RESEND_API_KEY` + `EMAIL_FROM` on a domain you have verified with Resend.
+4. **Keys:** for email alerts, `RESEND_API_KEY` + `EMAIL_FROM` on a domain you have
+   verified with Resend. No model API key is needed (none is read since v0.66.0).
 5. **Your stores:** set `QUICKADD_STORE_LABELS` / `QUICKADD_SIBLING_GROUPS` to *your* ICA
    butiker (the id is in the product-page URL after `/stores/`). Without them, quick-add
    suggests the defaults' labels — harmless, but they are someone else's stores.

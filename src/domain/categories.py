@@ -7,7 +7,7 @@ the store is walked, so a shopping list can one day be sorted straight into aisl
 without backtracking. Index in PRODUCT_CATEGORIES == shelf order.
 
 This module is the ONE place the set and its order live. The UI <select> (server-injected in
-render_admin), the LLM prompt, server-side validation, and any category sort all resolve
+render_admin), server-side validation, and any category sort all resolve
 through here. Do not write a second list.
 
 The last entry, "Hushåll, Hygien & Apotek", deliberately spans household/hygiene goods AND
@@ -143,11 +143,11 @@ def is_valid_category(value: str | None) -> bool:
 def normalize_category(value: str | None) -> str | None:
     """Coerce arbitrary input to a canonical category, or None.
 
-    Exact match wins; otherwise the keyword map catches an old free-text value or a stray LLM
-    guess. Anything unrecognised becomes None — an empty field the user re-picks beats a stale
-    value the <select> cannot even display. Silent coercion (not a 400) on purpose: the only
-    non-UI callers are quick-add's LLM path and the JSON import, and both would rather degrade
-    to "uncategorised" than fail the whole create.
+    Exact match wins; otherwise the keyword map catches an old free-text value (including
+    the LLM guesses quick-add stored until v0.66.0). Anything unrecognised becomes None —
+    an empty field the user re-picks beats a stale value the <select> cannot even display.
+    Silent coercion (not a 400) on purpose: the only non-UI caller is the JSON import, which
+    would rather degrade to "uncategorised" than fail the whole create.
     """
     if not value:
         return None

@@ -79,7 +79,7 @@ from domain.quickadd import (
     suggest_sibling_links,
     suggest_store_label,
 )
-from domain.result import StoreBlockedError
+from domain.result import ProductGoneError, StoreBlockedError
 from domain.schedule import (
     STORE_TIMEZONE,
     effective_schedule,
@@ -120,6 +120,17 @@ QUICKADD_RATE_LIMIT_JITTER = float(os.getenv("QUICKADD_RATE_LIMIT_JITTER", "3"))
 SCHEDULER_ADD_PAUSE_MINUTES = float(os.getenv("SCHEDULER_ADD_PAUSE_MINUTES", "60"))
 
 _CENT = Decimal("0.01")
+
+
+def _product_gone(e: ProductGoneError) -> HTTPException:
+    """The preview's answer when the store itself says the pasted product does not exist.
+
+    It used to fall through to an LLM that guessed an identity off the page — for a JYSK
+    article gone from its group that is a SIBLING's name, offered in an editable form as
+    if it were the product pasted. Saying so is the answer the operator can act on.
+    """
+    LOGGER.info("Quick-add preview: product gone - %s", e)
+    return HTTPException(status_code=404, detail=f"Produkten finns inte hos butiken ({e})")
 
 
 def _guard_store_not_blocked(store: Store) -> None:
@@ -587,9 +598,10 @@ async def quick_add_preview(
 ) -> dict[str, Any]:
     """Everything quick-add can infer from one pasted URL — a suggestion bundle, no writes.
 
-    Extraction ladder for identity (name/brand): JSON-LD Product node first (exact and free
-    on the four JSON-LD stores), LLM metadata fallback only when the page has no usable
-    node. Store matching and package/unit derivation are pure coded logic (domain.quickadd).
+    Extraction ladder for identity (name/brand): store API, store page-state, then the
+    JSON-LD Product node. Nothing found leaves the fields empty for the operator — no model
+    guesses an identity (v0.66.0). Store matching and package/unit derivation are pure
+    coded logic (domain.quickadd).
 
     Every field in the response lands in an EDITABLE preview form. The human confirm step
     is deliberate: it is the carousel guard (JSON-LD's name-overlap sanity check cannot run
@@ -620,7 +632,7 @@ async def quick_add_preview(
             )
 
         # store_url is the link's natural key (globally unique) — an already-tracked URL
-        # short-circuits BEFORE the fetch: no page load, no LLM call, just the answer.
+        # short-circuits BEFORE the fetch: no page load, just the answer.
         dup_stmt = (
             select(Product.id, Product.name)
             .join(ProductStore, ProductStore.product_id == Product.id)
@@ -652,12 +664,14 @@ async def quick_add_preview(
         guess = parse_package_from_name(None)
 
         # API-FIRST, mirroring the price-check ladder: a store with a structured API (Willys)
-        # is a client-rendered SPA whose HTML carries no JSON-LD and no price — the HTML/LLM
+        # is a client-rendered SPA whose HTML carries no JSON-LD and no price — the HTML
         # ladder below sees an empty shell. Read identity + package straight off the API.
         api_extractor = get_api_extractor(store.slug)
         if api_extractor is not None:
             try:
                 api_meta = await api_extractor.extract_metadata(url)
+            except ProductGoneError as e:
+                raise _product_gone(e) from e
             except StoreBlockedError as e:
                 # The API tier hit the wall. It used to return None here, which fell through
                 # to the page fetch below — a SECOND request at the host that just walled the
@@ -689,7 +703,8 @@ async def quick_add_preview(
 
         if name is None:
             # No structured API (the four JSON-LD stores), or the API missed: fetch the page
-            # and walk the JSON-LD → LLM ladder.
+            # and walk the page-state → JSON-LD ladder. Nothing found leaves the form empty
+            # for the operator to fill: no model guesses an identity here (v0.66.0).
             fetch_result = await get_fetcher().fetch(url)
             if not fetch_result.get("ok"):
                 # Recorded for EVERY failure, not just a wall: a blocked fetch feeds the
@@ -722,7 +737,10 @@ async def quick_add_preview(
             # so the preview form arrives prefilled instead of asking the user to type them.
             html_extractor = get_html_extractor(store.slug)
             if html_extractor is not None and html:
-                page_meta = html_extractor.extract_metadata_from_html(html, url)
+                try:
+                    page_meta = html_extractor.extract_metadata_from_html(html, url)
+                except ProductGoneError as e:
+                    raise _product_gone(e) from e
                 if page_meta is not None:
                     name = page_meta.name
                     brand = page_meta.brand
@@ -756,33 +774,9 @@ async def quick_add_preview(
                 source = "jsonld" if name else None
                 guess = parse_package_from_name(name)
 
-            if name is None:
-                # Pass the raw HTML too: for a JS SPA the identity lives in <title>/<meta>/
-                # JSON-LD that the stripped text drops, so text alone yields an all-null result.
-                llm_meta = await PriceParser().extract_product_metadata(
-                    fetch_result.get("text", ""), store.slug, html_content=html
-                )
-                if llm_meta is not None:
-                    name = llm_meta.name
-                    brand = brand or llm_meta.brand
-                    category = llm_meta.category
-                    price = price if price is not None else llm_meta.price_sek
-                    source = "llm"
-                    guess = parse_package_from_name(name)
-                    if guess.amount is None and llm_meta.package_amount is not None:
-                        # The LLM read the package off the PAGE — better than the title.
-                        guess = PackageGuess(
-                            amount=llm_meta.package_amount,
-                            entry_unit=llm_meta.package_unit,
-                            pack_size=llm_meta.pack_size,
-                            label=(
-                                f"{llm_meta.package_amount} {llm_meta.package_unit or ''}".strip()
-                            ),
-                        )
-
-        # The suggested name is the abstract good — strip a brand the source (JSON-LD title or
-        # LLM) folded into it, so it does not double-print beside the brand column. The operator
-        # still sees and can edit it in the confirm dialog.
+        # The suggested name is the abstract good — strip a brand the source (a JSON-LD or
+        # page-state title) folded into it, so it does not double-print beside the brand
+        # column. The operator still sees and can edit it in the confirm dialog.
         name = strip_brand_from_name(name, brand)
 
         suggested_unit = derive_unit(guess.entry_unit, guess.pack_size)
@@ -1825,7 +1819,7 @@ async def trigger_price_check(
     """Manually trigger a price check for a product-store combination.
 
     Delegates to domain.service.perform_price_check — the single fetch → extract →
-    enrich → apply-scrape → record flow the scheduler also uses — then commits the
+    apply-scrape → record flow the scheduler also uses — then commits the
     request session and renders the HTTP contract.
 
     Args:

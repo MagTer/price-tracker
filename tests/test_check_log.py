@@ -85,7 +85,6 @@ def _fixtures():
 
     parser = MagicMock()
     parser.extract_price = AsyncMock()
-    parser.enrich_with_llm = AsyncMock(side_effect=lambda base, **kwargs: base)
 
     return product_store, product, store, session, fetcher, parser
 

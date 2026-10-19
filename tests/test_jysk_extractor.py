@@ -20,6 +20,7 @@ import pytest
 
 from domain.extractors.jsonld import JsonLdExtractor
 from domain.extractors.jysk import JyskExtractor
+from domain.result import ProductGoneError
 
 NORA_URL = "https://jysk.se/badrum/handdukar/badlakan-nora-100x150-sand?article=2342607"
 SANDHEM_URL = "https://jysk.se/badrum/badrumsmattor/badrumsmatta-sandhem-50x80-mork-sand"
@@ -124,11 +125,13 @@ class TestVariantResolution:
         assert result.raw_response["name"] == "Badlakan NORA 100x150 sand"
         assert result.raw_response["source"] == "jysk_page"
 
-    def test_an_article_absent_from_the_group_is_refused(self) -> None:
-        """A stale or moved URL must not silently record a sibling variant's price."""
+    def test_an_article_absent_from_the_group_is_product_gone(self) -> None:
+        """A stale URL must not record a sibling variant's price — and must not fall through
+        to a tier that would (until v0.66.0 this returned None and an LLM answered)."""
         url = "https://jysk.se/badrum/handdukar/badlakan-nora-100x150-sand?article=9999999"
 
-        assert JyskExtractor().extract_from_html(_group() + _multi_buy(), url) is None
+        with pytest.raises(ProductGoneError, match="9999999"):
+            JyskExtractor().extract_from_html(_group() + _multi_buy(), url)
 
     def test_a_bare_path_takes_the_first_variant_when_the_markup_agrees(self) -> None:
         """No ?article=: the path selected the variant and JYSK publishes it first — the
@@ -151,10 +154,11 @@ class TestVariantResolution:
         assert result is not None
         assert result.raw_response["article"] == "2522951"
 
-    def test_a_page_publishing_a_different_article_is_refused(self) -> None:
+    def test_a_page_publishing_a_different_article_is_product_gone(self) -> None:
         url = "https://jysk.se/badrum/badrumsmattor/badrumsmatta-sandhem-50x80-mork-sand?article=1111111"
 
-        assert JyskExtractor().extract_from_html(_product() + _rea(), url) is None
+        with pytest.raises(ProductGoneError, match="1111111"):
+            JyskExtractor().extract_from_html(_product() + _rea(), url)
 
     def test_a_disagreeing_printed_price_falls_through(self) -> None:
         """The block belongs to something else, or the markup changed shape."""
@@ -313,4 +317,5 @@ class TestMetadata:
     def test_metadata_refuses_the_same_pages_the_price_tier_refuses(self) -> None:
         url = "https://jysk.se/badrum/handdukar/badlakan-nora-100x150-sand?article=9999999"
 
-        assert JyskExtractor().extract_metadata_from_html(_group(), url) is None
+        with pytest.raises(ProductGoneError):
+            JyskExtractor().extract_metadata_from_html(_group(), url)

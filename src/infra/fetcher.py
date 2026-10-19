@@ -366,9 +366,10 @@ class WebFetcher:
         definition has a page behind it — so the one caller (the Willys API extractor)
         passes the product page URL it is checking.
 
-        No retries: the only caller sits inside the extraction ladder with an LLM fallback
-        behind it, and a WAF answer (blocked=True) must fail fast for the same reason
-        fetch() does — see _WAF_BLOCK_STATUSES.
+        No retries: the only caller sits inside the extraction ladder, which records an
+        honest no_price on a miss and retries on the next check day, and a WAF answer
+        (blocked=True) must fail fast for the same reason fetch() does — see
+        _WAF_BLOCK_STATUSES.
         """
         headers: dict[str, Any] = {
             "Accept": "application/json",
@@ -455,7 +456,7 @@ def _extract_text(html: str) -> str:
     parser = _TextExtractor()
     parser.feed(html)
     text = parser.get_text()
-    # Truncate very long pages to keep LLM prompt size reasonable
+    # Truncate very long pages: the text is only a non-empty-page signal for the ladder now
     if len(text) > 12000:
         text = text[:12000] + "\n...\n"
     return text

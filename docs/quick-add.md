@@ -18,7 +18,7 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 
 ## How the preview infers each field
 
-| Field | Mechanism | LLM involved? |
+| Field | Mechanism | LLM involved? (none since v0.66.0) |
 |---|---|---|
 | Store | Hostname match against the seeded `Store.base_url` values | Never |
 | Butik label (v0.6.0) | The URL's `/stores/<id>/` segment — ICA prices per physical butik. Known ids (`quickadd.KNOWN_STORE_LABELS`) map to names ("ICA Maxi Sandviken"); unknown ids fall back to "ICA \<id\>"; no segment → no label (nationally priced chains) | Never |
@@ -30,7 +30,7 @@ UI entry point: **⚡ Snabbtillägg** on the product toolbar (`admin.html`, pref
 | Price (display only) | Same JSON-LD offer | No |
 | Package (amount/unit/label) | Regex over the product title: `500 ml`, `24-pack`, `8 rullar` … (`quickadd.parse_package_from_name`) | No |
 | Comparison unit (`st`/`liter`/`kg`) | Derived from the package unit via `PKG_UNITS` (`quickadd.derive_unit`) | No |
-| Everything above, when no structured tier answered | `PriceParser.extract_product_metadata` — one cheap cascade call (`PRICE_PARSER_MODEL_CASCADE`, deepseek → llama-4-scout), same acceptance floor as price extraction | Yes, fallback only |
+| Everything above, when no structured tier answered | Nothing — the fields stay empty and the operator types them. The LLM step that guessed here was removed in v0.66.0 | Never |
 | Existing-product suggestions | Token overlap (3+ chars, åäö included) between the extracted name and existing product names+brands (`quickadd.suggest_existing_products`) | Never |
 
 All decision logic lives in **`src/domain/quickadd.py`** as pure functions — no HTTP, no
@@ -85,16 +85,17 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 |---|---|
 | URL not http(s) | 400 |
 | Hostname matches no store | 422, message names the stores |
-| URL already tracked | Preview short-circuits **before** fetching (no page load, no LLM); confirm returns 409 |
+| URL already tracked | Preview short-circuits **before** fetching (no page load); confirm returns 409 |
 | Page fetch fails | Preview 502; confirm 201 with `check.success=false` |
-| No JSON-LD and LLM below confidence floor | Preview returns `name: null` — UI says "fyll i namnet själv"; the flow still works, you just type the name |
-| LLM hallucinates package quantity | It's a prefilled *editable* field; and `normalize_amount` rejects out-of-range values, unit conflicts, and non-numbers |
+| No structured tier names the product | Preview returns `name: null` — UI says "fyll i namnet själv"; the flow still works, you just type the name |
+| The store says the product is gone (Willys API 404, JYSK article missing from its variants) | Preview 404 "Produkten finns inte hos butiken (…)" — it used to preview a sibling's identity via the LLM (v0.66.0) |
+| A package quantity out of range | It's a prefilled *editable* field; and `normalize_amount` rejects out-of-range values, unit conflicts, and non-numbers |
 
 ## Extension points
 
 - **New store:** seed its `base_url` (migration) — store matching needs nothing else.
-  Add JSON-LD support for free if the store embeds schema.org; otherwise the LLM fallback
-  covers it.
+  JSON-LD support is free if the store embeds schema.org; otherwise the store needs its
+  own extractor (store API or page state) — there is no model fallback (v0.66.0).
 - **New ICA butik (v0.8.0 — env config, no code change):** set `QUICKADD_STORE_LABELS`
   (JSON object, butik id → display name) and `QUICKADD_SIBLING_GROUPS` (JSON array of
   id groups) on the instance — the butik id is in the product URL after `/stores/`.

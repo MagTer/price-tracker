@@ -37,7 +37,12 @@ from domain.pricing import (
     unit_price_expr,
 )
 from domain.protocols import ICheckAttemptLog, IFetcher, ILeafletLookup
-from domain.result import PriceExtractionResult, StoreBlockedError, extraction_source
+from domain.result import (
+    PriceExtractionResult,
+    StoreBlockedError,
+    extraction_source,
+    no_price_reason,
+)
 from domain.schedule import effective_schedule, is_inherited
 
 logger = logging.getLogger(__name__)
@@ -88,7 +93,7 @@ async def perform_price_check(
     attempt_log: ICheckAttemptLog | None = None,
     attempt_source: str = "unknown",
 ) -> PriceCheckOutcome:
-    """THE fetch → extract → enrich → apply-scrape → record flow, exactly once.
+    """THE fetch → extract → apply-scrape → record flow, exactly once.
 
     The scheduler and the admin "Check now" endpoint both call this — the third inline
     copy (service.check_price) is deleted. Does NOT commit: the caller owns the
@@ -193,66 +198,21 @@ async def _run_price_check(
             blocked=True,
         )
 
-    # LLM enrichment for the JSON-LD path (locked decision). JSON-LD carries only
-    # price + stock, so offer-based watches and package autofill never see data for
-    # the four JSON-LD stores without this. Two precise triggers keep the LLM cost
-    # near zero; the API and LLM paths already carry all fields, and a discarded
-    # extraction has no price.
-    if extraction.price_sek is not None and extraction_source(extraction) == "jsonld":
-        # The link's latest prior point — keyed on product_store_id, never on the
-        # (product_id, store_id) pair (no longer unique; the AST gate enforces this).
-        prior_stmt = (
-            select(PricePoint)
-            .where(PricePoint.product_store_id == product_store.id)
-            .order_by(PricePoint.checked_at.desc())
-            .limit(1)
-        )
-        prior = (await session.execute(prior_stmt)).scalars().first()
-
-        # Trigger (a): first successful check — no history yet, or the link still
-        # has no quantity from any source (harvest the package fields once).
-        first_success = prior is None or (
-            product_store.package_quantity is None
-            and product_store.scraped_package_quantity is None
-        )
-        # Trigger (b): the effective price dropped — an offer may have started
-        # (harvest the offer fields so watches and find_deals can see it).
-        price_drop = False
-        if prior is not None:
-            prior_effective = (
-                prior.offer_price_sek if prior.offer_price_sek is not None else prior.price_sek
-            )
-            current_effective = (
-                extraction.offer_price_sek
-                if extraction.offer_price_sek is not None
-                else extraction.price_sek
-            )
-            price_drop = prior_effective is not None and current_effective < prior_effective
-
-        if first_success or price_drop:
-            # Reuses the already-fetched page and never raises (parser guard):
-            # the JSON-LD price is recorded whether or not enrichment succeeds.
-            extraction = await parser.enrich_with_llm(
-                extraction,
-                text_content=fetch_result["text"],
-                store_slug=store.slug,
-                product_name=product.name,
-                html_content=fetch_result.get("html"),
-            )
-
     if extraction.price_sek is None:
         return PriceCheckOutcome(
             success=False,
             failure_reason="no_price",
-            fetch_error=None,
+            # The ladder's own reason ("produkten finns inte hos butiken (…)") — recorded as
+            # the attempt's detail, so a broken link on Fel & luckor says what the store said.
+            fetch_error=no_price_reason(extraction),
             extraction=extraction,
             price_point=None,
             mismatch=None,
         )
 
-    # Runs AFTER enrichment so harvested package fields feed the D-07 autofill.
-    # This is the ONLY scrape write path now: autofill when empty, flag on
-    # conflict, never overwrite the operator's typed value.
+    # Package fields the extraction read feed the D-07 autofill. This is the ONLY
+    # scrape write path: autofill when empty, flag on conflict, never overwrite the
+    # operator's typed value.
     mismatch = apply_scrape_to_link(product_store, extraction, product.unit)
     if mismatch:
         logger.warning(f"Package quantity mismatch for {product.name} at {store.name}: {mismatch}")

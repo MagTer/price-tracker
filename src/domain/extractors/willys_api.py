@@ -5,7 +5,12 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from domain.quickadd import parse_package_from_name
-from domain.result import PriceExtractionResult, ProductMetadata, StoreBlockedError
+from domain.result import (
+    PriceExtractionResult,
+    ProductGoneError,
+    ProductMetadata,
+    StoreBlockedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,10 @@ _MIN_INTERVAL_SECONDS = 3.0
 _MAX_WAIT_SECONDS = 10.0
 
 
+# What fetch_json reports for a product the API does not know (its "HTTP <status>" form).
+_GONE_ERRORS = frozenset({"HTTP 404", "HTTP 410"})
+
+
 class WillysApiExtractor:
     """Extract prices from Willys public REST API."""
 
@@ -43,8 +52,9 @@ class WillysApiExtractor:
     ) -> PriceExtractionResult | None:
         """Extract price from Willys API.
 
-        Returns None on ordinary errors to allow LLM fallback; raises StoreBlockedError on
-        a bot wall (deliberately NOT caught here — the ladder must stop, not fall through).
+        Returns None on ordinary errors so the ladder can try the page; raises
+        StoreBlockedError on a bot wall and ProductGoneError when the API says the code does
+        not exist (deliberately NOT caught here — in both cases the ladder must stop).
         """
         data = await self._fetch_product(store_url)
         if data is None:
@@ -56,7 +66,7 @@ class WillysApiExtractor:
         price check ignores (name, brand, package size).
 
         Willys is a client-rendered SPA: its product HTML carries no JSON-LD and no price, so
-        quick-add's HTML/LLM ladder sees an empty shell. The public REST API is the only
+        quick-add's HTML ladder sees an empty shell. The public REST API is the only
         reliable source, exactly as it is for the price-check path. Returns None on ordinary
         errors so the preview can still fall back to the HTML ladder; raises StoreBlockedError
         on a bot wall — falling back would fire a second request at the host that just walled
@@ -119,6 +129,11 @@ class WillysApiExtractor:
         result = await get_fetcher().fetch_json(f"{self.API_BASE}/{code}", referer=store_url)
         if result.get("blocked"):
             raise StoreBlockedError(f"Willys API bot wall: {result.get('error')}")
+        if result.get("error") in _GONE_ERRORS:
+            # The API's answer for a code Willys no longer sells ({"errorCode":"NOT_FOUND"},
+            # measured 2026-10-19 on 100002676_ST). The SPA shell still answers 200, so
+            # nothing below this tier can tell — it is gone, and the ladder must say so.
+            raise ProductGoneError(f"Willys API: {result.get('error')}")
         if not result.get("ok"):
             logger.warning("Willys API request failed for %s: %s", store_url, result.get("error"))
             return None

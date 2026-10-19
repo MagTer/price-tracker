@@ -55,9 +55,10 @@ PRINTED_MEASURE_MARKERS: list[tuple[str, str]] = [
     ("/l", "liter"),
 ]
 
-# Upper bound of a Numeric(12, 4) column. A hallucinated 1e30 from the LLM must be rejected
-# here and yield None — not surface as a DataError at flush inside the scheduler tick, where
-# the per-product `except Exception` would swallow it and count it as a failed check.
+# Upper bound of a Numeric(12, 4) column. An absurd 1e30 (a bad import, a malformed page)
+# must be rejected here and yield None — not surface as a DataError at flush inside the
+# scheduler tick, where the per-product `except Exception` would swallow it and count it
+# as a failed check.
 MAX_PACKAGE_QUANTITY: Decimal = Decimal("99999999.9999")
 
 # Storage precision of package_quantity / scraped_package_quantity: 0.1 g / 0.1 ml in the

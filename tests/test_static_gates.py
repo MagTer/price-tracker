@@ -862,3 +862,21 @@ def test_the_links_panel_prints_the_price_that_is_paid() -> None:
         "a JS effectivePrice() twin is back. Link payloads carry effective_price_sek from "
         "the domain; a second definition here is the Gotcha-4 shape all over again."
     )
+
+
+def test_no_language_model_prices_anything() -> None:
+    """No module in src/ calls a model endpoint (removed v0.66.0, decided 2026-10-19).
+
+    Over the tracker's prod history the LLM fallback answered 8 checks, all wrong, all on
+    links whose product the store had stopped selling — and it reported them "ok", which kept
+    link_health from flagging either link. Re-adding a model is a decision that needs a
+    measurement showing it adds value; this gate makes it a deliberate edit, not a drift.
+    """
+    markers = ("openrouter", "chat/completions", "api.openai.com", "api.anthropic.com")
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}: {marker}"
+        for path in sorted(SRC_ROOT.rglob("*.py"))
+        for marker in markers
+        if marker in path.read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == []

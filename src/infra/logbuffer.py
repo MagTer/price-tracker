@@ -1,7 +1,7 @@
 """In-memory ring buffer of recent log records, surfaced in the portal's Loggar page.
 
 The app already logs the interesting operational story — which extraction path won
-(API / JSON-LD / LLM), when a model fell back to the next in the cascade, when a fetch
+(API / page state / JSON-LD), when a store said a product is gone, when a fetch
 hit a store's WAF wall, when metadata extraction gave up. Rather than thread a second
 event bus through all of that, this handler tails those existing log records into a
 capped deque the admin API can read. Ephemeral by design: it lives in the process, so a
@@ -165,8 +165,8 @@ def install(level: int = logging.DEBUG, loggers: tuple[str, ...] = _DEFAULT_LOGG
 
     Also raises each named logger to `level` so its records are actually emitted regardless
     of how the root logger is configured, without touching the root logger's level or its
-    other handlers. Capturing at DEBUG matters: several *fallback* events (JSON-LD → LLM,
-    "confidence too low, trying next model") are DEBUG, and the Loggar page's level filter
+    other handlers. Capturing at DEBUG matters: several *fallback* events (API miss → page,
+    page state → JSON-LD) are DEBUG, and the Loggar page's level filter
     can only show what the buffer holds. These DEBUG records stay OUT of the console — they
     propagate to the root handler, which filters at its own (INFO+) level; only this
     buffer, attached directly to the app loggers, keeps them.

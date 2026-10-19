@@ -5,7 +5,8 @@ tracker in TWO independent ways — both verified live 2026-08-16 and both silen
 
 1. **A multi-variant product publishes ``ProductGroup``, not ``Product``.** The 24 towel
    variants of NORA hang off ``hasVariant``, and the generic JsonLdExtractor walks only
-   ``mainEntity``/``@graph`` — so it returns None and the whole page falls to the LLM.
+   ``mainEntity``/``@graph`` — so it returns None and the page went unpriced (to the LLM,
+   until v0.66.0 removed it).
 2. **The JSON-LD price is what one piece costs TODAY, never the ordinarie.** At a rea
    (Badrumsmatta SANDHEM: JSON-LD 75 while the page prints "Ordinarie pris: 149:- /st."
    under a -50 % sticker) recording it as ``price_sek`` is the ordinarie/offer inversion
@@ -45,7 +46,7 @@ from html import unescape
 from typing import Any
 
 from domain.extractors.base import LDJSON_BLOCK_RE, format_sek
-from domain.result import PriceExtractionResult, ProductMetadata
+from domain.result import PriceExtractionResult, ProductGoneError, ProductMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -256,15 +257,12 @@ class JyskExtractor:
                     if isinstance(variant, dict) and str(variant.get("sku") or "") == article:
                         return variant, brand_name, True
                 # The page carries a group that does not contain the article the URL names:
-                # the product moved or the URL is stale. Recording a sibling's price would
-                # be a foreign product at 0.97 confidence.
-                logger.warning(
-                    "JYSK article %s is not among the %d variants on %s - refusing the page",
-                    article,
-                    len(variants),
-                    store_url,
+                # JYSK stopped selling that variant (NORA 100x150 sand, gone by 2026-10-02
+                # while the page kept answering with its 23 siblings). A sibling's price would
+                # be a foreign product, and any lower tier can only offer exactly that.
+                raise ProductGoneError(
+                    f"JYSK-artikel {article} saknas bland sidans {len(variants)} varianter"
                 )
-                return None
             # No ?article=: the PATH selects the variant, and the selected one is published
             # first (measured on both a bare path and an ?article= URL, 2026-08-16). The
             # printed-price cross-check in extract_from_html is what proves the pick.
@@ -274,13 +272,7 @@ class JyskExtractor:
         # A single-variant product publishes a plain Product node.
         sku = str(node.get("sku") or "")
         if article is not None and sku and sku != article:
-            logger.warning(
-                "JYSK page %s publishes article %s, not the %s the URL names - refusing",
-                store_url,
-                sku,
-                article,
-            )
-            return None
+            raise ProductGoneError(f"JYSK-sidan visar artikel {sku}, inte {article}")
         return node, brand_name, article is not None and sku == article
 
     def _find_node(self, html: str) -> dict[str, Any] | None:

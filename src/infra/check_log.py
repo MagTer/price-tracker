@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 # The failure text is evidence, not prose: keep the head, where the HTTP status lives.
 _DETAIL_MAX = 255
-# The tier stamp is "llm:<model>" with the model id straight from the env-configurable
-# cascade — unclamped, a long model id makes the INSERT fail, the blanket except swallows
-# it, and precisely the LLM-answered rows (the spend anyone wants to measure) never land.
+# Clamped because an unclamped stamp that outgrows the column makes the INSERT fail, the
+# blanket except swallows it, and the row never lands (it happened with "llm:<model>" ids
+# while a model tier existed, removed v0.66.0).
 _SOURCE_MAX = 40  # models.CheckAttempt.extraction_source — String(40)
 
 

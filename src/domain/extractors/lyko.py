@@ -43,7 +43,7 @@ describes a DIFFERENT package than the link — refused rather than recorded.
 Makes NO HTTP calls of its own: like the other store-HTML tiers it parses the page the
 pipeline already fetched, so it needs no ledger slot and can never see a bot wall. Any
 parse failure returns None and the ladder falls through to JSON-LD (the right price outside
-a campaign) and then the LLM.
+a campaign) and, past that, to no price.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ class LykoExtractor:
     def extract_from_html(
         self, html: str, store_url: str, product_name: str | None = None
     ) -> PriceExtractionResult | None:
-        """Parse CURRENT_PAGE and return a result, or None for the JSON-LD/LLM fallback."""
+        """Parse CURRENT_PAGE and return a result, or None for the JSON-LD fallback."""
         page = self._find_product(html, store_url)
         if page is None:
             return None

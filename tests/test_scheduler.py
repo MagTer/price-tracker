@@ -274,7 +274,10 @@ class TestCheckSingleProduct:
 
     @pytest.mark.asyncio
     async def test_check_single_product_tracks_llm_source(self) -> None:
-        """raw_response without willys_api source increments checks_llm."""
+        """A success from no tier the scheduler recognises lands in checks_llm.
+
+        The wire field is append-only (/scheduler/status). No model tier exists since v0.66.0,
+        so this counter staying above zero means a success from an UNKNOWN tier."""
         scheduler, _, fetcher = _make_scheduler()
         extraction = _make_extraction(raw_response={"source": "llm"})
 
