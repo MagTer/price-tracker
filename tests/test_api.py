@@ -1309,6 +1309,7 @@ class TestBrokenLinkFlag:
 
         assert row["unit_price_sek"] == pytest.approx(5.83)
         assert row["store_unit_price_sek"] == pytest.approx(5.83)
+        assert row["store_url"] == ps.store_url
         assert row["in_stock"] is True
 
 
@@ -1898,6 +1899,7 @@ class TestProductOffersEndpoint:
         assert row["alternative_unit_price_sek"] == pytest.approx(145.80)
         assert row["alternative_seen_at"] is not None
         assert row["link_is_active"] is True
+        assert row["store_url"] == ica_link.store_url
 
 
 class TestUpdateWatch:

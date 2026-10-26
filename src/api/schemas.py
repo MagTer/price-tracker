@@ -203,6 +203,7 @@ class PricePointResponse(BaseModel):
     product_store_id: str  # The LINK this observation belongs to — the grouping key
     store_name: str
     store_slug: str
+    store_url: str | None = None
     package_size: str | None  # The link's printed label, e.g. "24-pack"
     package_quantity: float | None  # None => this link HAS no kr/unit; never coerce it to 0
     price_sek: float | None  # ORDINARIE — what the package costs outside a campaign

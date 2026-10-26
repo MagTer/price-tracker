@@ -293,6 +293,7 @@ async def price_history_rows(
             # The LINK's display name — two ICA-butik links must not both say "ICA".
             "store_name": link_store_name(product_store, store),
             "store_slug": store.slug,
+            "store_url": product_store.store_url,
             "package_size": product_store.package_size,
             "package_quantity": as_float(product_store.package_quantity),
             # price_sek is NOT NULL — no truthiness test: 0.00 is a price, not a null.

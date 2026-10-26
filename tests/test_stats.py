@@ -393,6 +393,7 @@ class TestOfferOccasions:
         assert len(rows) == 1
         assert rows[0].was_cheapest is None
         assert rows[0].alternative_unit_price_sek is None
+        assert rows[0].store_url == only.store_url
 
     async def test_a_retired_links_campaigns_stay_in_the_history(self, db_session) -> None:
         """Decided 2026-08-13: the rest of stats.py filters inactive links because

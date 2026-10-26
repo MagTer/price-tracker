@@ -72,6 +72,7 @@ class _Link:
     package_size: str | None
     quantity: Decimal | None
     last_checked_at: datetime | None
+    store_url: str | None = None
 
 
 def _effective(point: PricePoint) -> Decimal | None:
@@ -260,6 +261,7 @@ async def build_statistics(session: AsyncSession, *, weeks: int | None = None) -
             package_size=product_store.package_size,
             quantity=product_store.package_quantity,
             last_checked_at=product_store.last_checked_at,
+            store_url=product_store.store_url,
         )
         links[link.link_id] = link
         products[product.id] = product
@@ -510,6 +512,7 @@ class OfferOccasion:
     alternative_seen_at: datetime | None
     # None = UNJUDGED (no other link had a known price yet), never False.
     was_cheapest: bool | None
+    store_url: str | None = None
 
 
 async def product_offer_occasions(
@@ -555,6 +558,7 @@ async def product_offer_occasions(
             package_size=product_store.package_size,
             quantity=product_store.package_quantity,
             last_checked_at=product_store.last_checked_at,
+            store_url=product_store.store_url,
         )
         for product_store, store in link_rows
     }
@@ -596,6 +600,7 @@ async def product_offer_occasions(
                     store_name=link.store_name,
                     package_size=link.package_size,
                     link_is_active=bool(active.get(link.link_id, True)),
+                    store_url=link.store_url,
                     price_sek=_round(point.price_sek),
                     offer_price_sek=float(point.offer_price_sek),
                     unit_price_sek=_round(value),

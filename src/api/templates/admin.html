@@ -515,6 +515,7 @@
                  unwinding that entry would leave the address bar naming a product nobody
                  is looking at. -->
             <span class="header-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="price-history-links-btn">Visa länkar</button>
                 <button type="button" class="btn btn-sm btn-secondary" id="price-history-watch-btn" style="display:none;" onclick="openWatchForProduct(historyFor && historyFor.id)">Bevaka</button>
                 <button class="btn btn-sm" onclick="closePriceHistory()" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
             </span>
@@ -555,6 +556,7 @@
         <div class="modal-header">
             <h3 id="product-links-title">Länkar</h3>
             <div class="header-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="product-links-history-btn">Prishistorik</button>
                 <button type="button" class="btn btn-sm btn-secondary" id="product-links-watch-btn" style="display:none;" onclick="openWatchForProduct(productLinksFor && productLinksFor.id)">Bevaka</button>
                 <button type="button" class="btn btn-sm btn-primary admin-only"
                         id="links-add-btn" onclick="addLinkFromPanel()">+ Länka butik</button>
@@ -4570,7 +4572,7 @@ function buildBestAvailableSeries(rows, dates) {
 // false, so a NULL-quantity link renders as no line — never as zero. But a date where THIS link
 // simply was not checked no longer breaks its line: the step carries the last observed price
 // forward, which is the domain's own claim about what the price was.
-function buildChartData(rows, mode) {
+function buildChartData(rows, mode, watchTargetSek = null) {
     // The dataviz reference categorical palette (light mode), FIXED order — CVD-validated for
     // adjacency on the white card surface. The sub-3:1-contrast slots (aqua/yellow/magenta) are
     // acceptable because the table under the chart is the relief channel.
@@ -4669,6 +4671,22 @@ function buildChartData(rows, mode) {
             pointRadius: 0,
             pointHoverRadius: 0,
             pointHitRadius: 0
+        });
+    }
+
+    if (mode === 'unit' && watchTargetSek != null && dates.length >= 2) {
+        datasets.push({
+            role: 'watch-target',
+            label: 'Bevakningsmål',
+            data: dates.map(d => ({ x: toTs(d), y: watchTargetSek })),
+            borderColor: '#16a34a',
+            borderWidth: 1.5,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 0,
+            fill: false,
+            spanGaps: true
         });
     }
 
@@ -4820,7 +4838,10 @@ function renderPriceHistory() {
 
     if (window.Chart) {
         Chart.defaults.font.family = "'Inter', system-ui, -apple-system, sans-serif";
-        const chart = buildChartData(historyRows, historyMode);
+        const watch = (watchesCache || []).find(
+            w => w.product_id === (historyFor && historyFor.id) && w.unit_price_target_sek != null
+        );
+        const chart = buildChartData(historyRows, historyMode, watch ? watch.unit_price_target_sek : null);
         const ctx = document.getElementById('price-history-chart').getContext('2d');
         if (priceChart) priceChart.destroy();
         legendDiv.innerHTML = buildHistoryLegend(chart);
@@ -4980,6 +5001,11 @@ function historySummaryHtml(rows, productId, unit) {
             STATS_PERIODS[String((statsData.period || {}).weeks || 0)] || '');
     }
 
+    const watch = (watchesCache || []).find(w => w.product_id === productId && w.unit_price_target_sek != null);
+    if (watch) {
+        html += stat('Bevakningsmål', escapeHtml(unitKr(watch.unit_price_target_sek, unit)), '');
+    }
+
     html += stat('Observationer', String(rows.length),
         lastSeen ? 'senast ' + formatDay(lastSeen) : '');
     html += '</div>';
@@ -5012,8 +5038,10 @@ function historySummaryHtml(rows, productId, unit) {
 function buildHistoryLegend(chart) {
     const items = chart.datasets
         .map((ds, index) => ({ ds, index }))
-        .filter(entry => entry.ds.role === 'link');
-    if (items.length < 2) return '';
+        .filter(entry => entry.ds.role === 'link' || entry.ds.role === 'watch-target');
+    const linkCount = items.filter(entry => entry.ds.role === 'link').length;
+    const hasWatch = items.some(entry => entry.ds.role === 'watch-target');
+    if (linkCount < 2 && !hasWatch) return '';
     return items.map(({ ds, index }) =>
         `<button type="button" class="ph-legend-item" data-legend-index="${index}">`
         + `<span class="ph-legend-swatch" style="background:${escapeHtml(ds.borderColor)}"></span>`
@@ -5043,7 +5071,7 @@ function buildOfferOccasions(offers, unit) {
         return html + '<p class="empty-state">Inga erbjudanden i perioden.</p></details>';
     }
     for (const o of offers) {
-        const store = escapeHtml(o.store_name)
+        const store = storeLinkHtml(o.store_name, o.store_url)
             + (o.package_size ? ' <span class="ph-pkg">' + escapeHtml(o.package_size) + '</span>' : '')
             // A row about a link nobody can buy from should say so rather than send the
             // reader looking for a page we stopped tracking.
@@ -5132,7 +5160,7 @@ function buildHistoryTable(rows, unit) {
             : '';
         html += `<tr>
             <td>${escapeHtml(h.checked_at ? String(h.checked_at).slice(0, 10) : '-')}${source}</td>
-            <td>${escapeHtml(h.store_name)}</td>
+            <td>${storeLinkHtml(h.store_name, h.store_url)}</td>
             <td>${pkg}</td>
             <td>${escapeHtml(kr(h.price_sek))}</td>
             <td class="unit-price">${unitPrice}</td>
@@ -5867,6 +5895,22 @@ for (const pkgPrefix of ['qa', 'link', 'edit']) {
         pkgSetEntryUnit(pkgPrefix, btn.getAttribute('data-entry-unit'));
     });
 }
+
+document.getElementById('price-history-links-btn').addEventListener('click', () => {
+    const pid = historyFor && historyFor.id;
+    if (!pid) return;
+    const p = (allProducts || []).find(x => x.id === pid);
+    const name = (p && p.name) || (historyFor && historyFor.name) || '';
+    const unit = (p && p.unit) || (historyFor && historyFor.unit) || null;
+    closePriceHistory();
+    showProductLinks(pid, name, unit);
+});
+
+document.getElementById('product-links-history-btn').addEventListener('click', () => {
+    const pid = productLinksFor && productLinksFor.id;
+    closeModal('modal-product-links');
+    if (pid) openPriceHistory(pid);
+});
 
 // Price-history mode toggle. Re-renders from the cached rows; no refetch.
 document.getElementById('price-history-modes').addEventListener('click', (e) => {
