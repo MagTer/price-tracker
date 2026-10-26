@@ -381,6 +381,7 @@
                 <input type="url" name="url" id="qa-url" required class="form-input" placeholder="https://…">
             </div>
             <div class="form-actions">
+                <button type="button" class="btn btn-sm" id="qa-manual-link-btn" style="display:none;" onclick="openManualLinkFromQuickAdd()">Manuell inmatning utan URL-hämtning</button>
                 <button type="submit" class="btn btn-primary" id="qa-fetch-btn">Hämta produktinfo</button>
             </div>
         </form>
@@ -4258,7 +4259,9 @@ async function deleteProduct(id) {
 // Opened from the Länkar panel, which already knows the product and its unit.
 function addLinkFromPanel() {
     if (!productLinksFor) return;
-    showLinkStoreModal(productLinksFor.id, productLinksFor.unit);
+    const id = productLinksFor.id;
+    closeModal('modal-product-links');
+    showQuickAddModal(id);
 }
 
 // productUnit labels the amount field and picks the entry helpers — the link never asks for
@@ -4306,15 +4309,63 @@ async function handleLinkStore(e) {
 // would rebuild the one-product-per-pack-size world the model change abolished.
 
 let qaPreview = null;
+let qaLockedProductId = null;
 
-function showQuickAddModal() {
+function openManualLinkFromQuickAdd() {
+    const pid = qaLockedProductId;
+    if (!pid) return;
+    const product = (allProducts || []).find(p => p.id === pid);
+    closeModal('modal-quick-add');
+    showLinkStoreModal(pid, product ? product.unit : null);
+}
+
+function showQuickAddModal(targetProductId = null) {
     qaPreview = null;
+    qaLockedProductId = targetProductId || null;
+    const lockedProduct = qaLockedProductId
+        ? (allProducts || []).find(p => p.id === qaLockedProductId)
+        : null;
+    document.getElementById('quick-add-title').textContent = lockedProduct
+        ? 'Länka butik — ' + lockedProduct.name
+        : 'Snabbtillägg från URL';
+    document.getElementById('qa-manual-link-btn').style.display = qaLockedProductId ? '' : 'none';
     document.getElementById('form-quick-add-url').reset();
     document.getElementById('form-quick-add-confirm').style.display = 'none';
     const status = document.getElementById('qa-status');
     status.style.display = 'none';
     status.textContent = '';
     openModal('modal-quick-add');
+}
+
+function populateQaProductSelect(suggestions = [], selectedId = null, newProductName = null) {
+    const select = document.getElementById('qa-product-select');
+    const fmtProduct = (p) =>
+        `${escapeHtml(p.name)}${p.brand ? ' (' + escapeHtml(p.brand) + ')' : ''} — ${escapeHtml(p.unit || 'ingen enhet')}`;
+    const parts = [
+        '<option value="">Ny produkt' + (newProductName ? ': ' + escapeHtml(newProductName) : '') + '</option>'
+    ];
+    const suggestedIds = new Set();
+    if (suggestions && suggestions.length > 0) {
+        parts.push('<optgroup label="Föreslagna träffar">');
+        for (const s of suggestions) {
+            suggestedIds.add(s.id);
+            parts.push(`<option value="${escapeHtml(s.id)}">Ny länk på befintlig: ${fmtProduct(s)}</option>`);
+        }
+        parts.push('</optgroup>');
+    }
+    const allSorted = (allProducts || [])
+        .filter(p => !suggestedIds.has(p.id))
+        .slice()
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'sv'));
+    if (allSorted.length > 0) {
+        parts.push('<optgroup label="Alla produkter">');
+        for (const p of allSorted) {
+            parts.push(`<option value="${escapeHtml(p.id)}">${fmtProduct(p)}</option>`);
+        }
+        parts.push('</optgroup>');
+    }
+    select.innerHTML = parts.join('');
+    select.value = selectedId || '';
 }
 
 async function handleQuickAddPreview(e) {
@@ -4364,14 +4415,9 @@ function qaRenderPreview(p) {
     } else {
         sibRow.style.display = 'none';
     }
-    const select = document.getElementById('qa-product-select');
-    const options = ['<option value="">Ny produkt' + (p.name ? ': ' + escapeHtml(p.name) : '') + '</option>'];
-    for (const s of (p.existing_products || [])) {
-        options.push('<option value="' + escapeHtml(s.id) + '">Ny länk på befintlig: '
-            + escapeHtml(s.name) + (s.brand ? ' (' + escapeHtml(s.brand) + ')' : '') + '</option>');
-    }
-    select.innerHTML = options.join('');
-    select.value = '';
+    const suggestions = p.existing_products || [];
+    const selectedId = qaLockedProductId || '';
+    populateQaProductSelect(suggestions, selectedId, p.name);
     document.getElementById('qa-name').value = p.name || '';
     document.getElementById('qa-brand').value = p.brand || '';
     document.getElementById('qa-category').value = p.category || '';
@@ -4379,6 +4425,9 @@ function qaRenderPreview(p) {
     document.getElementById('qa-new-product-fields').style.display = '';
     pkgInitChain('qa', p.suggested_unit || '',
         p.package_quantity != null ? p.package_quantity : '', p.package_size || '');
+    if (qaLockedProductId) {
+        qaProductChoiceChanged();
+    }
     const info = [];
     if (p.price_sek != null) info.push('Pris just nu: ' + formatSek(p.price_sek) + ' kr');
     if (p.source) info.push('källa: strukturerad sidodata');
@@ -4390,7 +4439,8 @@ function qaRenderPreview(p) {
 }
 
 function qaExistingUnit(id) {
-    const s = ((qaPreview && qaPreview.existing_products) || []).find(x => x.id === id);
+    const s = ((qaPreview && qaPreview.existing_products) || []).find(x => x.id === id)
+        || (allProducts || []).find(x => x.id === id);
     return s ? s.unit : null;
 }
 
@@ -4450,10 +4500,19 @@ async function handleQuickAddConfirm(e) {
             const names = sibs.map(s => s.store_label || 'syskonbutik').join(', ');
             msg += ' · även ' + names;
         }
+        const lockedId = qaLockedProductId;
         showToast(msg);
         closeModal('modal-quick-add');
-        loadProducts();
+        await loadProducts();
         loadStats();
+        if (lockedId) {
+            const prod = (allProducts || []).find(p => p.id === lockedId);
+            if (currentPage() === 'luckor') {
+                loadStatistics();
+            } else if (prod) {
+                showProductLinks(prod.id, prod.name, prod.unit);
+            }
+        }
     } catch (err) {
         showToast('Fel: ' + err.message, 'error');
     } finally {
@@ -6050,9 +6109,9 @@ document.getElementById('luckor-container').addEventListener('click', (e) => {
     } else if (action === 'save-amount') {
         saveGapAmount(btn.getAttribute('data-link'), btn.getAttribute('data-unit'));
     } else if (action === 'link-store') {
-        // Straight to the dialog that closes the gap — not the links panel it usually
-        // opens from, which would be a click spent looking at links we already listed here.
-        showLinkStoreModal(btn.getAttribute('data-id'), btn.getAttribute('data-unit'));
+        // Straight to the dialog that closes the gap — preselected on this product so a
+        // pasted URL gets store, package quantity and sibling links automatically.
+        showQuickAddModal(btn.getAttribute('data-id'));
     }
 });
 

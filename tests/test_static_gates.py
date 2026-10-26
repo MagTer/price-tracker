@@ -889,3 +889,20 @@ def test_no_language_model_prices_anything() -> None:
         if marker in path.read_text(encoding="utf-8").lower()
     ]
     assert offenders == []
+
+
+def test_quick_add_product_select_includes_all_products() -> None:
+    """populateQaProductSelect must always offer the full allProducts list alongside suggestions.
+
+    Store titles frequently spell or brand a product differently from the tracked catalogue name,
+    so relying solely on word-overlap suggestions strands the operator with no way to link a
+    pasted URL to an existing product from quick-add.
+    """
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    body = re.search(r"function populateQaProductSelect\([^)]*\)\s*\{(.*?)\n\}", js, re.DOTALL)
+    assert body is not None, "populateQaProductSelect not found in admin.html"
+    assert "allProducts" in body.group(1), (
+        "populateQaProductSelect no longer includes allProducts — products that miss word-overlap "
+        "suggestions cannot be selected in quick-add."
+    )
+    assert "populateQaProductSelect(" in js
