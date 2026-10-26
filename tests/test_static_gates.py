@@ -906,3 +906,17 @@ def test_quick_add_product_select_includes_all_products() -> None:
         "suggestions cannot be selected in quick-add."
     )
     assert "populateQaProductSelect(" in js
+
+
+def test_luckor_prefills_scraped_amounts_and_allows_deleting_broken_links() -> None:
+    """Fel & luckor must prefill scraped_package_quantity and offer direct broken-link removal."""
+    js = ADMIN_HTML.read_text(encoding="utf-8").split("<!-- SECTION_SEPARATOR -->")[2]
+    gaps = re.search(r"function buildAmountGaps\(rows\)\s*\{(.*?)\n\}", js, re.DOTALL)
+    assert gaps is not None, "buildAmountGaps not found"
+    assert 'value="${link.scraped_package_quantity != null' in gaps.group(1)
+    assert "storeLinkHtml(link.store_name, link.store_url)" in gaps.group(1)
+
+    broken = re.search(r"function buildBrokenLinks\(rows\)\s*\{(.*?)\n\}", js, re.DOTALL)
+    assert broken is not None, "buildBrokenLinks not found"
+    assert 'data-issue-action="delete-link"' in broken.group(1)
+    assert "storeLinkHtml(link.store_name, link.store_url)" in broken.group(1)

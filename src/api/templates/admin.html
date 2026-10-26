@@ -1344,6 +1344,8 @@ form { padding: 20px; }
    be the button you hit on the way to Spara. */
 .btn-danger { color: var(--error); border-color: #fecaca; margin-right: auto; }
 .btn-danger:hover { background: var(--error-line); border-color: var(--error); color: var(--error); }
+.btn-danger-outline { color: var(--error); border-color: var(--error-border); }
+.btn-danger-outline:hover { background: var(--error-line); border-color: var(--error); color: var(--error-strong); }
 .pkg-entry-units { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .pkg-entry-units:empty { display: none; }
 .entry-unit-active { background: var(--primary); color: #fff; border-color: var(--primary); }
@@ -3603,14 +3605,17 @@ function buildBrokenLinks(rows) {
         const seen = link.last_checked_at ? ' · senast ' + formatShortWhen(link.last_checked_at) : '';
         html += `<div class="issue-row">
             <div class="issue-main">
-                <div class="issue-name">${escapeHtml(product.name)}</div>
-                <div class="issue-sub">${escapeHtml(link.store_name)} · 3 av 3 senaste försök${escapeHtml(seen)}</div>
+                <div class="issue-name"><button type="button" class="deal-name" data-issue-action="open-product-links" data-id="${escapeHtml(product.id)}">${escapeHtml(product.name)}</button></div>
+                <div class="issue-sub">${storeLinkHtml(link.store_name, link.store_url)} · 3 av 3 senaste försök${escapeHtml(seen)}</div>
             </div>
             <div class="issue-right">
                 <span class="badge badge-error">${escapeHtml(detail || 'misslyckad kontroll')}</span>
                 <div class="issue-hint">${escapeHtml(hint)}</div>
                 ${IS_ADMIN ? `<button class="action-btn" data-issue-action="check"
-                    data-link="${escapeHtml(link.product_store_id)}">Kontrollera nu</button>` : ''}
+                    data-link="${escapeHtml(link.product_store_id)}">Kontrollera nu</button>
+                <button class="action-btn btn-danger-outline" data-issue-action="delete-link"
+                    data-link="${escapeHtml(link.product_store_id)}"
+                    data-what="${escapeHtml(product.name + ' (' + link.store_name + ')')}">Ta bort länk</button>` : ''}
             </div>
         </div>`;
     }
@@ -3626,6 +3631,10 @@ function buildAmountGaps(rows) {
         + '</div></div>';
     for (const { product, link } of rows) {
         const entry = gapEntry(product.unit);
+        const spec = PKG_UNITS[entry.unit];
+        const prefill = link.scraped_package_quantity != null
+            ? +(Number(link.scraped_package_quantity) / (spec ? spec.factor : 1)).toFixed(4)
+            : '';
         // Only shown when we actually HAVE it: the page's own reading is evidence, and a
         // hint we do not hold must not be invented.
         // NOT formatSek: the money formatter's 2 decimals round a 24 g sachet (0.024 kg,
@@ -3637,14 +3646,15 @@ function buildAmountGaps(rows) {
         const price = link.effective_price_sek;
         html += `<div class="issue-row">
             <div class="issue-main">
-                <div class="issue-name">${escapeHtml(product.name)}</div>
-                <div class="issue-sub">${escapeHtml(link.store_name)}</div>
+                <div class="issue-name"><button type="button" class="deal-name" data-issue-action="open-product-links" data-id="${escapeHtml(product.id)}">${escapeHtml(product.name)}</button></div>
+                <div class="issue-sub">${storeLinkHtml(link.store_name, link.store_url)}</div>
             </div>
             <div class="issue-right">
                 <div class="gap-hint">${escapeHtml(hint)}</div>
                 <div class="gap-price">${escapeHtml(kr(price))}</div>
                 ${IS_ADMIN ? `<input type="number" step="any" min="0" class="gap-input"
                         placeholder="${escapeHtml(entry.placeholder)}"
+                        value="${link.scraped_package_quantity != null ? escapeHtml(prefill) : ''}"
                         data-gap-input="${escapeHtml(link.product_store_id)}">
                     <button class="btn btn-primary gap-save" data-issue-action="save-amount"
                         data-link="${escapeHtml(link.product_store_id)}"
@@ -6087,7 +6097,7 @@ document.getElementById('stats-container').addEventListener('click', (e) => {
 // Fel & luckor is a to-do list, so every row carries the action that closes it: the amount
 // is typed and saved in place, a broken link is re-checked from here, and a silent error
 // opens the link it is about.
-document.getElementById('luckor-container').addEventListener('click', (e) => {
+document.getElementById('luckor-container').addEventListener('click', async (e) => {
     const box = e.target.closest('[data-issue-goto]');
     if (box) {
         // A count is a way IN to the list it counts, and that list is on this page.
@@ -6104,8 +6114,25 @@ document.getElementById('luckor-container').addEventListener('click', (e) => {
     } else if (action === 'fix-amount') {
         openIssueLink(btn.getAttribute('data-link-id'), btn.getAttribute('data-product'),
             btn.getAttribute('data-store'), true);
+    } else if (action === 'open-product-links') {
+        const pid = btn.getAttribute('data-id');
+        const product = (allProducts || []).find(p => p.id === pid);
+        showProductLinks(pid, product ? product.name : '', product ? product.unit : null);
     } else if (action === 'check') {
         checkLinkNow(btn.getAttribute('data-link'));
+    } else if (action === 'delete-link') {
+        const linkId = btn.getAttribute('data-link');
+        const what = btn.getAttribute('data-what') || 'butikslänken';
+        if (!confirm('Ta bort länken till ' + what + ' och hela dess prishistorik?')) return;
+        try {
+            await apiDelete('/product-stores/' + linkId);
+            showToast('Länk borttagen');
+            await loadProducts();
+            loadStats();
+            loadStatistics();
+        } catch (err) {
+            showToast('Fel: ' + err.message, 'error');
+        }
     } else if (action === 'save-amount') {
         saveGapAmount(btn.getAttribute('data-link'), btn.getAttribute('data-unit'));
     } else if (action === 'link-store') {
