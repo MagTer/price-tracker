@@ -476,9 +476,14 @@ def test_every_getelementbyid_literal_resolves_to_markup() -> None:
         *[f"sched-state{sfx}" for sfx in ("", "-m")],
         *[f"sched-state-text{sfx}" for sfx in ("", "-m")],
         *[f"sched-when{sfx}" for sfx in ("", "-m")],
-        # num('…') in the watch dialog — indirected through a local helper.
+        # num('…') and context helpers in the watch dialogs — indirected through local helpers.
         "edit-watch-unit-target",
         "edit-watch-target",
+        "watch-price-context",
+        "edit-watch-price-context",
+        "watch-unit-label",
+        "price-history-watch-btn",
+        "product-links-watch-btn",
     ]
     ids = sorted(set(ids) | set(dynamic_ids))
 
@@ -585,7 +590,11 @@ def test_the_drill_in_is_opened_and_closed_only_through_the_hash() -> None:
     # apart in the file. Half of that pair is a button that looks exactly like the working one
     # and does nothing when clicked — nothing on screen says so, and no runtime test reaches
     # it: the drill-in is pure client-side, so the endpoints stay green either way.
-    entry_points = (("data-deal-action", "Att köpa"), ("data-stats-product", "Prisutveckling"))
+    entry_points = (
+        ("data-deal-action", "Att köpa"),
+        ("data-stats-product", "Prisutveckling"),
+        ("data-watch-product", "Bevakningar"),
+    )
     for attribute, page in entry_points:
         assert f'{attribute}="' in js, (
             f"{page}'s product name no longer renders {attribute} — the drill-in has lost "

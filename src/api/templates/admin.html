@@ -514,7 +514,10 @@
             <!-- Not closeModal(): this dialog owns a history entry, and hiding it without
                  unwinding that entry would leave the address bar naming a product nobody
                  is looking at. -->
-            <button class="btn btn-sm" onclick="closePriceHistory()" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
+            <span class="header-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="price-history-watch-btn" style="display:none;" onclick="openWatchForProduct(historyFor && historyFor.id)">Bevaka</button>
+                <button class="btn btn-sm" onclick="closePriceHistory()" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
+            </span>
         </div>
         <!-- kr/unit is the DEFAULT (QD-3). Absolute price across pack sizes is the question
              that has no honest answer: a smaller box always looks cheaper. In absolute mode
@@ -552,6 +555,7 @@
         <div class="modal-header">
             <h3 id="product-links-title">Länkar</h3>
             <div class="header-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="product-links-watch-btn" style="display:none;" onclick="openWatchForProduct(productLinksFor && productLinksFor.id)">Bevaka</button>
                 <button type="button" class="btn btn-sm btn-primary admin-only"
                         id="links-add-btn" onclick="addLinkFromPanel()">+ Länka butik</button>
                 <button class="btn btn-sm" onclick="closeModal('modal-product-links')" aria-label="Stäng"><span aria-hidden="true">&times;</span></button>
@@ -696,8 +700,9 @@
                 <input id="edit-watch-price-drop-threshold-percent" type="number" name="price_drop_threshold_percent" class="form-input">
             </div>
             <div class="form-group">
-                <label for="edit-watch-unit-price-target-sek">Mål för jämförpris (kr)</label>
-                <input id="edit-watch-unit-price-target-sek" type="number" step="0.01" name="unit_price_target_sek" class="form-input">
+                <label for="watch-unit-target">Mål för jämförpris (<span id="watch-unit-label">kr/enhet</span>)</label>
+                <input id="watch-unit-target" type="number" step="0.01" name="unit_price_target_sek" class="form-input">
+                <div id="watch-price-context" class="watch-price-context"></div>
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Skapa bevakning</button>
@@ -735,6 +740,7 @@
             <div class="form-group">
                 <label for="edit-watch-unit-target">Mål för jämförpris (<span id="edit-watch-unit-label">kr/st</span>)</label>
                 <input type="number" step="0.01" id="edit-watch-unit-target" class="form-input">
+                <div id="edit-watch-price-context" class="watch-price-context"></div>
                 <small class="form-hint">Lämna tomt för att ta bort målet.</small>
             </div>
             <div class="form-group">
@@ -1437,6 +1443,11 @@ form { padding: 20px; }
 /* The link dialog can be opened FROM the links panel, so it has to stack above it — and
    so does the packaging dialog, which Fel & luckor opens the same way. */
 #modal-link-store, #modal-edit-packaging { z-index: 210; }
+#modal-create-watch, #modal-edit-watch { z-index: 220; }
+.watch-price-context { margin-top: 6px; font-size: 12.5px; color: var(--text-muted); display: flex; flex-direction: column; gap: 6px; }
+.watch-price-context:empty { display: none; }
+.watch-price-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.watch-SubtleWarn { color: var(--warning-link); font-size: 12px; font-weight: 500; }
 
 /* --- Overflow menu (<details>, so it opens and closes without a line of JS and answers
    the keyboard). --- */
@@ -3943,7 +3954,7 @@ function watchRowHtml(w) {
     }
     return `<div class="w-row${met ? ' is-met' : ''}">
         <div class="w-main">
-            <div class="w-name">${escapeHtml(w.product_name || w.product_id)}</div>
+            <div class="w-name"><button type="button" class="deal-name" data-watch-product="${escapeHtml(w.product_id)}">${escapeHtml(w.product_name || w.product_id)}</button></div>
             <div class="w-meta">${escapeHtml(meta)}</div>
         </div>
         <div class="w-right">
@@ -3976,6 +3987,8 @@ async function loadWatches() {
     try {
         const watches = await apiGet('/watches');
         watchesCache = watches;
+        if (historyFor && historyFor.id) syncWatchActionButtons(historyFor.id);
+        if (productLinksFor && productLinksFor.id) syncWatchActionButtons(productLinksFor.id);
         setNavCount('nav-count-bevakningar', watches.length);
         const container = document.getElementById('watches-table-container');
         const basis = document.getElementById('watches-basis');
@@ -4739,6 +4752,7 @@ async function showPriceHistory(productId, productName, productUnit) {
     document.getElementById('price-history-title').textContent =
         productName ? 'Prishistorik – ' + productName : 'Prishistorik';
     historyFor = { id: productId, name: productName, unit: productUnit };
+    syncWatchActionButtons(productId);
     historyOffers = null;
     historyMode = 'unit';
     setHistoryModeButtons();
@@ -5295,6 +5309,7 @@ async function showProductLinks(productId, productName, productUnit) {
     linkSort = { column: null, direction: 'asc' };
     document.getElementById('product-links-title').textContent =
         productName ? 'Länkar — ' + productName : 'Länkar';
+    syncWatchActionButtons(productId);
     openModal('modal-product-links');
     document.getElementById('product-links-table').innerHTML = '<div class="loading">Laddar länkar…</div>';
     try {
@@ -5544,9 +5559,113 @@ async function handleImport(e) {
     }
 }
 
-function showCreateWatchModal() {
+let editWatchProductId = null;
+
+function productPriceContext(productId) {
+    const product = (allProducts || []).find(p => p.id === productId);
+    const stat = (statsData && statsData.products || []).find(p => p.product_id === productId);
+    const watch = (watchesCache || []).find(w => w.product_id === productId);
+    const unit = (product && product.unit) || (stat && stat.unit) || (watch && watch.unit) || null;
+    let storeLowest = null;
+    if (product && Array.isArray(product.stores)) {
+        for (const s of product.stores) {
+            if (typeof s.unit_price_sek === 'number' && isFinite(s.unit_price_sek)) {
+                if (storeLowest === null || s.unit_price_sek < storeLowest) storeLowest = s.unit_price_sek;
+            }
+        }
+    }
+    const currentUnitPrice = storeLowest != null ? storeLowest
+        : (stat && stat.current_unit_price != null ? stat.current_unit_price
+            : (watch && watch.current_lowest_unit_price_sek != null ? watch.current_lowest_unit_price_sek : null));
+    const lowUnitPrice = (stat && stat.low_unit_price != null) ? stat.low_unit_price
+        : (watch && watch.lowest_unit_price_sek != null ? watch.lowest_unit_price_sek : null);
+    const highUnitPrice = (stat && stat.high_unit_price != null) ? stat.high_unit_price
+        : (watch && watch.highest_unit_price_sek != null ? watch.highest_unit_price_sek : null);
+    return { unit, currentUnitPrice, lowUnitPrice, highUnitPrice };
+}
+
+function renderWatchPriceContext(productId, containerId, inputId, labelId) {
+    const ctx = productPriceContext(productId);
+    const labelEl = document.getElementById(labelId);
+    if (labelEl) labelEl.textContent = unitPriceHeading(ctx.unit);
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const inputEl = document.getElementById(inputId);
+    const entered = inputEl && inputEl.value.trim() !== '' ? parseFloat(inputEl.value) : null;
+
+    const parts = [];
+    if (ctx.currentUnitPrice != null) {
+        parts.push(`Nu: <b>${escapeHtml(unitKr(ctx.currentUnitPrice, ctx.unit))}</b>`);
+    }
+    if (ctx.lowUnitPrice != null && ctx.highUnitPrice != null) {
+        parts.push(`Periodens spann: <b>${escapeHtml(unitKr(ctx.lowUnitPrice, ctx.unit))} – ${escapeHtml(unitKr(ctx.highUnitPrice, ctx.unit))}</b>`);
+    }
+    const presets = [];
+    if (ctx.lowUnitPrice != null) {
+        presets.push({
+            val: +ctx.lowUnitPrice.toFixed(2),
+            text: `Vid lägstanivån (${unitKr(ctx.lowUnitPrice, ctx.unit)})`
+        });
+    }
+    if (ctx.currentUnitPrice != null) {
+        const justUnder = Math.max(0.01, +(ctx.currentUnitPrice - 0.01).toFixed(2));
+        presets.push({
+            val: justUnder,
+            text: `Under nuvarande (${unitKr(justUnder, ctx.unit)})`
+        });
+        const fivePctUnder = Math.max(0.01, +(ctx.currentUnitPrice * 0.95).toFixed(2));
+        if (fivePctUnder !== justUnder) {
+            presets.push({
+                val: fivePctUnder,
+                text: `5 % under nu (${unitKr(fivePctUnder, ctx.unit)})`
+            });
+        }
+    }
+
+    let html = '';
+    if (parts.length) {
+        html += `<div class="watch-price-summary">${parts.join(' · ')}</div>`;
+    }
+    if (presets.length) {
+        html += '<div class="watch-price-presets">' + presets.map(p =>
+            `<button type="button" class="chip" data-watch-preset="${escapeHtml(p.val)}" data-target-input="${escapeHtml(inputId)}">${escapeHtml(p.text)}</button>`
+        ).join('') + '</div>';
+    }
+    if (entered != null && isFinite(entered) && entered > 0 && ctx.lowUnitPrice != null && entered < ctx.lowUnitPrice) {
+        html += `<div class="watch-SubtleWarn">Ligger under lägsta observerade pris (${escapeHtml(unitKr(ctx.lowUnitPrice, ctx.unit))}) — bevakningen kommer sannolikt inte larma.</div>`;
+    }
+    container.innerHTML = html;
+}
+
+function syncWatchActionButtons(productId) {
+    const existing = (watchesCache || []).find(w => w.product_id === productId);
+    const label = existing ? 'Redigera bevakning' : 'Bevaka';
+    for (const btnId of ['price-history-watch-btn', 'product-links-watch-btn']) {
+        const btn = document.getElementById(btnId);
+        if (!btn) continue;
+        btn.style.display = IS_ADMIN ? '' : 'none';
+        btn.textContent = label;
+    }
+}
+
+function openWatchForProduct(productId) {
+    if (!productId) return;
+    const existing = (watchesCache || []).find(w => w.product_id === productId);
+    if (existing) {
+        openEditWatch(existing.watch_id);
+    } else {
+        showCreateWatchModal(productId);
+    }
+}
+
+function showCreateWatchModal(preselectedProductId = null) {
     const select = document.getElementById('watch-product-select');
-    select.innerHTML = allProducts.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    const sorted = (allProducts || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'sv'));
+    select.innerHTML = sorted.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
+    if (preselectedProductId && sorted.some(p => p.id === preselectedProductId)) {
+        select.value = preselectedProductId;
+    }
+    document.getElementById('watch-unit-target').value = '';
     // Single-user app: the address is always yours — prefill it from the signed-in
     // header (still editable for the odd exception).
     const emailField = document.getElementById('watch-email');
@@ -5554,6 +5673,7 @@ function showCreateWatchModal() {
         const headerEmail = document.getElementById('user-email');
         if (headerEmail) emailField.value = headerEmail.textContent.trim();
     }
+    renderWatchPriceContext(select.value, 'watch-price-context', 'watch-unit-target', 'watch-unit-label');
     openModal('modal-create-watch');
 }
 
@@ -5591,11 +5711,13 @@ function openEditWatch(id) {
     document.getElementById('edit-watch-any-offer').checked = !!w.alert_on_any_offer;
     document.getElementById('edit-watch-drop').value =
         w.price_drop_threshold_percent != null ? w.price_drop_threshold_percent : '';
+    editWatchProductId = w.product_id;
     document.getElementById('edit-watch-unit-label').textContent = unitPriceHeading(w.unit);
     document.getElementById('edit-watch-unit-target').value =
         w.unit_price_target_sek != null ? w.unit_price_target_sek : '';
     document.getElementById('edit-watch-target').value =
         w.target_price_sek != null ? w.target_price_sek : '';
+    renderWatchPriceContext(w.product_id, 'edit-watch-price-context', 'edit-watch-unit-target', 'edit-watch-unit-label');
     openModal('modal-edit-watch');
 }
 
@@ -5903,6 +6025,11 @@ document.getElementById('luckor-container').addEventListener('keydown', (e) => {
 });
 
 document.getElementById('watches-table-container').addEventListener('click', (e) => {
+    const prodBtn = e.target.closest('button[data-watch-product]');
+    if (prodBtn) {
+        openPriceHistory(prodBtn.getAttribute('data-watch-product'));
+        return;
+    }
     const btn = e.target.closest('button[data-watch-action]');
     if (!btn) return;
     const id = btn.getAttribute('data-id');
@@ -5912,6 +6039,33 @@ document.getElementById('watches-table-container').addEventListener('click', (e)
         deleteWatch(id);
     }
 });
+
+document.getElementById('watch-product-select').addEventListener('change', (e) => {
+    renderWatchPriceContext(e.target.value, 'watch-price-context', 'watch-unit-target', 'watch-unit-label');
+});
+
+document.getElementById('watch-unit-target').addEventListener('input', () => {
+    const pid = document.getElementById('watch-product-select').value;
+    renderWatchPriceContext(pid, 'watch-price-context', 'watch-unit-target', 'watch-unit-label');
+});
+
+document.getElementById('edit-watch-unit-target').addEventListener('input', () => {
+    renderWatchPriceContext(editWatchProductId, 'edit-watch-price-context', 'edit-watch-unit-target', 'edit-watch-unit-label');
+});
+
+for (const ctxId of ['watch-price-context', 'edit-watch-price-context']) {
+    document.getElementById(ctxId).addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-watch-preset]');
+        if (!btn) return;
+        const targetInputId = btn.getAttribute('data-target-input');
+        const inputEl = targetInputId === 'edit-watch-unit-target'
+            ? document.getElementById('edit-watch-unit-target')
+            : document.getElementById('watch-unit-target');
+        if (!inputEl) return;
+        inputEl.value = btn.getAttribute('data-watch-preset');
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+}
 
 // --- Hash router: the sidebar's six pages ---
 //
