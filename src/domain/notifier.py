@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
+import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 
 from domain.deals import (
     DEAL_BEST,
@@ -21,6 +24,11 @@ from domain.protocols.email import EmailMessage, IEmailService
 from domain.schedule import STORE_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+# Base URL of the portal for deep links (e.g. `#/bevakningar?produkt=<id>`) in emails.
+# Like QUICKADD_STORE_LABELS and WILLYS_OFFLINE_STORE_ID, defaults to Magnus's instance so
+# production needs no manifest change while a second deployment can override it via env.
+PORTAL_URL = os.getenv("PORTAL_URL", "https://price.falle.se")
 
 _SWEDISH_WEEKDAYS = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
 
@@ -55,6 +63,11 @@ def _sek(value: float | Decimal) -> str:
     always to the öre in this app, and the emails are Swedish user text.
     """
     return f"{float(value):.2f}".replace(".", ",")
+
+
+def _pct(value: float) -> str:
+    """Percentage to one decimal with a Swedish decimal comma — '12,5 %'."""
+    return f"{float(value):.1f}".replace(".", ",") + " %"
 
 
 def _ranked_store_groups(deals: list[DealRow]) -> list[tuple[str, list[DealRow]]]:
@@ -92,13 +105,15 @@ class PriceNotifier:
     actual sending to the injected IEmailService.
     """
 
-    def __init__(self, email_service: IEmailService) -> None:
+    def __init__(self, email_service: IEmailService, portal_url: str | None = None) -> None:
         """Initialize the price notifier.
 
         Args:
             email_service: The email service to use for sending.
+            portal_url: Base URL of the portal for deep links (defaults to PORTAL_URL).
         """
         self._email_service = email_service
+        self._portal_url = PORTAL_URL if portal_url is None else portal_url
 
     async def send_price_alert(
         self,
@@ -113,13 +128,16 @@ class PriceNotifier:
         price_drop_percent: float | None = None,
         unit_price_sek: Decimal | None = None,
         unit_price_drop_percent: float | None = None,
+        unit: str | None = None,
+        unit_price_target_sek: Decimal | None = None,
+        product_id: uuid.UUID | str | None = None,
     ) -> bool:
-        """Send price drop alert email.
+        """Send price watch alert email.
 
         Returns:
             True if email was sent successfully.
         """
-        subject = f"Prisvarning: {product_name} hos {store_name}"
+        subject = f"Prisbevakning: {product_name} hos {store_name}"
         html_body = self._build_alert_html(
             product_name=product_name,
             store_name=store_name,
@@ -131,6 +149,9 @@ class PriceNotifier:
             price_drop_percent=price_drop_percent,
             unit_price_sek=unit_price_sek,
             unit_price_drop_percent=unit_price_drop_percent,
+            unit=unit,
+            unit_price_target_sek=unit_price_target_sek,
+            product_id=product_id,
         )
 
         message = EmailMessage(
@@ -168,7 +189,7 @@ class PriceNotifier:
         if now is None:
             now = datetime.now(UTC).replace(tzinfo=None)
         weekday = _SWEDISH_WEEKDAYS[now.replace(tzinfo=UTC).astimezone(STORE_TIMEZONE).weekday()]
-        subject = f"Inköpslista {weekday} – Prisspaning"
+        subject = f"Inköpslista {weekday} – Price Tracker"
         html_body = self._build_summary_html(
             deals, watched_products, now=now, data_quality=data_quality
         )
@@ -195,6 +216,13 @@ class PriceNotifier:
             return False
         return url.startswith("http://") or url.startswith("https://")
 
+    def _portal_history_url(self, product_id: uuid.UUID | str | None) -> str | None:
+        """Deep link into the portal's price-history modal (`#/bevakningar?produkt=<id>`)."""
+        if not product_id or not self._is_safe_url(self._portal_url):
+            return None
+        base = self._portal_url.rstrip("/")
+        return f"{base}/#/bevakningar?produkt={quote(str(product_id), safe='')}"
+
     def _build_alert_html(
         self,
         product_name: str,
@@ -207,18 +235,47 @@ class PriceNotifier:
         price_drop_percent: float | None = None,
         unit_price_sek: Decimal | None = None,
         unit_price_drop_percent: float | None = None,
+        unit: str | None = None,
+        unit_price_target_sek: Decimal | None = None,
+        product_id: uuid.UUID | str | None = None,
     ) -> str:
-        """Build HTML for price alert email."""
+        """Build HTML for price watch email."""
         # Escape all user-controlled text to prevent HTML injection
         safe_product_name = html.escape(product_name)
         safe_store_name = html.escape(store_name)
+        unit_label = f"kr/{unit}" if unit else "kr/enhet"
+        safe_unit_label = html.escape(unit_label)
+
+        unit_price_row = ""
+        if unit_price_sek is not None:
+            # _sek rounds at the presentation boundary with a Swedish decimal comma:
+            # unit_price_py deliberately keeps full Decimal precision (e.g. 69.90 / 1.1 =
+            # 63.54545454545454545454545455), and the unit comes from the product ('kr/kg')
+            # rather than a hardcoded 'kr/enhet'.
+            unit_price_row = f"""
+            <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jämförelsepris:</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                    <strong>{_sek(unit_price_sek)} {safe_unit_label}</strong>
+                </td>
+            </tr>"""
 
         target_row = ""
-        if target_price:
-            target_row = f"""
+        if target_price is not None:
+            target_row += f"""
             <tr>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">Ditt målpris:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">{target_price} kr</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                    {_sek(target_price)} kr
+                </td>
+            </tr>"""
+        if unit_price_target_sek is not None:
+            target_row += f"""
+            <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Ditt målpris:</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                    {_sek(unit_price_target_sek)} {safe_unit_label}
+                </td>
             </tr>"""
 
         price_drop_row = ""
@@ -228,18 +285,8 @@ class PriceNotifier:
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">Prisfall:</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
                     <strong style="color: #22c55e;">
-                        {price_drop_percent:.1f}% under ordinarie pris
+                        {_pct(price_drop_percent)} under ordinarie pris
                     </strong>
-                </td>
-            </tr>"""
-
-        unit_price_row = ""
-        if unit_price_sek is not None:
-            unit_price_row = f"""
-            <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">Jämförelsepris:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                    <strong>{unit_price_sek} kr/enhet</strong>
                 </td>
             </tr>"""
 
@@ -250,7 +297,7 @@ class PriceNotifier:
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">Jämförelsepris-fall:</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
                     <strong style="color: #22c55e;">
-                        {unit_price_drop_percent:.1f}% under ordinarie jämförelsepris
+                        {_pct(unit_price_drop_percent)} under ordinarie jämförelsepris
                     </strong>
                 </td>
             </tr>"""
@@ -270,16 +317,32 @@ class PriceNotifier:
                 </td>
             </tr>"""
 
-        link_section = ""
+        links: list[str] = []
         if product_url and self._is_safe_url(product_url):
             # URL is validated, but still escape it for HTML attribute safety
             safe_url = html.escape(product_url, quote=True)
-            link_section = f"""
-            <p style="margin-top: 20px;">
-                <a href="{safe_url}"
-                   style="background: #2563eb; color: white; padding: 10px 20px;
-                          text-decoration: none; border-radius: 4px;">Se produkten</a>
-            </p>"""
+            links.append(
+                f'<a href="{safe_url}"'
+                ' style="background: #2563eb; color: white; padding: 10px 20px;'
+                " text-decoration: none; border-radius: 4px; display: inline-block;"
+                ' margin-right: 10px;">Se produkten</a>'
+            )
+        history_url = self._portal_history_url(product_id)
+        if history_url:
+            safe_history_url = html.escape(history_url, quote=True)
+            links.append(
+                f'<a href="{safe_history_url}"'
+                ' style="background: #f1f5f9; color: #1e3a5f; border: 1px solid #cbd5e1;'
+                " padding: 9px 18px; text-decoration: none; border-radius: 4px;"
+                ' display: inline-block;">Se prishistorik</a>'
+            )
+        joined_links = " ".join(links)
+        link_section = (
+            f'\n            <p style="margin-top: 20px;">\n                {joined_links}\n'
+            "            </p>"
+            if links
+            else ""
+        )
 
         return f"""
         <!DOCTYPE html>
@@ -287,20 +350,20 @@ class PriceNotifier:
         <head><meta charset="UTF-8"></head>
         <body style="font-family: Arial, sans-serif; max-width: 600px;
                      margin: 0 auto; padding: 20px;">
-            <h2 style="color: #1e3a5f;">Prisvarning!</h2>
+            <h2 style="color: #1e3a5f;">Prisbevakning</h2>
             <p><strong>{safe_product_name}</strong> hos <strong>{safe_store_name}</strong>
-               har ett bra pris.</p>
+               ligger nu under din bevakade prisgräns.</p>
 
             <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">Aktuellt pris:</td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee; font-size: 1.2em;">
-                        <strong style="color: #22c55e;">{current_price} kr</strong>
+                        <strong style="color: #22c55e;">{_sek(current_price)} kr</strong>
                     </td>
                 </tr>
+                {unit_price_row}
                 {target_row}
                 {price_drop_row}
-                {unit_price_row}
                 {unit_price_drop_row}
                 {offer_row}
             </table>
@@ -308,7 +371,7 @@ class PriceNotifier:
 
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;">
             <p style="color: #666; font-size: 0.9em;">
-                Detta mail skickades av Prisspaning. Du får detta för att du bevakar produkten.
+                Detta mail skickades av Price Tracker. Du får detta för att du bevakar produkten.
             </p>
         </body>
         </html>
@@ -648,7 +711,7 @@ class PriceNotifier:
 
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;">
             <p style="color: #666; font-size: 0.9em;">
-                Detta mail skickades av Prisspaning.
+                Detta mail skickades av Price Tracker.
             </p>
         </body>
         </html>

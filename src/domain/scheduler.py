@@ -666,9 +666,15 @@ class PriceCheckScheduler:
 
             if should_alert:
                 logger.info(f"Sending alert for watch {watch.id}")
-                # Convert target_price to Decimal if present
                 target_price_decimal = (
-                    Decimal(str(watch.target_price_sek)) if watch.target_price_sek else None
+                    Decimal(str(watch.target_price_sek))
+                    if watch.target_price_sek is not None
+                    else None
+                )
+                unit_target_decimal = (
+                    Decimal(str(watch.unit_price_target_sek))
+                    if watch.unit_price_target_sek is not None
+                    else None
                 )
                 success = await self.notifier.send_price_alert(
                     to_email=watch.email_address,
@@ -682,6 +688,9 @@ class PriceCheckScheduler:
                     price_drop_percent=price_drop_percent,
                     unit_price_sek=current_unit_price,
                     unit_price_drop_percent=unit_price_drop_percent,
+                    unit=product_store.product.unit,
+                    unit_price_target_sek=unit_target_decimal,
+                    product_id=product_store.product_id,
                 )
 
                 if success:

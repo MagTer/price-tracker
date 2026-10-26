@@ -118,15 +118,102 @@ class TestPriceNotifier:
         assert "</html>" in html
 
         # Check content elements
-        assert "Prisvarning!" in html
+        assert "Prisbevakning" in html
+        assert "Prisvarning" not in html
+        assert "ligger nu under din bevakade prisgräns." in html
         assert "Mjolk Arla Standard 3%" in html
         assert "ICA Maxi" in html
-        assert "19.90 kr" in html
-        assert "25.00 kr" in html  # Target price
+        assert "19,90 kr" in html
+        assert "25,00 kr" in html  # Target price
         assert "stammispris" in html
         assert "Kop 2 betala for 1" in html
         assert "https://www.ica.se/handla/produkt/test-123" in html
         assert "Se produkten" in html  # Link button
+        assert "Detta mail skickades av Price Tracker." in html
+        assert "Prisspaning" not in html
+
+    def test_build_alert_html_formats_unquantized_unit_price_and_unit_label(self) -> None:
+        """unit_price_py returns unquantized Decimals (e.g. 69.90 / 1.1 = 63.5454545...).
+        The alert email must round to two decimals with a Swedish comma and use the
+        product's canonical unit (kr/kg, kr/liter, kr/st) rather than raw str(Decimal)
+        and 'kr/enhet'."""
+        notifier = PriceNotifier(email_service=MockEmailService())
+
+        unquantized = Decimal("69.90") / Decimal("1.1000")
+        html = notifier._build_alert_html(
+            product_name="Pasta bolognese 1.1kg",
+            store_name="ICA Maxi",
+            current_price=Decimal("69.90"),
+            target_price=None,
+            offer_type=None,
+            offer_details=None,
+            product_url="https://www.ica.se/handla/produkt/pasta-123",
+            unit="kg",
+            unit_price_sek=unquantized,
+            unit_price_target_sek=Decimal("65.00"),
+            unit_price_drop_percent=12.345,
+        )
+
+        assert "63,55 kr/kg" in html
+        assert "63.545454" not in html
+        assert "kr/enhet" not in html
+        assert "Ditt målpris:" in html
+        assert "65,00 kr/kg" in html
+        assert "Jämförelsepris-fall:" in html
+        assert "12,3 % under ordinarie jämförelsepris" in html
+
+    def test_build_alert_html_links_to_portal_price_history(self) -> None:
+        """When product_id and portal_url are present, the email includes a deep link
+        to the product's price-history modal in the portal (#/bevakningar?produkt=<id>)."""
+        notifier = PriceNotifier(
+            email_service=MockEmailService(),
+            portal_url="https://price.falle.se/",
+        )
+        prod_id = uuid.UUID("a36fead4-c175-47d6-8cf2-975bb9f01760")
+
+        html = notifier._build_alert_html(
+            product_name="Bregott Mellan 500g",
+            store_name="ICA Kvantum",
+            current_price=Decimal("52.90"),
+            target_price=None,
+            offer_type=None,
+            offer_details=None,
+            product_url="https://www.ica.se/handla/produkt/bregott",
+            product_id=prod_id,
+        )
+
+        expected_url = (
+            "https://price.falle.se/#/bevakningar?produkt=a36fead4-c175-47d6-8cf2-975bb9f01760"
+        )
+        assert expected_url in html
+        assert "Se prishistorik" in html
+        assert "Se produkten" in html
+
+    def test_build_alert_html_renders_history_link_even_without_store_url(self) -> None:
+        """The portal history link still renders when product_url is omitted."""
+        notifier = PriceNotifier(
+            email_service=MockEmailService(),
+            portal_url="https://price.falle.se",
+        )
+        prod_id = uuid.UUID("72a43a5c-c207-41c7-8f1a-c9c4a8052ab5")
+
+        html = notifier._build_alert_html(
+            product_name="Pasta bolognese 1.1kg",
+            store_name="ICA",
+            current_price=Decimal("69.90"),
+            target_price=None,
+            offer_type=None,
+            offer_details=None,
+            product_url=None,
+            product_id=prod_id,
+        )
+
+        assert "Se produkten" not in html
+        assert "Se prishistorik" in html
+        assert (
+            "https://price.falle.se/#/bevakningar?produkt=72a43a5c-c207-41c7-8f1a-c9c4a8052ab5"
+            in html
+        )
 
     def test_build_alert_html_without_optional_fields(self) -> None:
         """Test _build_alert_html without target price and offer."""
@@ -146,12 +233,13 @@ class TestPriceNotifier:
         # Should still have basic content
         assert "Smor Bregott" in html
         assert "Willys" in html
-        assert "29.90 kr" in html
+        assert "29,90 kr" in html
 
         # Should NOT have optional fields
         assert "Ditt målpris:" not in html
         assert "Erbjudande:" not in html
         assert "Se produkten" not in html
+        assert "Se prishistorik" not in html
 
     def test_build_alert_html_with_offer_but_no_details(self) -> None:
         """Test _build_alert_html with offer type but no details."""
@@ -184,6 +272,8 @@ class TestPriceNotifier:
         assert "Inköpslista" in html
         assert "Inga köpvärda erbjudanden" in html
         assert "Dina bevakade produkter" not in html
+        assert "Detta mail skickades av Price Tracker." in html
+        assert "Prisspaning" not in html
 
     def test_build_summary_html_groups_deals_per_butik(self) -> None:
         """One section per butik = one leg of the shopping round. The store name is a
@@ -601,7 +691,7 @@ class TestPriceNotifier:
 
         sent_msg = mock_service.sent_messages[0]
         assert sent_msg.to == ["user@example.com"]
-        assert "Prisvarning: Mjolk Arla hos ICA Maxi" in sent_msg.subject
+        assert "Prisbevakning: Mjolk Arla hos ICA Maxi" in sent_msg.subject
         assert "Mjolk Arla" in sent_msg.html_body
 
     @pytest.mark.asyncio
@@ -647,7 +737,7 @@ class TestPriceNotifier:
 
         sent_msg = mock_service.sent_messages[0]
         assert sent_msg.to == ["user@example.com"]
-        assert sent_msg.subject == "Inköpslista måndag – Prisspaning"
+        assert sent_msg.subject == "Inköpslista måndag – Price Tracker"
         assert "Mjolk" in sent_msg.html_body
         assert "Smor" in sent_msg.html_body
 
