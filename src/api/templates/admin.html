@@ -23,6 +23,9 @@
                 <em>tillfälle</em>. Stapeln visar var priset ligger mellan produktens lägsta
                 och högsta noterade.</div>
         </div>
+        <div class="page-actions">
+            <input type="search" id="deal-search" class="search-input deal-search-input" placeholder="Filtrera veckans köplägen (vara, butik)…" aria-label="Filtrera veckans köplägen">
+        </div>
     </div>
     <!-- Korgremsan. Every figure in it is derived from the rows the list below actually
          shows — pill counts, subtotals, the total and the closing sentence — so a pill can
@@ -966,6 +969,31 @@
    price you can just walk up and pay). It wraps rather than truncates: shortening it to a
    badge like "Max 2" drops which condition applies. */
 .deal-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; }
+.deal-check {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    border-radius: 6px;
+    border: 1.5px solid var(--border-control);
+    background: var(--bg-card);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    align-self: center;
+}
+.deal-check:hover { border-color: var(--primary); }
+.deal-check.is-checked {
+    background: var(--success-bar);
+    border-color: var(--success-bar);
+}
+.deal-row.is-checked { opacity: 0.55; }
+.deal-row.is-checked .deal-name { text-decoration: line-through; }
 .deal-verdict { font-size: 13.5px; color: var(--text-secondary); margin-top: 3px; }
 .deal-pct { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
 .deal-verdict.no-compare { color: var(--text-faint); }
@@ -1969,6 +1997,17 @@ function issueCounts() {
     };
 }
 
+function syncMobileMoreDot() {
+    const dot = document.getElementById('mobile-more-dot');
+    if (!dot) return;
+    const hasActiveWatchAlert = (watchesCache || []).some(w => {
+        const kind = classifyWatch(w);
+        return kind === WATCH_MET || kind === WATCH_UNREACHABLE;
+    });
+    const hasLuckorIssues = issueCounts().total > 0;
+    dot.hidden = !(hasActiveWatchAlert || hasLuckorIssues);
+}
+
 function updateIssueBadges() {
     const counts = issueCounts();
     const el = document.getElementById('nav-count-luckor');
@@ -1977,6 +2016,7 @@ function updateIssueBadges() {
         el.classList.toggle('count-error', counts.silent > 0);
         el.classList.toggle('count-gap', counts.silent === 0);
     }
+    syncMobileMoreDot();
     renderBasketStrip();
 }
 
@@ -2509,7 +2549,38 @@ const DEAL_WORSE = 'worse';
 const DEAL_UNKNOWN = 'unknown';
 const TIMING_POOR = 'poor';
 const DEAL_STALE_HOURS = 48;
+const CHECKED_DEALS_KEY = 'pt.checkedDeals.v1';
+let checkedDeals = new Set();
+let dealSearchQuery = '';
 let storeFilter = null;
+
+function dealKey(d) {
+    return `${d.product_id}:${d.store_name}:${d.package_size || ''}`;
+}
+
+function loadCheckedDeals() {
+    try {
+        const raw = localStorage.getItem(CHECKED_DEALS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) checkedDeals = new Set(parsed);
+        }
+    } catch (e) { checkedDeals = new Set(); }
+}
+
+function saveCheckedDeals() {
+    try {
+        localStorage.setItem(CHECKED_DEALS_KEY, JSON.stringify([...checkedDeals]));
+    } catch (e) { /* private mode */ }
+}
+
+function dealMatchesSearch(d) {
+    if (!dealSearchQuery) return true;
+    const hay = [d.product_name, d.store_name, d.package_size, d.offer_details]
+        .filter(Boolean).join(' ').toLowerCase();
+    const words = dealSearchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    return words.every(w => hay.includes(w));
+}
 
 function classifyDeal(d) { return d.verdict; }
 function dealSavings(d) { return d.savings_per_unit_sek; }
@@ -2680,13 +2751,16 @@ function dealMetaHtml(d) {
 
 function dealRowHtml(d) {
     const unknown = classifyDeal(d) === DEAL_UNKNOWN;
+    const key = dealKey(d);
+    const isChecked = checkedDeals.has(key);
+    const checkBtn = `<button type="button" class="deal-check${isChecked ? ' is-checked' : ''}" data-deal-action="toggle-check" data-deal-key="${escapeHtml(key)}" aria-pressed="${isChecked ? 'true' : 'false'}" aria-label="Markera ${escapeHtml(d.product_name)} som plockad">${isChecked ? '&#10003;' : ''}</button>`;
     const pkg = d.package_size ? ` <span class="deal-pkg">${escapeHtml(d.package_size)}</span>` : '';
     const terms = d.offer_details
         ? `<div class="deal-terms">${escapeHtml(d.offer_details)}</div>`
         : '';
-    return `<div class="deal-row${unknown ? ' is-unknown' : ''}">
+    return `<div class="deal-row${unknown ? ' is-unknown' : ''}${isChecked ? ' is-checked' : ''}">
         <div class="deal-main">
-            <div class="deal-head"><button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}${terms}</div>
+            <div class="deal-head">${checkBtn}<button type="button" class="deal-name" data-deal-action="history" data-id="${escapeHtml(d.product_id)}" title="Visa prishistorik">${escapeHtml(d.product_name)}</button>${pkg}${terms}</div>
             ${dealVerdictHtml(d)}
             ${dealMomentHtml(d)}
             ${dealMetaHtml(d)}
@@ -2770,6 +2844,20 @@ function renderBasketStrip() {
     // be good) — but the reader should be able to see how much of the buy list is CONFIRMED
     // cheapest versus not comparable. Follows the pill filter like every other figure here.
     const scopedRows = hit ? rows.filter(d => d.store_name === hit.store) : rows;
+    const remaining = scopedRows.filter(d => !checkedDeals.has(dealKey(d)));
+    const checkedCount = scopedRows.length - remaining.length;
+    const displaySum = checkedCount > 0
+        ? remaining.reduce((t, d) => t + (d.offer_price_sek || 0), 0)
+        : total;
+    const displaySaved = checkedCount > 0
+        ? remaining.reduce((t, d) => t + (d.price_sek != null ? Math.max(0, d.price_sek - d.offer_price_sek) : 0), 0)
+        : saved;
+    const basketLabel = checkedCount > 0
+        ? `Kvar i korgen (${remaining.length} av ${scopedRows.length})`
+        : 'Veckans korg';
+    const resetChecked = checkedCount > 0
+        ? `<button type="button" class="basket-link" data-basket="reset-checked">Nollställ avbockade (${checkedCount})</button>`
+        : '';
     const unknownN = scopedRows.filter(d => classifyDeal(d) === DEAL_UNKNOWN).length;
     const split = unknownN
         ? `<span class="basket-note">${scopedRows.length - unknownN} billigast · `
@@ -2799,10 +2887,11 @@ function renderBasketStrip() {
     }
 
     el.className = 'basket-strip';
-    el.innerHTML = '<span class="basket-label">Veckans korg</span>'
-        + `<span class="basket-sum">${escapeHtml(kr(total))}</span>`
-        + `<span class="basket-saved">${escapeHtml(kr(saved))} under ordinarie</span>`
+    el.innerHTML = `<span class="basket-label">${escapeHtml(basketLabel)}</span>`
+        + `<span class="basket-sum">${escapeHtml(kr(displaySum))}</span>`
+        + `<span class="basket-saved">${escapeHtml(kr(displaySaved))} under ordinarie</span>`
         + split
+        + resetChecked
         + '<span class="basket-divider"></span>'
         + `<div class="store-pills">${pills}</div>`
         + `<span class="basket-note">${note}</span>`
@@ -2813,7 +2902,7 @@ function renderBasketStrip() {
 function renderDeals() {
     const container = document.getElementById('deals-table-container');
     if (!container) return;
-    const groups = rankDeals(allDeals);
+    const groups = rankDeals(allDeals.filter(dealMatchesSearch));
     const top = dealsInStore(groups.best.concat(groups.unknown));
     const poor = dealsInStore(groups.poor);
     const worse = dealsInStore(groups.worse);
@@ -2884,6 +2973,14 @@ async function loadDeals() {
         const rows = await apiGet(url);
         if (seq !== dealsSeq) return;
         allDeals = rows;
+        if (!scope && checkedDeals.size) {
+            const validKeys = new Set(allDeals.map(dealKey));
+            let pruned = false;
+            for (const k of [...checkedDeals]) {
+                if (!validKeys.has(k)) { checkedDeals.delete(k); pruned = true; }
+            }
+            if (pruned) saveCheckedDeals();
+        }
         // A store filter left over from a wider scope would silently empty the list.
         if (storeFilter && !allDeals.some(d => d.store_name === storeFilter)) storeFilter = null;
         setNavCount('nav-count-kopa', buyableDeals().length);
@@ -4003,6 +4100,7 @@ async function loadWatches() {
         if (historyFor && historyFor.id) syncWatchActionButtons(historyFor.id);
         if (productLinksFor && productLinksFor.id) syncWatchActionButtons(productLinksFor.id);
         setNavCount('nav-count-bevakningar', watches.length);
+        syncMobileMoreDot();
         const container = document.getElementById('watches-table-container');
         const basis = document.getElementById('watches-basis');
         if (!watches.length) {
@@ -6004,10 +6102,25 @@ document.getElementById('price-history-legend').addEventListener('click', (e) =>
 // On Att köpa the question behind a click on the product name is "is this price actually
 // good historically?", so the name leads to the graph. Only the name is a target: the store
 // name in the verdict sentence is already a link OUT to the butik.
+document.getElementById('deal-search').addEventListener('input', (e) => {
+    dealSearchQuery = e.target.value.trim();
+    renderDeals();
+});
+
 document.getElementById('deals-table-container').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-deal-action]');
     if (!btn) return;
     const action = btn.getAttribute('data-deal-action');
+    if (action === 'toggle-check') {
+        const key = btn.getAttribute('data-deal-key');
+        if (key) {
+            if (checkedDeals.has(key)) checkedDeals.delete(key);
+            else checkedDeals.add(key);
+            saveCheckedDeals();
+            renderDeals();
+        }
+        return;
+    }
     if (action === 'gaps') { location.hash = '#/luckor'; return; }
     openPriceHistory(btn.getAttribute('data-id'));
 });
@@ -6034,8 +6147,13 @@ document.getElementById('basket-strip').addEventListener('click', (e) => {
     if (pill) { setStoreFilter(pill.getAttribute('data-store')); return; }
     const link = e.target.closest('button[data-basket]');
     if (!link) return;
-    if (link.getAttribute('data-basket') === 'clear') {
+    const basketAction = link.getAttribute('data-basket');
+    if (basketAction === 'clear') {
         storeFilter = null;
+        renderDeals();
+    } else if (basketAction === 'reset-checked') {
+        checkedDeals.clear();
+        saveCheckedDeals();
         renderDeals();
     } else {
         location.hash = '#/luckor';
@@ -6357,6 +6475,7 @@ document.addEventListener('keydown', (e) => {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+    loadCheckedDeals();
     restoreProductFilters();
     renderPage();
     // Today, in the browser's own day: the person typing stands in the same timezone,

@@ -522,8 +522,19 @@
                 color: var(--text-nav);
                 cursor: pointer;
                 min-height: 46px;
+                position: relative;
             }
             .mobile-tabs button .mt-icon { font-size: 16px; display: block; }
+            .mobile-more-dot {
+                position: absolute;
+                top: 6px;
+                right: calc(50% - 14px);
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: #f59e0b;
+            }
+            .mobile-more-dot[hidden] { display: none; }
             .mobile-tabs button.active {
                 color: #fff;
                 font-weight: 600;
@@ -622,4 +633,3 @@
             th, td { padding: 8px 6px; }
             th { font-size: 11px; }
         }
-    

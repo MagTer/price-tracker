@@ -920,3 +920,18 @@ def test_luckor_prefills_scraped_amounts_and_allows_deleting_broken_links() -> N
     assert broken is not None, "buildBrokenLinks not found"
     assert 'data-issue-action="delete-link"' in broken.group(1)
     assert "storeLinkHtml(link.store_name, link.store_url)" in broken.group(1)
+
+
+def test_mobile_more_dot_and_deal_checklist_are_wired() -> None:
+    """#mobile-more-dot in shell.html must be updated by syncMobileMoreDot(), and
+    Att köpa must expose deal search (#deal-search) and deal checklist toggles."""
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    shell = (ADMIN_HTML.parent / "shell.html").read_text(encoding="utf-8")
+    js = html.split("<!-- SECTION_SEPARATOR -->")[2]
+
+    assert 'id="mobile-more-dot"' in shell
+    assert "function syncMobileMoreDot()" in js
+    assert 'id="deal-search"' in html
+    assert "CHECKED_DEALS_KEY" in js
+    assert 'data-deal-action="toggle-check"' in js
+    assert 'data-basket="reset-checked"' in js
