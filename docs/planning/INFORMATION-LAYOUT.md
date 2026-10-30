@@ -56,6 +56,16 @@ moves those into the skill or `docs/decisions.md` row they belong to, then remov
 The alternative — keep the index in `docs/releases.md` — is a second changelog beside `git
 log`. **Recommend removal after the move.**
 
+**P-D3 — the no-loss check as a script.** The operator said "Låt bli kontrollverktyget" on
+2026-10-30 about a checker that would report every repository's conformance from then on;
+whether that covers this one-off migration check was not asked, and this plan's first draft
+assumed it did not. (a) `scripts/layout_check.py` as below, used by U2–U4 and **deleted in
+U4's commit**, so nothing is left that reports afterwards; (b) no script: each unit's commit
+body lists, by hand, where every `**bold lead**` and heading of the base `CLAUDE.md` went.
+**Recommend (a)**: 29 350 words is past what a hand list checks reliably, and "vi vill inte
+tappa information" is the requirement the check exists for. If (b), U2–U4's acceptance lines
+read "the commit body's list" wherever they say "the no-loss check".
+
 Everything else follows from the shared rule and needs no separate decision.
 
 ## 4. Units
@@ -65,7 +75,7 @@ tests && poetry run pytest -q`. They see the comment edits in U5 and nothing els
 own acceptance line is the real check. Docs only, so no release.
 
 **No-loss check, used by U2–U4** (deterministic, written once in U2 as
-`scripts/layout_check.py`): take every `**bold lead**` and every `###`/`##` heading of the
+`scripts/layout_check.py`, removed in U4; P-D3): take every `**bold lead**` and every `###`/`##` heading of the
 `CLAUDE.md` at the base commit (`git show <base>:CLAUDE.md`), and require each lead's first
 six words to be found in `AGENTS.md`, `.claude/skills/*/SKILL.md`, `docs/` or — for the
 release index only — the commit that removed it. It prints the leads it could not place; a
@@ -93,6 +103,7 @@ non-empty list fails the unit.
 
 ### U4 — `.planning/` retires
 - **Files.** `docs/decisions.md` (D-19..D-34 verbatim + open items); `.planning/` removed;
+  `scripts/layout_check.py` removed (P-D3), after its last clean run;
   `docs/decisions.md` header names the removing commit's parent sha.
 - **Acceptance.** `git grep -n 'D-2[0-9]\|D-3[0-4]'` resolves every citation to
   `docs/decisions.md`; the digest render prints "No `.planning/STATE.md` in this repo; the
