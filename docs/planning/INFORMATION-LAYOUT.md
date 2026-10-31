@@ -88,7 +88,9 @@ non-empty list fails the unit.
 ### U2 — the skills and `AGENTS.md`
 - **Files.** `AGENTS.md` (new, from CLAUDE.md's every-task parts); `CLAUDE.md` →
   `@AGENTS.md`; `.claude/skills/{store-extractors,store-fetching,price-judgements,portal-ui}/SKILL.md`;
-  `scripts/layout_check.py`.
+  `scripts/layout_check.py`; at the other clients' project skill paths, the symlinks to
+  `.claude/skills/` that agent-config's layout proposal U0 found necessary (none for
+  OpenCode, which reads `.claude/skills/`).
 - **Acceptance.** `wc -w AGENTS.md` reported in the commit body against 4 000; the no-loss
   check prints nothing for Architecture, Gotchas and Project-minus-index; each skill's
   `name:` matches its directory; a fresh session asked to change an ICA extractor loads
