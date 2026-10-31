@@ -1,6 +1,6 @@
 # Information layout: aligning price-tracker with the shared rule
 
-**Status 2026-10-29, P-D3 decided 2026-10-31: PLAN, unsigned (P-D1, P-D2 open). Nothing below is built.** Origin: operator, 2026-10-29
+**Status 2026-10-31: PLAN, every decision taken (P-D1, P-D2, P-D3). Nothing below is built; it runs after agent-config's layout U1.** Origin: operator, 2026-10-29
 — *"Vi vill inte tappa information, men det ska hanteras enligt gemensamma rutiner och inte
 bloat'a sessionen. Repots readme i rooten är främst för människor, agents.md är
 projektspecifika tillägg. Vissa saker kanske ska bli projekt-lokala skills."* The rule is
@@ -44,12 +44,12 @@ operator's direction.
 
 ## 3. Decisions
 
-**P-D1 — the four skills' cut.** Skills grouped by the task that needs them (above) versus
+**P-D1 — the four skills' cut. DECIDED 2026-10-31 by the operator: the four.** Skills grouped by the task that needs them (above) versus
 one skill per store and per page (finer, more files, more descriptions in every session's
 skill list). **Recommend the four**: each description stays specific enough to load on the
 right task, and the skill listing costs per session too.
 
-**P-D2 — the release index's unique facts.** Most bullets point at an Architecture bullet
+**P-D2 — the release index's unique facts. DECIDED 2026-10-31 by the operator: (a), move the unique facts, then remove the index.** Most bullets point at an Architecture bullet
 ("→ X bullet"); some carry facts found nowhere else (e.g. v0.66.0's backup of deleted rows in
 `~/price-tracker-backups/2026-10-19-llm-cleanup.json`, v0.62.0's 6-second duplicate). U3
 moves those into the skill or `docs/decisions.md` row they belong to, then removes the index.
