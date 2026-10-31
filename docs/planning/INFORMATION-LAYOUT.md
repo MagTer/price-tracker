@@ -1,6 +1,6 @@
 # Information layout: aligning price-tracker with the shared rule
 
-**Status 2026-10-29: PLAN, unsigned. Nothing below is built.** Origin: operator, 2026-10-29
+**Status 2026-10-29, P-D3 decided 2026-10-31: PLAN, unsigned (P-D1, P-D2 open). Nothing below is built.** Origin: operator, 2026-10-29
 — *"Vi vill inte tappa information, men det ska hanteras enligt gemensamma rutiner och inte
 bloat'a sessionen. Repots readme i rooten är främst för människor, agents.md är
 projektspecifika tillägg. Vissa saker kanske ska bli projekt-lokala skills."* The rule is
@@ -56,7 +56,7 @@ moves those into the skill or `docs/decisions.md` row they belong to, then remov
 The alternative — keep the index in `docs/releases.md` — is a second changelog beside `git
 log`. **Recommend removal after the move.**
 
-**P-D3 — the no-loss check as a script.** The operator said "Låt bli kontrollverktyget" on
+**P-D3 — the no-loss check as a script. DECIDED 2026-10-31 by the operator: (a), the script, removed in U4.** The operator said "Låt bli kontrollverktyget" on
 2026-10-30 about a checker that would report every repository's conformance from then on;
 whether that covers this one-off migration check was not asked, and this plan's first draft
 assumed it did not. (a) `scripts/layout_check.py` as below, used by U2–U4 and **deleted in
