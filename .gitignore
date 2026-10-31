@@ -57,3 +57,8 @@ poetry.lock.bak
 # the repo on purpose (v0.47.0's "3a" handoff is likewise not here). They are a reference
 # for one redesign round, not source; what survives review is documented in CLAUDE.md.
 design_handoff_*/
+
+# Where this checkout stands (in flight, next action, what waits on the operator). It
+# describes this working tree, so it is local; the rule is the shared agreement's
+# "Session state" section (agent-config shared/core.md). History is git log.
+.agent-state.md
