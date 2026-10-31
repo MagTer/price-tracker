@@ -4,7 +4,7 @@
 — *"Vi vill inte tappa information, men det ska hanteras enligt gemensamma rutiner och inte
 bloat'a sessionen. Repots readme i rooten är främst för människor, agents.md är
 projektspecifika tillägg. Vissa saker kanske ska bli projekt-lokala skills."* The rule is
-agent-config `proposals/2026-10-29-project-information-layout.md` (U1 there, unsigned) plus
+agent-config `docs/planning/2026-10-29-project-information-layout.md` (U1 there, unsigned) plus
 `shared/core.md` "Session state" (agent-config `b3f6829`). **This plan runs only after that
 U1 is signed**, so the layout it moves into is the one every repo uses.
 
