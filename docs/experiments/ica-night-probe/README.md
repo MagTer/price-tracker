@@ -57,7 +57,7 @@ crontab -l | grep -v ica-natprobe | crontab -
 - **Slutsatsen är skördad in i repot** — den låg bara här i elva dagar. Den står nu i
   `~/dev/price-tracker/CLAUDE.md` (schedule-punkten, med förbehållen: n=1 produkt,
   rörelsen var en kampanj som TOG SLUT, och 03:00-körningens 404) plus som öppen post
-  i `.planning/STATE.md`. **Fönstret är INTE flyttat** — det beslutet är inte taget.
+  i `.planning/STATE.md` (since the information-layout move: `docs/decisions.md`). **Fönstret är INTE flyttat** — det beslutet är inte taget.
 - **Cron-raderna är borttagna** (5 st + kommentarsraden). Backup av den gamla crontaben
   togs innan de rensades.
 - **`venv/` är raderad** (39 MB). Vill du köra proben igen:

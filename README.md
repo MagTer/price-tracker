@@ -144,8 +144,8 @@ everything a second deployment needs.
 
 Single-**owner** by design: one instance per person, one admin email, one tenant of data.
 Readers share the admin's data — they are extra eyes on one household's prices, not
-accounts of their own. Multi-tenancy is deliberately out of scope (see `.planning/` for
-the decision history).
+accounts of their own. Multi-tenancy is deliberately out of scope (see `docs/decisions.md`
+for the decision history).
 
 ## Local development
 
