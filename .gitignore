@@ -55,7 +55,8 @@ poetry.lock.bak
 
 # Design handoffs — interactive prototypes delivered as a separate package, kept out of
 # the repo on purpose (v0.47.0's "3a" handoff is likewise not here). They are a reference
-# for one redesign round, not source; what survives review is documented in CLAUDE.md.
+# for one redesign round, not source; what survives review is documented in the portal-ui skill
+# (.claude/skills/portal-ui/SKILL.md).
 design_handoff_*/
 
 # Where this checkout stands (in flight, next action, what waits on the operator). It

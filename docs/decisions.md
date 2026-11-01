@@ -2,7 +2,7 @@
 
 Why price-tracker is as it is, where the reason is a decision rather than a comment beside
 the code. Moved here from the retired GSD directory `.planning/` by the information-layout
-move (docs/planning/INFORMATION-LAYOUT.md, U4). The entries are VERBATIM — several are in
+move (its plan, U4, deleted when done: `git show e7873e7:docs/planning/INFORMATION-LAYOUT.md`). The entries are VERBATIM — several are in
 Swedish, as they were written; new entries are written in English.
 
 **Everything else that was in `.planning/`** — PROJECT, REQUIREMENTS, ROADMAP, the 04.1 seed,
