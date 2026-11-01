@@ -55,7 +55,7 @@ crontab -l | grep -v ica-natprobe | crontab -
 
 - **Svaret är hämtat:** prisbyte senast mån 00:15 → midnattsbatch. Se `RESULTAT.md`.
 - **Slutsatsen är skördad in i repot** — den låg bara här i elva dagar. Den står nu i
-  `~/dev/price-tracker/CLAUDE.md` (schedule-punkten, med förbehållen: n=1 produkt,
+  `~/dev/price-tracker/CLAUDE.md` (since the information-layout move: the `store-fetching` skill) (schedule-punkten, med förbehållen: n=1 produkt,
   rörelsen var en kampanj som TOG SLUT, och 03:00-körningens 404) plus som öppen post
   i `.planning/STATE.md` (since the information-layout move: `docs/decisions.md`). **Fönstret är INTE flyttat** — det beslutet är inte taget.
 - **Cron-raderna är borttagna** (5 st + kommentarsraden). Backup av den gamla crontaben

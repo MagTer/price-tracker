@@ -2,9 +2,10 @@
 
 Willys' butiksblad (offline) offers cover in-store-only assortment: the "Läsk 15-pack"
 class of offer points at a product with no online page at all, so it can never be a
-tracked link (no stable URL, week-scoped, store-scoped — the CLAUDE.md campaign-price
-bullet's standing judgement). What CAN be done is answering the question the blad
-raises: *is this offer better than the ways I already track of buying the same thing?*
+tracked link (no stable URL, week-scoped, store-scoped — the campaign-price
+bullet's standing judgement in the store-extractors skill). What CAN be done is
+answering the question the blad raises: *is this offer better than the ways I already
+track of buying the same thing?*
 
 Discovery stays HUMAN by decision (spiked 2026-08-03): the listing API binds its store
 to a server session established behind Akamai Bot Manager's JS sensor — a real-browser

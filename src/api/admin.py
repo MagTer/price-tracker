@@ -243,7 +243,7 @@ def _link_payload(
 
     It was written twice (the list route and the detail route), byte for byte. Two copies of a
     wire contract drift, and this one already has form: the price-history route's own duplicate
-    query is what silently dropped the package fields (see CLAUDE.md, Gotcha 4).
+    query is what silently dropped the package fields (see AGENTS.md, Gotcha 4).
     """
     return {
         "product_store_id": str(ps.id),

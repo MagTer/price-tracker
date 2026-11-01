@@ -196,7 +196,7 @@ with no database. Point them elsewhere with `TEST_DATABASE_URL` if you want.
 
 ## Schema reset (Phase 04.1) — historical
 
-**This one-time operator step was completed in July 2026** (CLAUDE.md records the
+**This one-time operator step was completed in July 2026** (AGENTS.md records the
 04.1 deploy as done). It is kept because the trap it describes — Alembic never
 checksums migration bodies, so a rewritten-in-place revision silently no-ops on a
 stamped database — is worth remembering, and because a second instance restoring a

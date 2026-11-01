@@ -5,7 +5,7 @@ share the single chain-level Store row whose slug drives the extractors. The lab
 the LINK and disambiguates them everywhere a store name is displayed; NULL means "use the
 chain name" (domain.models.link_store_name).
 
-This is the first migration AFTER the in-place-rewritten 0001 (see CLAUDE.md Gotcha 3).
+This is the first migration AFTER the in-place-rewritten 0001 (see AGENTS.md Gotcha 3).
 Being a real additive revision, it applies cleanly with `alembic upgrade head` on a database
 stamped at 0001_initial — no volume drop, no data loss.
 

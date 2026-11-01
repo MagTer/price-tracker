@@ -5,7 +5,7 @@ a real Chrome down at the TLS and HTTP/2 layers, which is the one part of the fi
 headers cannot fix — but whether that actually changes how often a store walls us is an
 open question this app is in a position to MEASURE rather than assume. One env var and a
 restart flips it back, and every fetch logs which transport answered, so a week of prod
-logs settles it. See the transport bullet in CLAUDE.md.
+logs settles it. See the transport bullet in the store-fetching skill.
 """
 
 import asyncio

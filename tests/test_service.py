@@ -597,7 +597,7 @@ class TestPriceTrackerService:
         """The links panel's own twin of the same row — both halves or neither.
 
         `_link_payload` in api/admin.py and this method are the two hand-written builders of
-        one wire shape (CLAUDE.md, Gotcha 4). This is the row the links PANEL renders and
+        one wire shape (AGENTS.md, Gotcha 4). This is the row the links PANEL renders and
         sorts, and it printed the ordinarie beside a kr/enhet computed from the offer.
         """
         mock_session = AsyncMock()
