@@ -18,6 +18,13 @@ Moved verbatim from `CLAUDE.md` at `88e99e9` by the information-layout move (`gi
    ```
    Keep the `test -s` guard. And remember: **"the file parses" is not "the page renders."** Verify rendering separately.
 
+*From the release index, removed by the information-layout move:*
+- **The page is served `Cache-Control: no-cache` (v0.45.1).** Without it a browser kept a heuristically cached copy of the whole UI across deploys — right after v0.45.0 a cached page enforced the old `step="0.01"` and read as "the fix didn't work". no-cache (revalidate, not no-store) suffices because the response carries no validator.
+- **A package-amount `step` is set in TWO places (v0.53.3).** The three inputs carry `step="any"`, and `pkgFieldsChanged` once re-assigned `amountEl.step = '0.01'` on every dialog open, so 0,024 kg failed with `stepMismatch` while 24 g passed. A static gate covers both the markup attribute and the JS assignment. `st` keeps `step='1'`: a count is whole.
+- `tests/test_static_gates.py` gates EVERY `getElementById` literal (v0.41.3); the `/stats` and `/scheduler/status` wire shapes are pinned (v0.51.0).
+- Chart.js is `defer`, and `loadDeals`/`loadStatistics` carry request-sequence tokens so the last RESPONSE no longer wins (v0.51.0). `loadStores` is guarded (one 500 used to blank the whole app), `loadExport` no longer saves a 500 body as the backup, and the span bar no longer claims "en observation" when `/stats` fails (v0.49.1).
+- `#stats-container` is under the never-scroll-sideways rule, and a watched product without a price renders without "None kr" (v0.41.3).
+
 ## Rendering the portal without a server
 
 Gotcha 2 (above) says "the file parses" is not "the page renders". This is how to render
@@ -118,6 +125,8 @@ cannot read or set `allProducts` / `productFilters`.
 - **Only a kr/enhet target may be judged against the span, and that is a hard rule.** An absolute `target_price_sek` is a PACKAGE price; a 100-pack and a 20-pack of one product share a kr/tabl. and have wildly different kr, so placing one on the other's axis is the g/kg class of error (it pinned a cheap link to the expensive end of the bar in the first render of this feature). An absolute target is never called unreachable and never gets a marker — it keeps the distance bar it always had, which says less and is true. **Both targets stay named in every row's meta line** either way: the scheduler alerts on whichever is set, and a target the page does not show is an invisible trigger (v0.27.0).
 
 - **The target is a SECOND mark on the bar, deliberately not the same one as the current price** (`.span-target` vs `.span-marker`) — a reader who confuses them reads the row backwards. A target outside the span gets an edge arrow rather than a tick clamped to 0 %: clamping would draw it AT the floor and quietly deny the very problem the row is reporting.
+
+*From the release index, removed by the information-layout move:* `PUT /watches/{id}` keys on `model_fields_set`, so a SENT null clears a target while an absent key is left alone, and the dialog sends every field on save (v0.27.0; before it a target was settable, never removable). Both targets are shown, because the scheduler alerts on `target_price_sek` AND `unit_price_target_sek`, and showing one leaves an invisible trigger on a watch restored from a backup.
 
 ## Accessibility
 
