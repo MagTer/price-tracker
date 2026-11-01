@@ -1,6 +1,6 @@
 # Information layout: aligning price-tracker with the shared rule
 
-**Status 2026-10-31: PLAN, every decision taken (P-D1, P-D2, P-D3). Nothing below is built; it runs after agent-config's layout U1.** Origin: operator, 2026-10-29
+**Status 2026-11-01: U1–U5 DONE, U6 open.** U1 `308b97b`, U2 `9d0b71e`, U3 `f78ab77`, U4 `2e1f698`, U5 `202c6f8` (each commit body carries its acceptance measurements). U6 changes agent memory under `~/.claude/`, which the executing session was told not to delete; it waits on the conductor/operator. When U6 is done, this file is deleted. Decisions taken by the operator 2026-10-31: P-D1, P-D2, P-D3. Origin: operator, 2026-10-29
 — *"Vi vill inte tappa information, men det ska hanteras enligt gemensamma rutiner och inte
 bloat'a sessionen. Repots readme i rooten är främst för människor, agents.md är
 projektspecifika tillägg. Vissa saker kanske ska bli projekt-lokala skills."* The rule is
@@ -81,11 +81,11 @@ six words to be found in `AGENTS.md`, `.claude/skills/*/SKILL.md`, `docs/` or �
 release index only — the commit that removed it. It prints the leads it could not place; a
 non-empty list fails the unit.
 
-### U1 — position and the ignore line
+### U1 — position and the ignore line — DONE `308b97b`
 - **Files.** `.gitignore` (+ comment naming `core.md`).
 - **Acceptance.** `git check-ignore .agent-state.md` prints the path.
 
-### U2 — the skills and `AGENTS.md`
+### U2 — the skills and `AGENTS.md` — DONE `9d0b71e`
 - **Files.** `AGENTS.md` (new, from CLAUDE.md's every-task parts); `CLAUDE.md` →
   `@AGENTS.md`; `.claude/skills/{store-extractors,store-fetching,price-judgements,portal-ui}/SKILL.md`;
   `scripts/layout_check.py`; at the other clients' project skill paths, the symlinks to
@@ -98,12 +98,12 @@ non-empty list fails the unit.
   table query in agent-config README "Skill surface").
 - **Must not touch.** `src/`, `tests/` (that is U5); `.planning/` (U4).
 
-### U3 — the release index (P-D2)
+### U3 — the release index (P-D2) — DONE `f78ab77`
 - **Files.** `AGENTS.md`, the skills, `docs/decisions.md` (receive the unique facts).
 - **Acceptance.** For each release bullet the commit body names where its unique facts went,
   or "none — all in <bullet>"; the no-loss check is clean.
 
-### U4 — `.planning/` retires
+### U4 — `.planning/` retires — DONE `2e1f698`
 - **Files.** `docs/decisions.md` (D-19..D-34 verbatim + open items); `.planning/` removed;
   `scripts/layout_check.py` removed (P-D3), after its last clean run;
   `docs/decisions.md` header names the removing commit's parent sha.
@@ -111,14 +111,14 @@ non-empty list fails the unit.
   `docs/decisions.md`; the digest render prints "No `.planning/STATE.md` in this repo; the
   commits below are its state" — true, where today it prints v0.59.0.
 
-### U5 — citations follow
+### U5 — citations follow — DONE `202c6f8`
 - **Files.** the 18 comments in `src/`, `tests/`, `docs/`, `alembic/`, README that name a
   CLAUDE.md bullet → the skill or `AGENTS.md` section now holding it.
 - **Acceptance.** `git grep -n 'CLAUDE.md' -- src tests docs alembic README.md` finds none
   that names a section; gates green.
 - **Must not touch.** Behaviour. Comments only.
 
-### U6 — agent memory
+### U6 — agent memory — OPEN
 - **Files.** none in the repo (the recipe is in `portal-ui` since U2); the memory file
   that duplicates repo knowledge (`render-check-admin-html`) is deleted from agent memory, `MEMORY.md` updated.
 - **Acceptance.** `ls ~/.claude/projects/-home-magnus-dev-price-tracker/memory/` holds only
