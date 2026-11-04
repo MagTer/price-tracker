@@ -159,7 +159,7 @@ class TestProductTrend:
         assert row["current_unit_price"] == pytest.approx(20.00)
 
     async def test_a_link_without_an_amount_cannot_enter_the_comparison(self, db_session) -> None:
-        """D-02: no quantity, no kr/unit — and the coverage panel is where that surfaces."""
+        """04.1 D-02: no quantity, no kr/unit — and the coverage panel is where that surfaces."""
         ica = await _store(db_session, "ica")
         milk = await _product(db_session, "Mellanmjölk")
         await _link(db_session, milk, ica, None)

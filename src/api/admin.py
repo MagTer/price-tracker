@@ -280,9 +280,9 @@ def _link_payload(
         # cells about one link disagreeing by the whole discount while the campaign itself
         # was nowhere on the row. pricing.effective_price is THE definition; never re-derive.
         "effective_price_sek": (as_float(effective_price(latest_price)) if latest_price else None),
-        # COMPUTED from the link's own quantity (D-03) — the comparable number.
+        # COMPUTED from the link's own quantity (04.1 D-03) — the comparable number.
         "unit_price_sek": rounded_unit_price(effective_price(latest_price), ps.package_quantity),
-        # What the STORE printed (D-05) — display only, never sorted on. The measure rides
+        # What the STORE printed (04.1 D-05) — display only, never sorted on. The measure rides
         # WITH it: that figure is in the store's own unit, not the product's, so a bare
         # number beside our kr/enhet is two units stacked in one row saying nothing about
         # which is which. None = the extractor recorded no code; the UI then stays silent
@@ -292,10 +292,10 @@ def _link_payload(
         ),
         "store_unit_price_unit": (printed_measure(latest_price.raw_data) if latest_price else None),
         "in_stock": latest_price.in_stock if latest_price else None,
-        # D-02's visible flag: a link may be saved without an amount, but it is never
+        # 04.1 D-02's visible flag: a link may be saved without an amount, but it is never
         # SILENTLY blank.
         "needs_amount": ps.package_quantity is None,
-        # D-09's derived, self-clearing flag — never persisted as a boolean.
+        # 04.1 D-09's derived, self-clearing flag — never persisted as a boolean.
         "quantity_mismatch": quantity_mismatch(ps),
         # v0.40.0: the last N non-blocked attempts all failed (domain/link_health.py is
         # THE judgement). Derived and self-clearing like quantity_mismatch.
@@ -851,7 +851,7 @@ async def quick_add(
 
     Composes the SAME service methods as the manual flow (create_product,
     link_product_store) and the SAME check flow (perform_price_check) — quick-add adds no
-    second write path. The first check also drives the D-07 package autofill, so a link
+    second write path. The first check also drives the 04.1 D-07 package autofill, so a link
     confirmed without a quantity usually comes back from this call with one.
 
     Failure semantics: creation is the task, the first check is best-effort. A fetch or
@@ -1197,7 +1197,7 @@ async def get_product_links(
     product_id: str,
     service: PriceTrackerService = Depends(get_price_tracker_service),
 ) -> list[dict[str, Any]]:
-    """The product page's data source (D-12): one row per LINK, cheapest per unit first.
+    """The product page's data source (04.1 D-12): one row per LINK, cheapest per unit first.
 
     This is the view that answers the phase's whole question — "which pack size at which store
     is cheapest per roll". The ordering is the SERVICE's (computed kr/unit ascending, links
@@ -1206,7 +1206,7 @@ async def get_product_links(
 
     Each row carries the package label and quantity, the page's own last reading of that
     quantity, both unit prices in separate keys (computed vs store-printed), and the two
-    derived flags `needs_amount` (D-02) and `quantity_mismatch` (D-09).
+    derived flags `needs_amount` (04.1 D-02) and `quantity_mismatch` (04.1 D-09).
 
     Args:
         product_id: Product UUID.
@@ -1475,7 +1475,7 @@ async def update_link_packaging(
     data: ProductStoreUpdate,
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str | float | None]:
-    """Edit a link's packaging — its amount and its human-readable label (D-11).
+    """Edit a link's packaging — its amount and its human-readable label (04.1 D-11).
 
     Deliberately cannot change store_url: the URL is the link's identity, and re-pointing it at
     a different page would rewrite the meaning of the link's entire price history.
@@ -1915,11 +1915,11 @@ async def trigger_price_check(
             "unit_price_sek": rounded_unit_price(
                 effective_price(price_point), product_store.package_quantity
             ),
-            # What the store printed — display only, never sorted on (D-05).
+            # What the store printed — display only, never sorted on (04.1 D-05).
             "store_unit_price_sek": as_float(price_point.store_unit_price_sek),
             "package_quantity": as_float(product_store.package_quantity),
             # The page disagreed with the operator's typed amount; the stored value is
-            # untouched (D-07) and the flag self-clears when either number is corrected.
+            # untouched (04.1 D-07) and the flag self-clears when either number is corrected.
             "quantity_mismatch": outcome.mismatch,
             "offer_price_sek": as_float(price_point.offer_price_sek),
             "offer_type": price_point.offer_type,
@@ -2564,7 +2564,7 @@ async def export_data(
                                 # The only unit price worth persisting in an export is the one
                                 # actually OBSERVED on the page. The comparable kr/unit is
                                 # derived from the link's quantity, so re-deriving it on import
-                                # is correct behavior, not data loss (D-04).
+                                # is correct behavior, not data loss (04.1 D-04).
                                 "store_unit_price_sek": as_float(pp.store_unit_price_sek),
                                 "offer_price_sek": (
                                     float(pp.offer_price_sek) if pp.offer_price_sek else None

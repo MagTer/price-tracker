@@ -196,7 +196,7 @@ class TestPriceTrackerService:
         """Two DIFFERENT links at the SAME store yield TWO deal rows, not one.
 
         Regression guard for the dedupe key. It used to be the (product.id, store.id) tuple,
-        which was single-valued only because of the constraint D-01 drops — so a 24-pack and an
+        which was single-valued only because of the constraint 04.1 D-01 drops — so a 24-pack and an
         8-pack of the same product at the same store silently collapsed into one arbitrary deal
         row. The static gate cannot see this: it detects a select() constrained on both columns,
         and this was a Python-side tuple key, an entirely different shape.
@@ -343,7 +343,7 @@ class TestPriceTrackerService:
     async def test_link_product_store_package_quantity_may_be_null(
         self, mock_session_factory: Mock
     ) -> None:
-        """A NULL quantity is legitimate (D-02) — the first scrape autofills it."""
+        """A NULL quantity is legitimate (04.1 D-02) — the first scrape autofills it."""
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__.return_value = mock_session
 
@@ -526,7 +526,7 @@ class TestPriceTrackerService:
     async def test_get_price_history_null_quantity_yields_no_unit_price(
         self, mock_session_factory: Mock
     ) -> None:
-        """A link with no amount yet (D-02) reports None, not a bogus number and not a crash."""
+        """A link with no amount yet (04.1 D-02) reports None, not a bogus number or a crash."""
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__.return_value = mock_session
 
@@ -585,7 +585,7 @@ class TestPriceTrackerService:
         assert priced["needs_amount"] is False
         assert priced["quantity_mismatch"] is False
 
-        # NULL quantity: no unit price, and the row says so out loud (D-02).
+        # NULL quantity: no unit price, and the row says so out loud (04.1 D-02).
         assert needs_amount["needs_amount"] is True
         assert needs_amount["unit_price_sek"] is None
         assert needs_amount["price_sek"] == 59.90
@@ -624,7 +624,7 @@ class TestPriceTrackerService:
     async def test_get_links_for_product_surfaces_quantity_mismatch(
         self, mock_session_factory: Mock
     ) -> None:
-        """D-09's derived flag: the page disagrees with the operator, and the row says so."""
+        """04.1 D-09's derived flag: the page disagrees with the operator, and the row says so."""
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__.return_value = mock_session
 
@@ -647,7 +647,7 @@ class TestPriceTrackerService:
 
         assert links[0]["quantity_mismatch"] is True
         assert links[0]["scraped_package_quantity"] == 12.0
-        # The operator's intent is untouched — evidence never rewrites it (D-07).
+        # The operator's intent is untouched — evidence never rewrites it (04.1 D-07).
         assert links[0]["package_quantity"] == 24.0
 
     @pytest.mark.asyncio
@@ -763,7 +763,7 @@ def _prior(price: str = "139.90", offer: str | None = None) -> MagicMock:
 class TestPerformPriceCheck:
     @pytest.mark.asyncio
     async def test_success_records_point_and_applies_scrape(self) -> None:
-        """Happy path: point added, link autofilled (D-07), no commit (caller's job)."""
+        """Happy path: point added, link autofilled (04.1 D-07), no commit (caller's job)."""
         ps, product, store, session, fetcher, parser = _check_fixtures()
         parser.extract_price.return_value = _extraction(
             "139.90", package_amount="24", package_unit="st", source="llm"
@@ -783,7 +783,7 @@ class TestPerformPriceCheck:
         session.add.assert_called_once()
         assert outcome.price_point is session.add.call_args.args[0]
         assert outcome.price_point.price_sek == Decimal("139.90")
-        # D-07 autofill ran (inside the flow)
+        # 04.1 D-07 autofill ran (inside the flow)
         assert ps.package_quantity == Decimal("24")
         assert ps.last_checked_at is not None
         session.commit.assert_not_called()

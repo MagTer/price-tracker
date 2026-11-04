@@ -140,7 +140,7 @@ def test_scraped_quantity_none_when_page_says_nothing() -> None:
     assert scraped_quantity_from(_Scrape(), "st") is None
 
 
-# --- apply_scrape_to_link (D-07) ---------------------------------------------------
+# --- apply_scrape_to_link (04.1 D-07) ---------------------------------------------------
 
 
 def test_apply_scrape_autofills_when_quantity_is_empty() -> None:
@@ -165,7 +165,7 @@ def test_apply_scrape_never_overwrites_a_conflicting_quantity() -> None:
     link = _Link(package_quantity=Decimal("24"))
     message = apply_scrape_to_link(link, _Scrape(pack_size=12), "st")
 
-    # The never-overwrite guarantee (D-07): the operator's typed value is intent.
+    # The never-overwrite guarantee (04.1 D-07): the operator's typed value is intent.
     assert link.package_quantity == Decimal("24")
     assert link.scraped_package_quantity == Decimal("12.00")
     assert message is not None
@@ -183,7 +183,7 @@ def test_apply_scrape_unit_conflict_records_nothing_and_flags_nothing() -> None:
     assert message is None
 
 
-# --- quantity_mismatch (D-09) ------------------------------------------------------
+# --- quantity_mismatch (04.1 D-09) ------------------------------------------------------
 
 
 def test_quantity_mismatch_true_only_when_both_present_and_unequal() -> None:

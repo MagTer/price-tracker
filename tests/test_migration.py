@@ -92,7 +92,7 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
     async with db_engine.connect() as conn:
         schema = await conn.run_sync(_reflect)
 
-    # The package moved to the link, and took the page's own reading with it (D-01/D-09).
+    # The package moved to the link, and took the page's own reading with it (04.1 D-01/D-09).
     assert {"package_size", "package_quantity", "scraped_package_quantity"} <= schema[
         "product_stores"
     ]
@@ -108,11 +108,11 @@ async def test_upgrade_head_creates_reshaped_schema(db_engine) -> None:
     # forgotten `package_anything` on products would reinstate the model this phase abolished.
     assert not [c for c in schema["products"] if c.startswith("package_")]
 
-    # Unit price is computed on read (D-03/D-04). Only the store's PRINTED value is persisted.
+    # Unit price is computed on read (04.1 D-03/D-04). Only the store's PRINTED value is persisted.
     assert "store_unit_price_sek" in schema["price_points"]
     assert "unit_price_sek" not in schema["price_points"]
 
-    # D-01: the URL is the link's natural key; the old pair-key constraint is gone — it forbade
+    # 04.1 D-01: the URL is the link's natural key; the old pair-key constraint is gone — it forbade
     # the very thing this phase exists to enable.
     assert "uq_product_stores_store_url" in schema["ps_unique"]
     assert "uq_product_store" not in schema["ps_unique"]
@@ -179,7 +179,7 @@ def test_alembic_check_reports_no_drift(alembic_env) -> None:
 
 
 async def test_two_links_same_store_persist(db_session: AsyncSession) -> None:
-    """Two pack sizes of one product at ONE store both persist (D-01).
+    """Two pack sizes of one product at ONE store both persist (04.1 D-01).
 
     This is the phase's whole reason to exist. Under the old uq_product_store(product_id,
     store_id) it was an IntegrityError — the operator simply could not tell the app that Willys
@@ -211,7 +211,7 @@ async def test_two_links_same_store_persist(db_session: AsyncSession) -> None:
 
 
 async def test_duplicate_url_rejected(db_session: AsyncSession) -> None:
-    """The same store PAGE cannot be tracked twice — store_url is globally unique (D-01).
+    """The same store PAGE cannot be tracked twice — store_url is globally unique (04.1 D-01).
 
     Named to match the `-k duplicate_url` selector VALIDATION.md pins for MODEL-02.
     """
@@ -372,7 +372,7 @@ async def test_a_link_with_no_price_point_still_appears(
 async def test_scraped_quantity_conflict_is_flagged_not_adopted(
     db_session: AsyncSession, session_factory
 ) -> None:
-    """The stored quantity is intent; the page's reading is evidence (D-07/D-09) — in real SQL.
+    """The stored quantity is intent; the page's reading is evidence (04.1 D-07/D-09) — in real SQL.
 
     The flag is DERIVED from the two columns rather than persisted, so it self-clears the moment
     either number is corrected. Ranking still uses the operator's value, never the page's.
@@ -396,7 +396,7 @@ async def test_scraped_quantity_conflict_is_flagged_not_adopted(
 async def test_link_rows_carry_the_measure_the_store_printed_its_jfr_pris_in(
     db_session: AsyncSession, session_factory
 ) -> None:
-    """The printed jämförpris rides with the MEASURE it is printed in (D-05).
+    """The printed jämförpris rides with the MEASURE it is printed in (04.1 D-05).
 
     This is the pair the links panel puts in one row: our computed kr/st beside ICA's own
     kr/kg. Without the measure the cell renders both as bare kronor, which is two different

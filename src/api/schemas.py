@@ -44,7 +44,7 @@ class ProductStoreLink(BaseModel):
 
     The link owns the packaging: a 24-pack at Willys and an 8-pack at Willys are two links
     to one product. `package_quantity` is expressed in the product's canonical unit and may
-    be None — the first scrape autofills it (D-02).
+    be None — the first scrape autofills it (04.1 D-02).
     """
 
     store_id: str
@@ -61,7 +61,7 @@ class ProductStoreLink(BaseModel):
 
 
 class ProductStoreUpdate(BaseModel):
-    """Schema for editing a link's packaging (D-11).
+    """Schema for editing a link's packaging (04.1 D-11).
 
     Deliberately exposes NEITHER store_id NOR store_url. The URL is the link's identity now;
     re-pointing a link at a different page would silently rewrite the meaning of its entire
@@ -100,7 +100,7 @@ class QuickAddCreate(BaseModel):
     are then ignored. `product_id` empty means "create a new product first".
 
     Package fields follow the same rules as ProductStoreLink: quantity is in the product's
-    canonical unit and may be None (the first scrape autofills it, D-02/D-07).
+    canonical unit and may be None (the first scrape autofills it, 04.1 D-02/D-07).
     """
 
     url: str
@@ -191,12 +191,12 @@ class PricePointResponse(BaseModel):
     - `unit_price_sek` is the COMPUTED value (effective price / the link's package_quantity).
       This is the comparable one — the only one that may be sorted or ranked on.
     - `store_unit_price_sek` is what the STORE PRINTED (its jämförpris), verbatim and possibly
-      in a different unit than ours. Display only; NEVER sort on it (D-05).
+      in a different unit than ours. Display only; NEVER sort on it (04.1 D-05).
 
     A history row is an observation on one LINK, not on a product: a product may carry a
     16-pack and a 24-pack at the SAME store. `product_store_id` is what makes the rows
     separable — without it the client can only group by store, which merges those two into one
-    series and reports a bigger box as a price rise. That is the whole bug (D-12, QD-1).
+    series and reports a bigger box as a price rise. That is the whole bug (04.1 D-12, QD-1).
     """
 
     checked_at: str
@@ -251,7 +251,7 @@ class DealResponse(BaseModel):
     A deal is an offer on a store LISTING, not on a product-at-a-store: a 24-pack and an
     8-pack of one product at one store are two links and may each be on offer.
 
-    `unit_price_sek` is the COMPUTED kr/unit (D-03), exposed so a consumer can compare packs.
+    `unit_price_sek` is the COMPUTED kr/unit (04.1 D-03), exposed so a consumer can compare packs.
     Deals themselves are still ordered by RECENCY — the number is data here, not the ranking.
 
     `best_alt_*` is the cheapest CURRENT jfr-pris among the product's OTHER links (any
@@ -267,7 +267,7 @@ class DealResponse(BaseModel):
     unit: str | None  # The product's comparison unit (st/liter/kg) — labels the jfr-pris
     price_sek: float | None
     offer_price_sek: float
-    unit_price_sek: float | None  # COMPUTED — None when the link has no amount yet (D-02)
+    unit_price_sek: float | None  # COMPUTED — None when the link has no amount yet (04.1 D-02)
     offer_type: str
     offer_details: str | None
     checked_at: str

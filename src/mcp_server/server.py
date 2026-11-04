@@ -8,7 +8,7 @@ Four tools mirror the legacy chat-tool surface:
 
 Mounted at /mcp on the FastAPI app. The ingress bypasses the Entra gate for
 exactly this path (per-router forwardAuth bypass, D-29 — supersedes the
-D-18 mcp.<domain> subdomain plan); auth here is bearer-only, fail-closed.
+01 D-18 mcp.<domain> subdomain plan); auth here is bearer-only, fail-closed.
 """
 
 from __future__ import annotations
@@ -209,8 +209,8 @@ async def compare_stores(product_name: str) -> str:
         lines.append("")
 
         # Already one row per link and already ranked cheapest-per-unit with NULL
-        # quantities last (D-13). This tool is a render: no sorting and no unit-price
-        # arithmetic happens here — the domain owns the one definition (D-03).
+        # quantities last (04.1 D-13). This tool is a render: no sorting and no unit-price
+        # arithmetic happens here — the domain owns the one definition (04.1 D-03).
         links = await service.get_links_for_product(product["id"])
 
         if not links:
@@ -232,14 +232,14 @@ async def compare_stores(product_name: str) -> str:
             package = link.get("package_size") or "—"
             price = _fmt_price(link.get("price_sek"))
             offer = _fmt_price(link.get("offer_price_sek"))
-            # D-02: a link may legitimately have no amount yet (the first scrape autofills
+            # 04.1 D-02: a link may legitimately have no amount yet (the first scrape autofills
             # it). Say so explicitly — a bare "N/A" reads as broken, "saknar mängd" tells
             # the operator exactly what to fix. These rows already sort last.
             if link.get("package_quantity") is None:
                 unit_price = "saknar mängd"
             else:
                 unit_price = _fmt_price(link.get("unit_price_sek"))
-            # D-05: the store's PRINTED value, its own column, never the sort key.
+            # 04.1 D-05: the store's PRINTED value, its own column, never the sort key.
             store_says = _fmt_price(link.get("store_unit_price_sek"))
             in_stock = link.get("in_stock")
             stock = "?" if in_stock is None else ("Ja" if in_stock else "Nej")

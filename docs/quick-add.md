@@ -57,7 +57,7 @@ DB, no LLM — so every rule is unit-testable in isolation (`tests/test_quickadd
 
 4. **No second write path.** The confirm composes the *same* service methods as the manual
    flow (`create_product`, `link_product_store`) and the *same* check flow
-   (`perform_price_check`). The first check also drives the D-07 package autofill, so a
+   (`perform_price_check`). The first check also drives the 04.1 D-07 package autofill, so a
    link confirmed without a quantity usually comes back from the confirm call with one —
    harvested from the page, conflict-flagged, never overwriting typed intent.
 

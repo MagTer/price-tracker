@@ -210,7 +210,7 @@ async def _run_price_check(
             mismatch=None,
         )
 
-    # Package fields the extraction read feed the D-07 autofill. This is the ONLY
+    # Package fields the extraction read feed the 04.1 D-07 autofill. This is the ONLY
     # scrape write path: autofill when empty, flag on conflict, never overwrite the
     # operator's typed value.
     mismatch = apply_scrape_to_link(product_store, extraction, product.unit)
@@ -223,8 +223,8 @@ async def _run_price_check(
     # unless there is something to say, and cannot raise (a note may not kill a check).
     await annotate_extraction(extraction, product_store.store_url, leaflet)
 
-    # store_unit_price_sek is what the STORE printed (D-05) — the computed kr/unit
-    # is derived on read from the link's quantity and never persisted (D-04).
+    # store_unit_price_sek is what the STORE printed (04.1 D-05) — the computed kr/unit
+    # is derived on read from the link's quantity and never persisted (04.1 D-04).
     price_point = PricePoint(
         product_store_id=product_store.id,
         price_sek=extraction.price_sek,
@@ -266,9 +266,9 @@ async def price_history_rows(
     legitimate 0.00 as null, and the service copy lacked ``offer_type``/``offer_details``
     /``source`` so MCP could never show a campaign's condition.
 
-    Each row carries the COMPUTED kr/unit (D-03) derived from the link's
+    Each row carries the COMPUTED kr/unit (04.1 D-03) derived from the link's
     package_quantity — not anything a store printed; ``store_unit_price_sek`` is the
-    store's own claim, shown beside it and never sorted on (D-05). ``checked_at`` stays
+    store's own claim, shown beside it and never sorted on (04.1 D-05). ``checked_at`` stays
     a datetime; serialization belongs at the response boundary.
     """
     cutoff_date = _utc_now() - timedelta(days=days)
@@ -375,7 +375,7 @@ class PriceTrackerService:
         MCP's compare_stores. Each row carries the latest price observed on that link.
 
         Ranking is by the COMPUTED kr/unit with NULLs explicitly last: a link that still needs
-        an amount (D-02) sinks to the bottom instead of masquerading as free. (Postgres already
+        an amount (04.1 D-02) sinks to the bottom instead of masquerading as free. (Postgres already
         sorts NULLs last on ASC; saying so keeps the intent legible and survives a flip to DESC.)
 
         Args:
@@ -454,7 +454,7 @@ class PriceTrackerService:
                             # (= 90/132): two cells about one link disagreeing by the whole
                             # discount, on a table with no erbjudande column to explain it.
                             "effective_price_sek": as_float(effective),
-                            # D-05, plus the measure it is printed in: the store's own
+                            # 04.1 D-05, plus the measure it is printed in: the store's own
                             # unit, not the product's. Without it the links panel stacks
                             # ICA's kr/kg beside our kr/st as two bare numbers. None =
                             # no code recorded; the UI stays silent rather than labelling
@@ -470,10 +470,10 @@ class PriceTrackerService:
                             ),
                             "in_stock": price_point.in_stock if price_point else None,
                             "checked_at": price_point.checked_at if price_point else None,
-                            # D-02's visible flag: the link is saveable without an amount, but
+                            # 04.1 D-02's visible flag: the link is saveable without an amount, but
                             # it is never silently blank.
                             "needs_amount": product_store.package_quantity is None,
-                            # D-09's derived, self-clearing flag — never persisted.
+                            # 04.1 D-09's derived, self-clearing flag — never persisted.
                             "quantity_mismatch": quantity_mismatch(product_store),
                             # v0.40.0: repeated non-blocked failures — derived, self-clearing.
                             "is_broken": product_store.id in broken,
@@ -716,9 +716,9 @@ class PriceTrackerService:
             package_size: Human display label ("24-pack", "500 ml"). Optional.
             package_quantity: The amount in the package, in the PRODUCT's canonical unit —
                            every kr/unit in the app is computed from this number. Optional:
-                           a NULL quantity is a legitimate state (D-02), not an error. The
+                           a NULL quantity is a legitimate state (04.1 D-02), not an error. The
                            link is saveable before its pack size is known, the first
-                           successful scrape autofills it (D-07), and until then the link is
+                           successful scrape autofills it (04.1 D-07), and until then the link is
                            rendered "needs amount" rather than silently blank.
             store_label: Per-link store display name ("ICA Maxi Sandviken") for chains
                            with per-butik pricing. None = display the chain name.

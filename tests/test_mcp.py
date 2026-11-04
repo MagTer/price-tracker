@@ -124,7 +124,7 @@ def _history_row(**overrides):
 # The canonical Lambi scenario, in the order get_links_for_product() returns it:
 # ranked by the COMPUTED kr/rulle, with the link that still needs an amount last.
 # The Coop row deliberately carries a store-printed kr/100g value — the reason the
-# printed number can never be the sort key (D-05).
+# printed number can never be the sort key (04.1 D-05).
 LAMBI_LINKS = [
     _link(
         product_store_id="ps1",
@@ -317,7 +317,7 @@ class TestMcpTools:
 
     @patch("mcp_server.server._get_service")
     async def test_compare_stores_one_row_per_link_ranked_by_unit_price(self, mock_get_svc):
-        """The Lambi scenario: three links, cheapest-per-roll first (D-13)."""
+        """The Lambi scenario: three links, cheapest-per-roll first (04.1 D-13)."""
         mock_service = MagicMock()
         mock_service.get_products = AsyncMock(
             return_value=[{"id": "p1", "name": "Lambi Toalettpapper", "unit": "st"}]
@@ -335,7 +335,7 @@ class TestMcpTools:
         assert rows[0].startswith("| Willys | 24-pack")
         assert rows[1].startswith("| ICA | 8-pack")
 
-        # Computed and store-printed values live in DIFFERENT columns (D-05).
+        # Computed and store-printed values live in DIFFERENT columns (04.1 D-05).
         header = next(ln for ln in result.splitlines() if "Jämförspris" in ln)
         assert "Butiken anger" in header
         cols = [c.strip() for c in header.strip("|").split("|")]
@@ -360,7 +360,7 @@ class TestMcpTools:
 
     @patch("mcp_server.server._get_service")
     async def test_compare_stores_marks_link_without_amount(self, mock_get_svc):
-        """A NULL package_quantity renders a marker and does not crash (MODEL-07, D-02)."""
+        """A NULL package_quantity renders a marker and does not crash (MODEL-07, 04.1 D-02)."""
         mock_service = MagicMock()
         mock_service.get_products = AsyncMock(
             return_value=[{"id": "p1", "name": "Lambi Toalettpapper", "unit": "st"}]

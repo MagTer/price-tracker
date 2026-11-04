@@ -583,11 +583,11 @@ class PriceCheckScheduler:
         if current_price is None:
             return
 
-        # kr/unit is COMPUTED from the LINK's quantity (D-03) — never from anything a store
+        # kr/unit is COMPUTED from the LINK's quantity (04.1 D-03) — never from anything a store
         # printed, whose definition varies per store (kr/rulle vs kr/pack vs kr/100g). The link
         # is a parameter of this method and _check_due_products joinedloads it: no extra query.
         #
-        # A NULL package_quantity is a LEGITIMATE state (D-02) until the first scrape autofills
+        # A NULL package_quantity is a LEGITIMATE state (04.1 D-02) until the first scrape autofills
         # it, and it makes both of these None. Every comparison below therefore guards on
         # `is not None` EXPLICITLY. This is not decoration: a `None <= Decimal` TypeError raised
         # in here is swallowed by the per-product `except Exception` in _check_due_products,

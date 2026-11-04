@@ -33,8 +33,8 @@ def _make_extraction(
 ) -> PriceExtractionResult:
     """Build a PriceExtractionResult for tests.
 
-    `store_unit_price_sek` is what the STORE printed (D-05) — the scheduler never compares
-    against it. `package_amount` / `package_unit` are the page's quantity EVIDENCE (D-08).
+    `store_unit_price_sek` is what the STORE printed (04.1 D-05) — the scheduler never compares
+    against it. `package_amount` / `package_unit` are the page's quantity EVIDENCE (04.1 D-08).
     """
     return PriceExtractionResult(
         price_sek=price_sek,
@@ -64,7 +64,7 @@ def _make_product_store(
 ) -> MagicMock:
     """Create a mock ProductStore with nested product and store.
 
-    package_quantity defaults to None — the D-02 state a link sits in until its first scrape.
+    package_quantity defaults to None — the 04.1 D-02 state a link sits in until its first scrape.
     """
     ps = MagicMock()
     ps.id = uuid.uuid4()
@@ -295,7 +295,7 @@ class TestCheckSingleProduct:
 
     @pytest.mark.asyncio
     async def test_check_single_product_autofills_link_quantity(self) -> None:
-        """Scrape write-path #1 honours D-07: fill the link's quantity when it has none."""
+        """Scrape write-path #1 honours 04.1 D-07: fill the link's quantity when it has none."""
         scheduler, _, fetcher = _make_scheduler()
         extraction = _make_extraction(
             price_sek=Decimal("139.90"),
@@ -317,7 +317,10 @@ class TestCheckSingleProduct:
 
     @pytest.mark.asyncio
     async def test_check_single_product_never_overwrites_link_quantity(self) -> None:
-        """D-07: the page is evidence, the typed value is intent. Evidence does not rewrite it."""
+        """04.1 D-07: the page is evidence, the typed value is intent.
+
+        Evidence does not rewrite it.
+        """
         scheduler, _, fetcher = _make_scheduler()
         extraction = _make_extraction(
             price_sek=Decimal("139.90"),
@@ -470,7 +473,7 @@ class TestCheckAlerts:
 
     @pytest.mark.asyncio
     async def test_null_quantity_watch_fires_no_alert_and_does_not_crash(self) -> None:
-        """A unit-price watch on a link with NO amount: no alert, no exception (D-02/MODEL-03).
+        """A unit-price watch on a link with NO amount: no alert, no exception (04.1 D-02/MODEL-03).
 
         This is the failure mode the phase exists to prevent. `_check_alerts` is called DIRECTLY
         here on purpose: going through the outer loop would let the per-product `except Exception`

@@ -10,25 +10,25 @@ Squashes four source migrations from ai-agent-platform/services/agent/alembic/ve
 - 20260115 add unit price alerts (adds unit_price_target_sek, unit_price_drop_threshold_percent to watches)
 - 20260217 add doz store (adds Doz seed; we bake all 5 stores at create time)
 
-Schema derived from the final state of src/domain/models.py per D-07.
+Schema derived from the final state of src/domain/models.py per 01 D-07.
 Source-prefix dropped per DB-04 (table names are bare: stores, products, etc.).
 context_id FK to the source platform's context table is replaced with a
-free-floating tenant_id UUID column per D-02/D-03 (no FK, no separate table).
+free-floating tenant_id UUID column per 01 D-02/D-03 (no FK, no separate table).
 
-Phase 04.1 — REWRITTEN IN PLACE (D-14), so the above is only half the story now.
+Phase 04.1 — REWRITTEN IN PLACE (04.1 D-14), so the above is only half the story now.
 The reshape this file also carries:
 - package_size / package_quantity moved from `products` to `product_stores`: the package is a
   property of the store LISTING, not of the abstract good. `products.unit` stays.
 - `product_stores.scraped_package_quantity` added — the page's own reading of the quantity,
-  which never overwrites the operator's typed value (D-07/D-09).
+  which never overwrites the operator's typed value (04.1 D-07/D-09).
 - `store_url` became globally UNIQUE, replacing the (product_id, store_id) unique pair: a link
   IS a store page, so the URL is its natural key, and the old pair forbade the very thing this
-  phase exists to enable (two pack sizes of one product at the same store) — D-01.
+  phase exists to enable (two pack sizes of one product at the same store) — 04.1 D-01.
 - `price_points.unit_price_sek` replaced by `store_unit_price_sek`: unit price is now COMPUTED
   on read from the link's package_quantity and never stored, so correcting a quantity fixes all
-  of its history for free. Only the store's PRINTED comparison price is persisted (D-03/D-05).
+  of its history for free. Only the store's PRINTED comparison price is persisted (04.1 D-03/D-05).
 
-⚠ WARNING — OPERATOR CONSEQUENCE OF THE IN-PLACE REWRITE (D-15). Read before deploying.
+⚠ WARNING — OPERATOR CONSEQUENCE OF THE IN-PLACE REWRITE (04.1 D-15). Read before deploying.
 
 Alembic keys on the revision ID and does NOT checksum migration bodies. A database already
 stamped with revision `0001_initial` — which the deployed v0.2.0 instance is — therefore sees
@@ -45,7 +45,7 @@ Any existing deployment MUST have its volume dropped before `alembic upgrade hea
     alembic check                   # must print "No new upgrade operations detected."
 
 See the README reset runbook. This is a destructive, deliberate step — the DB is empty, which
-is what sanctions D-14; there is nothing to rescue.
+is what sanctions 04.1 D-14; there is nothing to rescue.
 """
 
 from collections.abc import Sequence
@@ -78,8 +78,8 @@ def upgrade() -> None:
     # ORM `mapped_column(String(50), unique=True, index=True)` produces.
     op.create_index(op.f("ix_stores_slug"), "stores", ["slug"], unique=True)
 
-    # 2. products (tenant-scoped via tenant_id; NO FK per D-03)
-    #    The abstract good: no package columns — they live on product_stores (04.1 / D-01).
+    # 2. products (tenant-scoped via tenant_id; NO FK per 01 D-03)
+    #    The abstract good: no package columns — they live on product_stores (04.1 D-01).
     op.create_table(
         "products",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -113,7 +113,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["product_id"], ["products.id"]),
         sa.ForeignKeyConstraint(["store_id"], ["stores.id"]),
         sa.PrimaryKeyConstraint("id"),
-        # D-01: the URL is the link's natural key. (product_id, store_id) is deliberately NOT
+        # 04.1 D-01: the URL is the link's natural key. (product_id, store_id) is deliberately NOT
         # unique — two pack sizes of one product at one store are two legitimate links.
         # A unique B-tree entry on String(512) is safe: 512 chars x 4 bytes UTF-8 = 2048 bytes,
         # under Postgres's ~2704-byte per-entry limit. No hash or md5() expression index needed.
@@ -126,8 +126,8 @@ def upgrade() -> None:
     op.create_index(op.f("ix_product_stores_store_id"), "product_stores", ["store_id"], unique=False)
 
     # 4. price_points (history table)
-    #    No stored unit price (D-04): it is computed on read from product_stores.package_quantity.
-    #    Only the store's PRINTED comparison price is persisted, and it is never sorted on (D-05).
+    #    No stored unit price (04.1 D-04): it is computed on read from product_stores.package_quantity.
+    #    Only the store's PRINTED comparison price is persisted, and it is never sorted on (04.1 D-05).
     op.create_table(
         "price_points",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -146,7 +146,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_price_points_product_store_id"), "price_points", ["product_store_id"], unique=False)
     op.create_index(op.f("ix_price_points_checked_at"), "price_points", ["checked_at"], unique=False)
 
-    # 5. watches (tenant-scoped via tenant_id; NO FK per D-03; bakes in price_drop_threshold + unit-price columns)
+    # 5. watches (tenant-scoped via tenant_id; NO FK per 01 D-03; bakes in price_drop_threshold + unit-price columns)
     op.create_table(
         "watches",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -167,7 +167,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_watches_tenant_id"), "watches", ["tenant_id"], unique=False)
     op.create_index(op.f("ix_watches_product_id"), "watches", ["product_id"], unique=False)
 
-    # 6. Seed 5 stores via bulk insert (D-09)
+    # 6. Seed 5 stores via bulk insert (01 D-09)
     stores_table = sa.table(
         "stores",
         sa.column("name", sa.String),
@@ -188,7 +188,7 @@ def upgrade() -> None:
         ],
     )
 
-    # NO separate tenant table created (D-10 — D-03 explicit non-action; tenant_id is a free-floating UUID).
+    # NO separate tenant table created (01 D-10 — 01 D-03 explicit non-action; tenant_id is a free-floating UUID).
 
 
 def downgrade() -> None:

@@ -11,12 +11,7 @@ history of how the extraction was run, and left the tree in the commit after `f7
 it there: `git ls-tree -r --name-only f78ab77 .planning` lists it,
 `git show f78ab77:.planning/STATE.md` prints one file.
 
-**Three numbering series collide.** `D-19`…`D-34` below are the project decision log. The
-phase-1 context (further down) has its own `D-01`…`D-19`, and phase 04.1 its own
-`D-01`…`D-15`. Comments in `src/`, `tests/` and `alembic/` cite the low numbers of BOTH
-phases without saying which (e.g. `alembic/versions/0001_initial.py` cites phase 1's D-07,
-"hand-derive the migration", and 04.1's D-07, "never overwrite"); read the citing comment's
-subject against both lists. A citation of D-20 or above means the log.
+**Three numbering series collide, and every citation names its series.** `D-19`…`D-34` below are the project decision log. The phase-1 context (further down) has its own `D-01`…`D-19`, and phase 04.1 its own `D-01`…`D-15`. Since 2026-11-04 every citation of a low number in `src/`, `tests/`, `alembic/`, `README.md`, `AGENTS.md` and `docs/quick-add.md` says which: `01 D-07` is phase 1's ("hand-derive the migration"), `04.1 D-07` is phase 04.1's ("never overwrite") — the operator's choice of 2026-11-01. Each was classified by reading the citing comment's subject against both lists. A bare `D-20` or above means the log. `01 D-18` follows the log's own D-25 and D-29, which read phase 1's edge-stack decision as the `mcp.<domain>` plan, although the lock itself is recorded at the log's D-19 entry. The entries below are verbatim and keep their bare numbers.
 
 ## Open items
 

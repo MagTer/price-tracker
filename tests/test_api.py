@@ -1099,7 +1099,7 @@ class TestOldPairKeyedRoutesAreGone:
 
 
 class TestComputedUnitPriceOnRead:
-    """Every unit price the API reports is COMPUTED from the link's own quantity (D-03/D-04).
+    """Every unit price the API reports is COMPUTED from the link's own quantity (04.1 D-03/D-04).
 
     The store's printed one travels beside it in a SEPARATE key and is never the same number
     by definition (stores print kr/rulle, kr/pack and kr/100g interchangeably), so a test that
@@ -1163,7 +1163,7 @@ class TestComputedUnitPriceOnRead:
     def test_list_products_sets_needs_amount_on_a_link_without_a_quantity(
         self, client, mock_session
     ):
-        """A NULL quantity is a visible flag (D-02) — not a zero, not a crash."""
+        """A NULL quantity is a visible flag (04.1 D-02) — not a zero, not a crash."""
         product, store = _product(), _store()
         ps = _ps(product, store, package_size=None, package_quantity=None)
         pp = _pp(ps, price="129.00", store_unit="12.90")
@@ -1186,7 +1186,7 @@ class TestComputedUnitPriceOnRead:
     def test_list_products_flags_a_quantity_mismatch_without_adopting_the_page_value(
         self, client, mock_session
     ):
-        """D-07/D-09: the page says 12, the operator typed 24. The API reports 24 and flags it.
+        """04.1 D-07/D-09: the page says 12, the operator typed 24. The API reports 24 and flags it.
 
         Presenting the scraped value as if it were the stored one would be the silent-rewrite
         this phase exists to prevent — every kr/unit in the app is computed from that number.
@@ -1314,7 +1314,7 @@ class TestBrokenLinkFlag:
 
 
 class TestProductLinksEndpoint:
-    """GET /products/{id}/links — the product page's data source (D-12)."""
+    """GET /products/{id}/links — the product page's data source (04.1 D-12)."""
 
     def test_links_endpoint_preserves_the_services_ranking(self, client, mock_service):
         """Cheapest-per-unit first, "needs amount" last. The endpoint RENDERS that order and
@@ -1986,10 +1986,10 @@ class TestUpdateWatch:
 
 
 class TestManualCheckAppliesTheScrapeRule:
-    """POST /check/{id} routes through domain.service.perform_price_check (D-07, AC#4).
+    """POST /check/{id} routes through domain.service.perform_price_check (04.1 D-07, AC#4).
 
     The endpoint used to duplicate the fetch/parse/record flow inline; it now delegates
-    to the single shared flow, and these tests pin the D-07 rule still reaching it:
+    to the single shared flow, and these tests pin the 04.1 D-07 rule still reaching it:
     without the scrape write path, the operator clicks "Check now", a price appears,
     and the link's quantity stays empty forever.
     """

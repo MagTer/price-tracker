@@ -112,14 +112,14 @@ class ProductStore(Base):
     # The human display label ("24-pack", "500 ml").
     package_size: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # The amount in the package, in the product's canonical unit. Every kr/unit in the app is
-    # computed from this number. Nullable is deliberate (D-02): a link is saveable before its
+    # computed from this number. Nullable is deliberate (04.1 D-02): a link is saveable before its
     # pack size is known, and the first successful scrape autofills it.
     # Numeric(12, 4), not (10, 2): amounts live in the product's canonical unit, and two
     # decimals in kg is 10-gram resolution — a 24 g sachet silently stored as 0.02 (20 g)
     # until v0.45.0, which is a 20 % kr/kg error that no later check can correct. Four
     # decimals holds 0.1 g / 0.1 ml, small enough for saffron (0.5 g = 0.0005).
     package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
-    # The page's OWN reading of that amount (D-09), rewritten on every check. The operator's
+    # The page's OWN reading of that amount (04.1 D-09), rewritten on every check. The operator's
     # typed package_quantity is intent; this is evidence, and it never overwrites intent. The
     # mismatch flag is DERIVED from the two (domain.pricing.quantity_mismatch), never stored,
     # so it self-clears the moment either number is corrected.
@@ -201,7 +201,7 @@ class PricePoint(Base):
     """A single price observation for a link at a specific time.
 
     Stores historical price data for trend analysis and alerts. Unit price is NOT stored here:
-    it is computed on read from the link's package_quantity (D-03/D-04), so correcting a link's
+    it is computed on read from the link's package_quantity (04.1 D-03/D-04), so correcting a link's
     quantity retroactively fixes all of its history and a stale snapshot cannot exist.
     """
 
@@ -210,7 +210,7 @@ class PricePoint(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     product_store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product_stores.id"), index=True)
     price_sek: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    # The store's PRINTED comparison price (jämförpris), exactly as scraped (D-05). It is a raw
+    # The store's PRINTED comparison price (jämförpris), exactly as scraped (04.1 D-05). It is a raw
     # signal shown BESIDE the computed value and is NEVER sorted on: stores print unit prices
     # with incompatible definitions (kr/rulle vs kr/pack vs kr/100g), so ranking on it would
     # compare kronor-per-roll against kronor-per-hectogram. Its worth is exactly that it can
@@ -239,7 +239,9 @@ class PricePoint(Base):
 
     @hybrid_property
     def computed_unit_price_sek(self) -> Decimal | None:
-        """kr/unit — computed, never scraped (D-03). None when the link has no amount (D-02).
+        """kr/unit — computed, never scraped (04.1 D-03).
+
+        None when the link has no amount (04.1 D-02).
 
         Named `computed_unit_price_sek` and NOT `unit_price_sek` on purpose: reusing the dropped
         column's name would let every consumer we failed to update keep working silently while

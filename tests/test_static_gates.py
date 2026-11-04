@@ -51,7 +51,7 @@ def test_python_and_js_pkg_units_agree() -> None:
 
 
 def test_initial_migration_declares_reshaped_columns() -> None:
-    """0001_initial is the DDL image of the reshaped models, rewritten IN PLACE (D-14).
+    """0001_initial is the DDL image of the reshaped models, rewritten IN PLACE (04.1 D-14).
 
     A source-text gate, not a DB test: the real DDL-versus-ORM proof is `alembic check` at the
     phase gate. What this catches is the rewrite being stacked as a 0002 by mistake, or a column
@@ -72,7 +72,7 @@ def test_initial_migration_declares_reshaped_columns() -> None:
     assert 'name="uq_product_stores_store_url"' in source
     assert 'name="uq_product_store"' not in source
 
-    # D-15: the in-place rewrite is silently a no-op on an already-stamped DB. The warning that
+    # 04.1 D-15: the in-place rewrite is silently a no-op on an already-stamped DB. The warning that
     # says so must stay in the docstring — it is the only thing standing between the operator
     # and an app running against the old schema.
     assert "D-15" in source
@@ -193,7 +193,7 @@ def test_pair_keyed_lookup_detector_flags_the_pre_phase_shape() -> None:
 def test_no_link_lookup_by_product_store_pair() -> None:
     """MODEL-02: no query in src/ may resolve a ProductStore by the (product_id, store_id) pair.
 
-    That pair stopped being unique when D-01 dropped uq_product_store. Links are addressed by
+    That pair stopped being unique when 04.1 D-01 dropped uq_product_store. Links are addressed by
     their own id (`/product-stores/{product_store_id}`) or, in the import path, by store_url.
     """
     findings: list[str] = []

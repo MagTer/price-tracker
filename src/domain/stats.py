@@ -4,7 +4,7 @@ Everything here answers cross-product questions, which is why the rules below ma
 than the arithmetic:
 
 **kr/unit is never summed or averaged across products.** Milk's kr/l plus cheese's kr/kg is
-nonsense — the same invariant that keeps ``store_unit_price_sek`` unsortable (D-05). Anything
+nonsense — the same invariant that keeps ``store_unit_price_sek`` unsortable (04.1 D-05). Anything
 comparing whole products is therefore expressed as a PERCENTAGE change against that product's
 own baseline, never as an absolute aggregate.
 

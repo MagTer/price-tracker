@@ -21,7 +21,7 @@ Design constraints this module enforces:
 
 - **The package guess is a suggestion, not a write.** Whatever is parsed here lands in an
   editable preview field; the persisted quantity still goes through the operator (intent) or
-  the first scrape's D-07 autofill (evidence). This module never touches a link.
+  the first scrape's 04.1 D-07 autofill (evidence). This module never touches a link.
 """
 
 import json

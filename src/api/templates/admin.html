@@ -304,7 +304,7 @@
             <!-- The product is the abstract GOOD, so all it declares is the unit its
                  variants are compared in (st / liter / kg — models.py's canonical set).
                  The package itself belongs to the store's listing and is asked for on
-                 the LINK dialog (D-10/D-11): "Lambi 24-pack at Willys" and "Lambi 8-pack
+                 the LINK dialog (04.1 D-10/D-11): "Lambi 24-pack at Willys" and "Lambi 8-pack
                  at ICA" are two links on ONE product, which is the whole point of the
                  phase — three pack sizes used to be three unrelated products with no
                  grouping key, so nothing could be compared per roll. -->
@@ -486,11 +486,11 @@
             </div>
             <!-- NO schedule fields: a new link inherits the store's check schedule.
                  The link-edit dialog holds the per-link override for links that earn one. -->
-            <!-- Packaging (D-11). Deliberately NO unit selector: the product already
+            <!-- Packaging (04.1 D-11). Deliberately NO unit selector: the product already
                  declares its comparison unit, so the amount is asked for IN that unit and
                  the buttons below only offer entry helpers that normalize INTO it (ml ->
                  liter, g -> kg). Both fields may be left empty — a link is saveable before
-                 its pack size is known (D-02), and the first scrape autofills it. -->
+                 its pack size is known (04.1 D-02), and the first scrape autofills it. -->
             <div class="form-group">
                 <label id="link-pkg-amount-label">Mängd i förpackningen</label>
                 <div class="pkg-entry-units" id="link-pkg-entry-units" role="group" aria-labelledby="link-pkg-amount-label"></div>
@@ -549,7 +549,7 @@
     </div>
 </div>
 
-<!-- Product Links Modal — the screen the phase exists for (D-12).
+<!-- Product Links Modal — the screen the phase exists for (04.1 D-12).
      One row per LINK: package label, price, and the COMPUTED kr/unit, sortable. This is
      what answers "which Lambi pack is cheapest per roll, across pack sizes and stores" —
      a question the old one-row-per-product table structurally could not ask. -->
@@ -1831,7 +1831,7 @@ function kr(value) {
 }
 
 // "3,75 kr/st" — the unit comes from the product's comparison unit, never from the store's
-// printed jämförpris (stores print in different units; D-05).
+// printed jämförpris (stores print in different units; 04.1 D-05).
 function unitKr(value, unit) {
     return value == null ? DASH : formatSek(value) + ' ' + unitPriceHeading(unit);
 }
@@ -2128,7 +2128,7 @@ async function loadStores() {
 // only figure that survives the comparison, and the cheapest one is the only one worth showing.
 //
 // Ties break on store name then link id: equal prices must not reorder between two renders.
-// store_unit_price_sek is deliberately NOT considered (D-05) — stores print in different units.
+// store_unit_price_sek is deliberately NOT considered (04.1 D-05) — stores print in different units.
 function bestUnitPrice(product) {
     const priced = (product.stores || []).filter(
         s => typeof s.unit_price_sek === 'number' && isFinite(s.unit_price_sek)
@@ -2142,7 +2142,7 @@ function bestUnitPrice(product) {
     return priced[0];
 }
 
-// The product row's price zone. Three honest states, never a blank and never a 0 (D-02):
+// The product row's price zone. Three honest states, never a blank and never a 0 (04.1 D-02):
 //   1. at least one link has an amount -> cheapest kr/unit + the link it came from
 //   2. no link has an amount           -> lowest ABSOLUTE price, explicitly labelled as not
 //                                         comparable, because two pack sizes are not
@@ -4151,7 +4151,7 @@ function showCreateProductModal() {
     openModal('modal-create-product');
 }
 
-// --- Packaging field chain (amount -> auto-suggested label) — D-11 ---
+// --- Packaging field chain (amount -> auto-suggested label) — 04.1 D-11 ---
 // This chain used to live on the product dialog. It moved here because the package is a
 // property of the store's LISTING, not of the abstract good: one Lambi product, a 24-pack
 // link at Willys and an 8-pack link at ICA.
@@ -4272,7 +4272,7 @@ function pkgRekeyUnit(prefix, productUnit) {
 }
 
 // The amount normalized into the product's canonical unit. Empty stays NULL — a link is
-// saveable before its pack size is known (D-02). The server re-validates (> 0) regardless;
+// saveable before its pack size is known (04.1 D-02). The server re-validates (> 0) regardless;
 // this arithmetic is a convenience, never a source of truth.
 function pkgQuantity(prefix) {
     const raw = document.getElementById(prefix + '-pkg-amount').value;
@@ -4373,7 +4373,7 @@ function addLinkFromPanel() {
 }
 
 // productUnit labels the amount field and picks the entry helpers — the link never asks for
-// a unit of its own (D-11).
+// a unit of its own (04.1 D-11).
 function showLinkStoreModal(productId, productUnit) {
     const select = document.getElementById('link-store-select');
     select.innerHTML = allStores.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
@@ -5339,7 +5339,7 @@ function buildHistoryTable(rows, unit) {
     return html;
 }
 
-// --- Product links panel (D-12) — the screen that answers the toilet-paper question ---
+// --- Product links panel (04.1 D-12) — the screen that answers the toilet-paper question ---
 
 let productLinks = [];
 let productLinksFor = null;              // { id, name, unit } of the product on screen
@@ -5351,7 +5351,7 @@ let linkSort = { column: null, direction: 'asc' };
 // Rows with no value in the sort column land LAST in BOTH directions. This is the point of
 // the function: a link with no amount has no kr/unit, and if that null compared as zero it
 // would beat every real price and the screen would recommend an un-priced link as "cheapest".
-// That is exactly the failure the "needs amount" flag (D-02) exists to prevent, so the null
+// That is exactly the failure the "needs amount" flag (04.1 D-02) exists to prevent, so the null
 // must never be allowed to masquerade as cheap.
 function sortRows(rows, column, direction) {
     const dir = direction === 'desc' ? -1 : 1;
@@ -5403,7 +5403,7 @@ function buildLinksTable(rows, unit) {
             : null;
         let pkg = escapeHtml(r.package_size || amountText || '—');
 
-        // D-09: the page disagrees with the stored amount. Show BOTH numbers — the app has
+        // 04.1 D-09: the page disagrees with the stored amount. Show BOTH numbers — the app has
         // deliberately not adopted the page's reading (the typed value is intent, the page is
         // only evidence), so the operator decides. The flag is derived and self-clears the
         // moment either number is corrected; there is nothing to dismiss.
@@ -5412,7 +5412,7 @@ function buildLinksTable(rows, unit) {
                    ` &#8212; du har ${escapeHtml(r.package_quantity)}</span>`;
         }
 
-        // D-02: never a blank cell. A blank would read as "free" and sort like zero.
+        // 04.1 D-02: never a blank cell. A blank would read as "free" and sort like zero.
         // For a reader the same words are a label, not a shortcut into the edit dialog.
         const unitCell = r.needs_amount === true
             ? (IS_ADMIN
@@ -6176,7 +6176,7 @@ document.getElementById('qa-status').addEventListener('click', async (e) => {
 });
 
 // Links-panel actions and column sorting. The store-printed column has no data-sort
-// attribute, so it cannot be sorted on (D-05).
+// attribute, so it cannot be sorted on (04.1 D-05).
 document.getElementById('product-links-table').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-sort]');
     if (th) {

@@ -1,4 +1,4 @@
-"""Unit price and package normalization — the single definition (D-03/D-04/D-07/D-08/D-09).
+"""Unit price and package normalization — the single definition (04.1 D-03/D-04/D-07/D-08/D-09).
 
 Unit price is COMPUTED, never scraped: ``effective_price / link.package_quantity``.
 It exists here exactly once, in two evaluation modes (Python and SQL), so "one definition
@@ -68,7 +68,7 @@ _QUANTUM = Decimal("0.0001")
 
 
 class ScrapedPackage(Protocol):
-    """The package signals a page fetch yields (D-06/D-08).
+    """The package signals a page fetch yields (04.1 D-06/D-08).
 
     Structural typing keeps this module decoupled from domain.result;
     PriceExtractionResult satisfies it once 04.1-02 adds the fields.
@@ -80,14 +80,14 @@ class ScrapedPackage(Protocol):
 
 
 class LinkLike(Protocol):
-    """The two quantity columns on a ProductStore link (D-02/D-09)."""
+    """The two quantity columns on a ProductStore link (04.1 D-02/D-09)."""
 
     package_quantity: Decimal | None
     scraped_package_quantity: Decimal | None
 
 
 def unit_price_py(price: Decimal | None, qty: Decimal | None) -> Decimal | None:
-    """Python-side unit price. None when the link has no amount yet (D-02).
+    """Python-side unit price. None when the link has no amount yet (04.1 D-02).
 
     Not quantized: rounding belongs at the presentation boundary. Rounding early and then
     comparing is how two "equal" unit prices start disagreeing.
@@ -120,7 +120,7 @@ def effective_price(price_point: PricePointLike | None) -> Decimal | None:
 def rounded_unit_price(price: Decimal | None, quantity: Decimal | None) -> float | None:
     """kr/unit for a response/row dict — unit_price_py rounded at the presentation boundary.
 
-    None when the link has no amount yet (D-02): the row says "needs amount", it does not
+    None when the link has no amount yet (04.1 D-02): the row says "needs amount", it does not
     lie with a zero. The quantity always comes from the LINK already in scope at the call
     site — never the ORM hybrid, whose Python side lazy-loads PricePoint.product_store and
     raises MissingGreenlet at request time on any point loaded without a joinedload.
@@ -201,7 +201,7 @@ def normalize_amount(
 
 
 def scraped_quantity_from(extraction: ScrapedPackage, product_unit: str | None) -> Decimal | None:
-    """The page's reading of the package quantity, in the product's canonical unit (D-06/D-08).
+    """The page's reading of the package quantity, in the product's canonical unit (04.1 D-06/D-08).
 
     Prefers the explicit amount + unit. Falls back to the title-derived item count (`16-p`),
     which is only meaningful when the product is counted in pieces.
@@ -221,7 +221,7 @@ def scraped_quantity_from(extraction: ScrapedPackage, product_unit: str | None) 
 def apply_scrape_to_link(
     link: LinkLike, extraction: ScrapedPackage, product_unit: str | None
 ) -> str | None:
-    """Autofill when empty; flag on conflict; NEVER overwrite (D-07/D-09).
+    """Autofill when empty; flag on conflict; NEVER overwrite (04.1 D-07/D-09).
 
     This is the ONLY implementation of that rule — all three scrape write-paths call it.
     Returns a human-readable mismatch message, or None.
@@ -232,7 +232,7 @@ def apply_scrape_to_link(
     """
     scraped = scraped_quantity_from(extraction, product_unit)
 
-    # Always record the page's own reading, even when it is None (D-09). The mismatch flag is
+    # Always record the page's own reading, even when it is None (04.1 D-09). The mismatch flag is
     # DERIVED from the two columns, so it self-clears the moment either number is corrected.
     link.scraped_package_quantity = scraped
 
@@ -278,7 +278,10 @@ def printed_measure(raw_data: Any) -> str | None:
 
 
 def quantity_mismatch(link: LinkLike) -> bool:
-    """The derived conflict flag (D-09). Never persisted — deriving it makes it self-clearing."""
+    """The derived conflict flag (04.1 D-09).
+
+    Never persisted — deriving it makes it self-clearing.
+    """
     return (
         link.package_quantity is not None
         and link.scraped_package_quantity is not None

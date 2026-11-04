@@ -204,7 +204,7 @@ pre-04.1 backup hits the same ground. Since v0.6.0 the migration chain is ordina
 and additive again; shipped revisions are never rewritten.
 
 Phase 04.1 moved the package data from `products` to `product_stores` and rewrote
-`alembic/versions/0001_initial.py` **in place** (D-14) rather than stacking a `0002` — the database
+`alembic/versions/0001_initial.py` **in place** (04.1 D-14) rather than stacking a `0002` — the database
 was empty, so one clean migration beat a migration chain that only ever existed to patch a schema
 nobody was using.
 
