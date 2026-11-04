@@ -2,7 +2,7 @@
 # repo (compose/dokploy-apps/price-tracker/) — Dokploy-managed Traefik + Entra
 # ingress, pinned GHCR image, alembic migration in the command. This file is
 # never deployed; it just gives a Postgres + app stack for local dev.
-# D-13: No Traefik labels in this repo. Routing/TLS owned by the ingress stack.
+# 01 D-13: No Traefik labels in this repo. Routing/TLS owned by the ingress stack.
 # The app service joins an external `edge` docker network so a local proxy can reach it.
 
 services:
