@@ -218,14 +218,18 @@ alembic/versions/   # 0001_initial (rewritten in place during 04.1 — see Gotch
 Release = push a `v*` tag. That is the only trigger; `.github/workflows/release.yml` then builds and pushes `ghcr.io/magter/price-tracker:vX.Y.Z` (+ `:sha-<commit>`) for amd64. Nothing else in this repo deploys anything.
 
 ```bash
-# 1. main is green and pushed. Never tag a dirty tree or an un-pushed commit —
-#    the tag would point at something no one else can fetch.
+# 1. Work reaches main through a pull request: `.agent-config.json` sets "review_path": "pr",
+#    so a push to main is refused. Push a branch, open a draft PR, mark it ready when the work
+#    is done; it merges when the tests and the review are green.
 poetry run ruff check src tests && poetry run ruff format --check src tests && poetry run pytest -q
-git push origin main
+git push origin <branch>
+gh pr create --draft --fill && gh pr ready && gh pr merge --merge --auto
 
-# 2. The version in pyproject.toml IS the tag. Bump it, commit it, then tag that commit —
-#    a tag whose code says a different version is a lie you will read back later.
+# 2. The version in pyproject.toml IS the tag. Bump it in that PR, then tag the MERGED commit on
+#    main — a tag whose code says a different version is a lie you will read back later, and a
+#    tag on an unmerged commit is refused without a local review.
 #    (It said 0.1.0 while prod ran v0.3.2. Don't let that happen again.)
+git switch main && git pull --ff-only
 git tag vX.Y.Z && git push origin vX.Y.Z
 
 # 3. Watch the build. A tag that fails to build is not a release.
