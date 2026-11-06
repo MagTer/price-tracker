@@ -219,23 +219,25 @@ Release = push a `v*` tag. That is the only trigger; `.github/workflows/release.
 
 ```bash
 # 1. Work reaches main through a pull request, not by a push to main. Iterate in a draft, where
-#    the review does not run, and mark it ready when the work is done.
-poetry run ruff check src tests && poetry run ruff format --check src tests && poetry run pytest -q
+#    the review does not run. The version in pyproject.toml IS the tag, so bump it there too — a
+#    tag whose code says a different version is a lie you will read back later.
+#    (It said 0.1.0 while prod ran v0.3.2. Don't let that happen again.)
 git switch -c <branch>    # before the first commit
+poetry run ruff check src tests && poetry run ruff format --check src tests && poetry run pytest -q
 git push -u origin <branch>
 gh pr create --draft --fill
-gh pr ready && gh pr merge --merge --auto
 
-# 2. The version in pyproject.toml IS the tag. Bump it in that PR, wait for the merge, then tag the
-#    merged commit — a tag whose code says a different version is a lie you will read back later.
-#    (It said 0.1.0 while prod ran v0.3.2. Don't let that happen again.) Never tag a dirty tree or
-#    an un-pushed commit: the tag would point at something no one else can fetch.
-gh pr checks --watch
-test "$(gh pr view --json state --jq .state)" = MERGED
+# 2. When the work and the bump are in, mark it ready and merge on green. Not before: the review
+#    runs on ready, and a merge queued earlier can land without it.
+gh pr ready
+gh pr checks --watch && gh pr merge --merge
+
+# 3. Tag the merged commit. Never tag a dirty tree or an un-pushed commit: the tag would point at
+#    something no one else can fetch.
 git switch main && git pull --ff-only
 git tag vX.Y.Z && git push origin vX.Y.Z
 
-# 3. Watch the build. A tag that fails to build is not a release.
+# 4. Watch the build. A tag that fails to build is not a release.
 gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')"
 ```
 
