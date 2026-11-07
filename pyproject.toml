@@ -27,7 +27,7 @@ dependencies = [
     # authlib's dependency (via fastmcp) at the version this range admits, so declaring
     # it adds no code to the image: it only stops the auth path from resting on a
     # transitive install that a fastmcp upgrade could drop.
-    "joserfc (>=1.7,<2.0)",
+    "joserfc (>=1.7.6,<2.0)",
 ]
 
 [tool.poetry]
