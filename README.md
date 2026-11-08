@@ -1,3 +1,9 @@
+---
+purpose: A Swedish grocery and pharmacy price tracker that records price history and alerts on drops by email.
+owns: [the price tracker, its parsers and alerts]
+does_not_own: [its deployment and auth gate (home-server)]
+depends_on: []
+---
 # price-tracker
 
 Standalone Swedish grocery and pharmacy price tracker. Tracks prices at **ICA,
